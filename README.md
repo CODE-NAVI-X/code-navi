@@ -6,12 +6,13 @@ Code-Navi Agent Kernel 是一个小型、平台无关的单 Agent 运行时内�
 
 ### 当前状态
 
-截至 2026-07-08：
+截至 2026-07-12：
 
 - S1 Scope：已完成
 - S2 Core abstractions：部分完成，已足够作为 S3 gate
 - S3 Execution loop：core v1 已完成
-- S4-S7：尚未开始
+- S4 Tools and permissions：已完成
+- S5-S7：尚未开始
 
 验证命令：
 
@@ -22,7 +23,7 @@ python -m pytest tests/kernel/core -q
 当前结果：
 
 ```text
-17 passed
+44 passed
 ```
 
 ### 阶段总览
@@ -120,16 +121,28 @@ python -m pytest tests/kernel/core -q
 
 目标：实现显式 tool registry 和 permission enforcement layer。
 
-计划工作：
+已完成产物：
 
-- tool registration
-- JSON schema argument validation
-- permission grants
-- deny-by-default enforcement
-- `READ` / `WRITE` / `DESTRUCTIVE` / `EXECUTE` / `NETWORK` / `SENSITIVE` / `PUBLISH` semantics
-- 在 S3 的单一 dispatch boundary 后接入真实工具
+- `docs/S4_TOOLS_DESIGN.md`
+- `docs/S4_TOOLS_DECISIONS.md`
+- `kernel/core/registry.py`
+- `kernel/tools/bash.py`
+- `tests/kernel/core/test_registry.py`
+- `tests/kernel/core/test_permissions.py`
+- `tests/tools/test_bash.py`
 
-完成度：尚未开始。
+已实现行为：
+
+- 显式 `ToolRegistry` 与每 run `RunToolDispatcher`
+- Draft 2020-12 JSON Schema 注册时与调用时校验
+- 7 个可组合权限 flag 的 deny-by-default enforcement
+- READ 默认允许，其他权限显式 grant
+- DESTRUCTIVE 按具体工具名二次授权
+- WRITE workspace root 边界检查
+- 结构化 ToolResult 拒绝，保持 S2/S3 Event contract 不变
+- 真实 unrestricted Bash 工具与文件 canary 测试
+
+完成度：core v1 已完成。
 
 #### S5 Context and Persistence
 
@@ -195,12 +208,19 @@ kernel/
   core/
     types.py
     loop.py
+    registry.py
+  tools/
+    bash.py
 
 tests/
   kernel/
     core/
       test_loop_*.py
       test_run_result.py
+      test_registry.py
+      test_permissions.py
+  tools/
+    test_bash.py
 ```
 
 ### License
@@ -221,12 +241,13 @@ The project is built in staged design phases. Each phase freezes a narrow contra
 
 ### Current Status
 
-As of 2026-07-08:
+As of 2026-07-12:
 
 - S1 Scope: complete
 - S2 Core abstractions: partially complete, enough to gate S3
 - S3 Execution loop: core v1 complete
-- S4-S7: not started
+- S4 Tools and permissions: complete
+- S5-S7: not started
 
 Validation:
 
@@ -237,7 +258,7 @@ python -m pytest tests/kernel/core -q
 Current result:
 
 ```text
-17 passed
+44 passed
 ```
 
 ### Phase Overview
@@ -335,16 +356,28 @@ Completion: core v1 complete.
 
 Goal: build the explicit tool registry and permission enforcement layer.
 
-Planned work:
+Completed artifacts:
 
-- tool registration
-- JSON schema argument validation
-- permission grants
-- deny-by-default enforcement
-- READ / WRITE / DESTRUCTIVE / EXECUTE / NETWORK / SENSITIVE / PUBLISH semantics
-- real tool wiring behind the single S3 dispatch boundary
+- `docs/S4_TOOLS_DESIGN.md`
+- `docs/S4_TOOLS_DECISIONS.md`
+- `kernel/core/registry.py`
+- `kernel/tools/bash.py`
+- `tests/kernel/core/test_registry.py`
+- `tests/kernel/core/test_permissions.py`
+- `tests/tools/test_bash.py`
 
-Completion: not started.
+Implemented behavior:
+
+- explicit `ToolRegistry` and per-run `RunToolDispatcher`
+- Draft 2020-12 JSON Schema registration and call validation
+- deny-by-default enforcement for seven composable permission flags
+- ambient READ with explicit grants for all other permissions
+- per-tool secondary authorization for DESTRUCTIVE calls
+- WRITE workspace-root containment
+- structured ToolResult denials without changing the S2/S3 Event contract
+- real unrestricted Bash tool and filesystem canary tests
+
+Completion: core v1 complete.
 
 #### S5 Context and Persistence
 
@@ -410,12 +443,19 @@ kernel/
   core/
     types.py
     loop.py
+    registry.py
+  tools/
+    bash.py
 
 tests/
   kernel/
     core/
       test_loop_*.py
       test_run_result.py
+      test_registry.py
+      test_permissions.py
+  tools/
+    test_bash.py
 ```
 
 ### License

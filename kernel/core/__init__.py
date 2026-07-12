@@ -20,6 +20,14 @@ from .types import (
     make_tool_result_block,
 )
 from .loop import run
+from .registry import (
+    PermissionGrant,
+    RunToolDispatcher,
+    ToolExecutionContext,
+    ToolRegistry,
+    ToolSpec,
+    ToolUserError,
+)
 
 __all__ = [
     "AgentState",
@@ -38,6 +46,12 @@ __all__ = [
     "ToolDispatcher",
     "ToolPermission",
     "ToolResult",
+    "PermissionGrant",
+    "RunToolDispatcher",
+    "ToolExecutionContext",
+    "ToolRegistry",
+    "ToolSpec",
+    "ToolUserError",
     "make_tool_result_block",
     "run",
 ]
