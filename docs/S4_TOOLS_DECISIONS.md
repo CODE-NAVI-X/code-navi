@@ -149,5 +149,16 @@ D28. S4 adds no confirmation UI, provider adapter, context truncation, persisten
 backend, business approval flow, tool auto-discovery, or context-policy field on
 `ToolSpec`.
 
+## 9. S7 Provider Description Amendment
+
+D29. The user-approved S7 gate repair adds a read-only
+`RunToolDispatcher.provider_tools()` view over the bound registry snapshot. It
+contains only tool name, description, and argument schema.
+
+D30. The provider view excludes handlers, `PermissionGrant`, workspace roots,
+destructive tool grants, and `ToolExecutionContext`. It cannot execute tools;
+`dispatch(call)` remains the sole execution boundary.
+
 Changelog:
 - 2026-07-12 initial S4 v1 freeze after implementation and full regression tests.
+- 2026-07-14 user-approved S7 provider description amendment added D29-D30.

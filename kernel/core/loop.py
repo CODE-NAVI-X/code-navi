@@ -6,29 +6,25 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 
 from .context import ContextBudgetExceeded, ContextPolicy, FullHistory
+from .provider import (
+    FatalProviderError,
+    Provider,
+    RetryableProviderError,
+)
 from .types import (
     AgentState,
     Event,
-    FatalProviderError,
     KernelConfig,
     Message,
-    MockProvider,
-    ProviderResult,
-    RetryableProviderError,
     RunResult,
     RunStatus,
     ToolCall,
     ToolDispatcher,
     make_tool_result_block,
 )
-
-
-class Provider(Protocol):
-    def complete(self, messages: Sequence[Message], tools: Sequence[dict[str, Any]] | None = None) -> ProviderResult:
-        ...
 
 
 def _event(run_id: str, seq: int, event_type: str, payload: dict[str, Any]) -> Event:
@@ -80,7 +76,7 @@ def _inflight_tool_ids(events: Sequence[Event]) -> set[str]:
 
 
 def run(
-    provider: Provider | MockProvider,
+    provider: Provider,
     tool_dispatcher: ToolDispatcher,
     initial_messages: Sequence[Message],
     config: KernelConfig | None = None,
@@ -97,7 +93,12 @@ def run(
     context_policy = context_policy or FullHistory()
     context_budget = context_budget_tokens
     if context_budget is None:
-        context_budget = getattr(provider, "max_context", None) or (2**63 - 1)
+        capabilities = getattr(provider, "capabilities", None)
+        context_budget = (
+            getattr(capabilities, "max_context", None)
+            or getattr(provider, "max_context", None)
+            or (2**63 - 1)
+        )
     if run_id is not None and (
         not isinstance(run_id, str) or not run_id
     ):
@@ -180,6 +181,7 @@ def run(
         for message in messages:
             emit("message_added", {"message": message.to_json()})
 
+    provider_tools = tuple(tool_dispatcher.provider_tools())
     attempt = 1
     while True:
         interrupted = maybe_interrupt()
@@ -191,7 +193,6 @@ def run(
             context_view = context_policy.view(tuple(events), context_budget)
             if context_view.compression is not None:
                 emit("context_compressed", context_view.compression.to_payload())
-            provider_tools: tuple[dict[str, Any], ...] = ()
             emit(
                 "provider_called",
                 {
@@ -199,7 +200,7 @@ def run(
                     "messages": [
                         message.to_json() for message in context_view.messages
                     ],
-                    "tools": list(provider_tools),
+                    "tools": [tool.to_json() for tool in provider_tools],
                 },
             )
             request_event = events[-1]

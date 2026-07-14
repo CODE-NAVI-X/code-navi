@@ -199,3 +199,6 @@ Changelog:
 - 2026-07-08 froze S2 deterministic test strategy.
 - 2026-07-14 user-approved S6 amendment added only `provider_called` and `provider_returned` for complete kernel-native provider I/O.
 - 2026-07-14 user-approved one-time D4 amendment adding only `context_compressed` for S5.
+- 2026-07-14 user-approved S7 gate repair created `kernel/core/provider.py`,
+  added kernel-native `ProviderTool` and `ProviderCapabilities`, and moved
+  `MockProvider` to `kernel/providers/mock.py` before real adapter work.

@@ -355,3 +355,12 @@ The user approved a one-time D8/D61 amendment adding only `context_compressed`. 
 The user approved adding only `provider_called` and `provider_returned`. `attempt` remains payload data. Success ordering is `provider_called -> provider_returned -> budget_updated -> message_added`; failure ordering is `provider_called -> error(source="provider", ...)`. Successful provider calls reset retry attempt state so each new provider step begins at attempt 1.
 
 Replay may supply the recorded `run_id`. When `prior_events` exist they remain the fact source; a conflicting caller-supplied `run_id` follows the kernel fatal path. Event IDs may be derived deterministically from `(run_id, seq)`, while timestamps remain record-only metadata and never affect decisions.
+
+### 2026-07-14 — S7 provider tool snapshot amendment
+
+The user approved a read-only provider tool description boundary before the
+first real adapter. A bound dispatcher exposes `provider_tools()` without any
+handler, grant, workspace, destructive authorization, or execution context.
+The loop captures that provider-neutral snapshot once and uses the same tools in
+both `provider_called.payload["tools"]` and `provider.complete(...)` on every
+attempt. `tool_dispatcher.dispatch(call)` remains the only execution boundary.

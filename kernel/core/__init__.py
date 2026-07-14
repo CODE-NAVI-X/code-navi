@@ -6,11 +6,8 @@ from .types import (
     Event,
     KernelConfig,
     Message,
-    MockProvider,
     ProviderResult,
     ProviderStreamEvent,
-    FatalProviderError,
-    RetryableProviderError,
     RunResult,
     RunStatus,
     ToolCall,
@@ -18,6 +15,13 @@ from .types import (
     ToolPermission,
     ToolResult,
     make_tool_result_block,
+)
+from .provider import (
+    FatalProviderError,
+    Provider,
+    ProviderCapabilities,
+    ProviderTool,
+    RetryableProviderError,
 )
 from .loop import run
 from .context import (
@@ -49,9 +53,11 @@ __all__ = [
     "Event",
     "KernelConfig",
     "Message",
-    "MockProvider",
+    "Provider",
+    "ProviderCapabilities",
     "ProviderResult",
     "ProviderStreamEvent",
+    "ProviderTool",
     "FatalProviderError",
     "FullHistory",
     "RetryableProviderError",

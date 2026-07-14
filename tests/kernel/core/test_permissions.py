@@ -6,7 +6,6 @@ from kernel.core import (
     ContentBlock,
     KernelConfig,
     Message,
-    MockProvider,
     PermissionGrant,
     ProviderResult,
     RunStatus,
@@ -17,6 +16,7 @@ from kernel.core import (
     ToolSpec,
     run,
 )
+from kernel.providers import MockProvider
 
 
 def spec_for(

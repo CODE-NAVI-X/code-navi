@@ -6,7 +6,6 @@ from kernel.core import (
     ContentBlock,
     KernelConfig,
     Message,
-    MockProvider,
     ProviderResult,
     RetryableProviderError,
     TailWithSummary,
@@ -14,7 +13,7 @@ from kernel.core import (
     ToolResult,
     run,
 )
-from kernel.providers import ReplayProvider
+from kernel.providers import MockProvider, ReplayProvider
 
 
 class UnitCounter:
@@ -28,6 +27,9 @@ class ConstantSummarizer:
 
 
 class Dispatcher:
+    def provider_tools(self):
+        return ()
+
     def dispatch(self, call: ToolCall) -> ToolResult:
         return ToolResult(call.id, call.name, {"value": call.args["value"]})
 

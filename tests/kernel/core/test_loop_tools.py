@@ -2,13 +2,18 @@ from kernel.core import (
     ContentBlock,
     KernelConfig,
     Message,
-    MockProvider,
     ProviderResult,
+    PermissionGrant,
     RunStatus,
     ToolCall,
+    ToolExecutionContext,
+    ToolPermission,
+    ToolRegistry,
     ToolResult,
+    ToolSpec,
     run,
 )
+from kernel.providers import MockProvider
 
 
 def tool_message() -> Message:
@@ -17,6 +22,9 @@ def tool_message() -> Message:
 
 
 class ReturningDispatcher:
+    def provider_tools(self):
+        return ()
+
     def dispatch(self, call: ToolCall) -> ToolResult:
         return ToolResult(call.id, call.name, {"ok": True})
 
@@ -24,6 +32,9 @@ class ReturningDispatcher:
 class RaisingDispatcher:
     def __init__(self) -> None:
         self.calls = []
+
+    def provider_tools(self):
+        return ()
 
     def dispatch(self, call: ToolCall) -> ToolResult:
         self.calls.append(call)
@@ -71,3 +82,44 @@ def test_dispatcher_raise_is_fatal_tool_error_after_counting_attempt() -> None:
     assert error.payload["source"] == "tool"
     assert error.payload["classification"] == "fatal"
     assert error.payload["attempt"] is None
+
+
+def test_loop_records_and_sends_the_same_bound_provider_tool_snapshot() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            "lookup",
+            "Look up a local value.",
+            {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+                "additionalProperties": False,
+            },
+            frozenset({ToolPermission.READ}),
+        ),
+        lambda args, context: args["q"],
+    )
+    dispatcher = registry.bind(
+        PermissionGrant("run-tools"), ToolExecutionContext("run-tools")
+    )
+    provider = MockProvider([ProviderResult(Message("assistant"))])
+
+    result = run(provider, dispatcher, [Message("user")], run_id="run-tools")
+
+    provider_event = next(
+        event for event in result.events if event.type == "provider_called"
+    )
+    assert provider_event.payload["tools"] == provider.calls[0]["tools"]
+    assert provider_event.payload["tools"] == [
+        {
+            "name": "lookup",
+            "description": "Look up a local value.",
+            "args_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+                "additionalProperties": False,
+            },
+        }
+    ]

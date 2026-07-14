@@ -7,12 +7,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from kernel.core.provider import (
+    FatalProviderError,
+    ProviderCapabilities,
+    ProviderTool,
+    RetryableProviderError,
+)
 from kernel.core.types import (
     Event,
-    FatalProviderError,
     Message,
     ProviderResult,
-    RetryableProviderError,
 )
 
 _MISSING = "<missing>"
@@ -110,8 +114,7 @@ def _pointer_token(value: str) -> str:
 class ReplayProvider:
     """Serve normalized provider outcomes from recorded provider Events."""
 
-    supports_streaming = False
-    max_context: int | None = None
+    capabilities = ProviderCapabilities()
 
     def __init__(self, recorded_log: Sequence[Event]) -> None:
         self._events = tuple(recorded_log)
@@ -129,11 +132,11 @@ class ReplayProvider:
     def complete(
         self,
         messages: Sequence[Message],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[ProviderTool] = (),
     ) -> ProviderResult:
         actual_request = {
             "messages": [message.to_json() for message in messages],
-            "tools": [dict(tool) for tool in (tools or ())],
+            "tools": [tool.to_json() for tool in tools],
         }
         if self._position >= len(self._calls):
             event_seq = self._events[-1].seq + 1 if self._events else 0

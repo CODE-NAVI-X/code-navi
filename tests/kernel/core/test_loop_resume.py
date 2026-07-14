@@ -3,18 +3,21 @@ from kernel.core import (
     Event,
     KernelConfig,
     Message,
-    MockProvider,
     ProviderResult,
     RunStatus,
     ToolCall,
     ToolResult,
     run,
 )
+from kernel.providers import MockProvider
 
 
 class Dispatcher:
     def __init__(self) -> None:
         self.calls = []
+
+    def provider_tools(self):
+        return ()
 
     def dispatch(self, call: ToolCall) -> ToolResult:
         self.calls.append(call)

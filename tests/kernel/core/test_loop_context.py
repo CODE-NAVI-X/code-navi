@@ -1,12 +1,12 @@
 from kernel.core import (
     Message,
-    MockProvider,
     ProviderResult,
     RunStatus,
     TailWithSummary,
     ToolResult,
     run,
 )
+from kernel.providers import MockProvider
 
 
 class UnitCounter:
@@ -20,6 +20,9 @@ class Summarizer:
 
 
 class Dispatcher:
+    def provider_tools(self):
+        return ()
+
     def dispatch(self, call) -> ToolResult:
         return ToolResult(call.id, call.name, None)
 
