@@ -21,6 +21,8 @@ EVENT_TYPES = frozenset(
         "tool_returned",
         "budget_updated",
         "context_compressed",
+        "provider_called",
+        "provider_returned",
         "interrupted",
         "error",
         "run_finished",
@@ -96,6 +98,63 @@ def _validate_context_compressed_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError(
             "context_compressed payload previous_event_id must be None or str"
         )
+
+
+def _validate_provider_called_payload(payload: Mapping[str, Any]) -> None:
+    if frozenset(payload) != {"attempt", "messages", "tools"}:
+        raise ValueError(
+            "provider_called payload requires exactly attempt, messages, and tools"
+        )
+    attempt = payload.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise ValueError("provider_called payload attempt must be int >= 1")
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError("provider_called payload messages must be a list")
+    for message in messages:
+        if not isinstance(message, Mapping):
+            raise ValueError("provider_called messages must contain objects")
+        Message.from_json(message)
+    tools = payload.get("tools")
+    if not isinstance(tools, list) or any(
+        not isinstance(tool, Mapping) for tool in tools
+    ):
+        raise ValueError("provider_called payload tools must be a list of objects")
+    _json_safe(tools)
+
+
+def _validate_provider_returned_payload(payload: Mapping[str, Any]) -> None:
+    if frozenset(payload) != {
+        "attempt",
+        "request_event_id",
+        "request_seq",
+        "response",
+    }:
+        raise ValueError(
+            "provider_returned payload requires exactly attempt, request_event_id, "
+            "request_seq, and response"
+        )
+    attempt = payload.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise ValueError("provider_returned payload attempt must be int >= 1")
+    request_event_id = payload.get("request_event_id")
+    if not isinstance(request_event_id, str) or not request_event_id:
+        raise ValueError("provider_returned payload request_event_id must be str")
+    request_seq = payload.get("request_seq")
+    if (
+        not isinstance(request_seq, int)
+        or isinstance(request_seq, bool)
+        or request_seq < 0
+    ):
+        raise ValueError("provider_returned payload request_seq must be int >= 0")
+    response = payload.get("response")
+    if not isinstance(response, Mapping):
+        raise ValueError("provider_returned payload response must be an object")
+    if frozenset(response) != {"message", "usage", "finish_reason", "metadata"}:
+        raise ValueError(
+            "provider_returned response must be exactly ProviderResult JSON"
+        )
+    ProviderResult.from_json(response)
 
 
 class ToolPermission(str, Enum):
@@ -274,6 +333,10 @@ class Event:
             _validate_error_payload(payload)
         elif self.type == "context_compressed":
             _validate_context_compressed_payload(payload)
+        elif self.type == "provider_called":
+            _validate_provider_called_payload(payload)
+        elif self.type == "provider_returned":
+            _validate_provider_returned_payload(payload)
         object.__setattr__(self, "payload", payload)
 
     def to_json(self) -> JsonObject:
