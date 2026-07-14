@@ -9,12 +9,12 @@ Code-Navi Agent Kernel 是一个小型、平台无关的单 Agent 运行时内�
 截至 2026-07-14：
 
 - S1 Scope：已完成
-- S2 Core abstractions：部分完成，已足够作为 S3 gate
+- S2 Core abstractions：已完成
 - S3 Execution loop：core v1 已完成
 - S4 Tools and permissions：已完成
 - S5 Context and persistence：已完成
 - S6 Observability and replay：已完成
-- S7：尚未开始
+- S7 Provider adapters：OpenAI Responses adapter 已完成 recorded conformance；live smoke 已就绪并默认跳过
 
 验证命令：
 
@@ -25,7 +25,88 @@ python -m pytest -q
 当前结果：
 
 ```text
-78 passed
+112 passed, 1 deselected
+```
+
+其中 `live` 测试默认不运行；上面的 `1 deselected` 是需要真实 OpenAI 凭据和显式模型选择的 smoke test。
+
+### 安装与 OpenAI 快速开始
+
+仅安装 kernel：
+
+```bash
+python -m pip install -e .
+```
+
+启用 OpenAI adapter：
+
+```bash
+python -m pip install -e ".[openai]"
+```
+
+`OpenAIResponsesAdapter` 使用 Responses API，模型必须由调用方显式传入。adapter 固定发送 `store=False`，并以 `max_retries=0` 创建 SDK client；provider retry 仍只由 kernel loop 管理。
+
+```python
+from kernel.adapters.openai import OpenAIResponsesAdapter
+from kernel.core import (
+    ContentBlock,
+    KernelConfig,
+    Message,
+    PermissionGrant,
+    ToolExecutionContext,
+    ToolPermission,
+    ToolRegistry,
+    ToolSpec,
+    run,
+)
+
+scope = "read-demo"
+registry = ToolRegistry()
+registry.register(
+    ToolSpec(
+        "read_value",
+        "Read a deterministic demo value.",
+        {"type": "object", "additionalProperties": False},
+        frozenset({ToolPermission.READ}),
+    ),
+    lambda args, context: {"value": "hello"},
+)
+dispatcher = registry.bind(
+    PermissionGrant(scope), ToolExecutionContext(scope)
+)
+provider = OpenAIResponsesAdapter("your-model-id", max_output_tokens=128)
+
+result = run(
+    provider,
+    dispatcher,
+    [
+        Message(
+            "user",
+            (
+                ContentBlock(
+                    "text",
+                    {"text": "Call read_value, then return only its value."},
+                ),
+            ),
+        )
+    ],
+    KernelConfig(max_steps=2, max_tool_calls=1),
+    run_id=scope,
+)
+```
+
+SDK 会读取 `OPENAI_API_KEY`。recorded conformance 不需要网络或 API key：
+
+```bash
+python -m pytest -q tests/kernel/core/test_provider_conformance.py tests/kernel/adapters/test_openai_adapter.py
+```
+
+当前结果为 `29 passed`。真实 smoke test 必须显式选择：
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+$env:OPENAI_LIVE_MODEL = "your-model-id"
+python -m pytest -q -m live -o addopts= tests/test_live_smoke.py
 ```
 
 ### 阶段总览
@@ -58,7 +139,10 @@ python -m pytest -q
 
 - `docs/S2_ABSTRACTIONS_DECISIONS.md`
 - `kernel/core/types.py`
+- `kernel/core/provider.py`
+- `kernel/providers/mock.py`
 - `kernel/core/__init__.py`
+- `tests/kernel/core/test_provider_conformance.py`
 
 当前 contract 包括：
 
@@ -75,16 +159,15 @@ python -m pytest -q
 - `KernelConfig`
 - `ToolPermission`
 - `ToolDispatcher`
-- `MockProvider`
+- `Provider`
+- `ProviderTool`
+- `ProviderCapabilities`
 - `RetryableProviderError`
 - `FatalProviderError`
 
-完成度：部分完成。
+稳定的 JSON round-trippable 类型留在 `types.py`；provider contract 独立在 `provider.py`，测试桩 `MockProvider` 位于 `kernel/providers/mock.py`。
 
-说明：
-
-- S2 type gate 已足够支撑 S3。
-- 仍需补充更完整的 round-trip 和 provider conformance tests。
+完成度：已完成，并由共享 provider conformance suite 覆盖。
 
 #### S3 Execution Loop
 
@@ -143,6 +226,8 @@ python -m pytest -q
 - WRITE workspace root 边界检查
 - 结构化 ToolResult 拒绝，保持 S2/S3 Event contract 不变
 - 真实 unrestricted Bash 工具与文件 canary 测试
+- 绑定后的 dispatcher 通过只读 `provider_tools()` 快照仅暴露模型可见的 `name`、`description` 和 `args_schema`
+- provider tools 快照不包含 handler、PermissionGrant、workspace roots、destructive grant 或执行上下文
 
 完成度：core v1 已完成。
 
@@ -194,9 +279,28 @@ python -m pytest -q
 
 目标：连接真实 LLM providers 和 agent frameworks，同时不污染 core contracts。
 
-计划 adapter targets：
+已完成产物：
 
-- OpenAI
+- `docs/S7_ADAPTER_DECISIONS.md`
+- `kernel/adapters/openai.py`
+- `tests/kernel/core/test_provider_conformance.py`
+- `tests/kernel/adapters/test_openai_adapter.py`
+- `tests/test_live_smoke.py`
+
+已实现行为：
+
+- kernel-native `Provider` contract，不从 `kernel/core` 导入任何 provider SDK
+- loop 将同一份 provider tools 快照写入 `provider_called` Event 并传给 `provider.complete(...)`
+- 工具执行唯一入口仍为 `tool_dispatcher.dispatch(call)`，adapter 不并行 dispatch
+- OpenAI Responses API、`store=False`、显式 model 和 SDK `max_retries=0`
+- 同一响应中的多个 function calls 保序转换为多个 `tool_use` blocks
+- 连接、超时、408/409/429 和 5xx 映射为 retryable，其余 SDK API 错误映射为 fatal
+- `image_ref`、`artifact_ref` 和未知内容块显式抛出 fatal provider error
+- recorded client 覆盖 conformance、JSONL/replay identity 和真实 SDK request/response translation
+- `pytest.mark.live` 的两步 READ tool smoke test，默认测试不运行
+
+后续 adapter targets：
+
 - Anthropic
 - Gemini
 - Qwen
@@ -209,7 +313,7 @@ python -m pytest -q
 - Ollama
 - vLLM
 
-完成度：尚未开始。
+完成度：OpenAI adapter 的 recorded conformance 已完成；live smoke 实现已完成，需凭据运行。第二个 adapter 尚未开始。
 
 ### 仓库结构
 
@@ -219,24 +323,44 @@ docs/
   NON_GOALS.md
   S2_ABSTRACTIONS_DECISIONS.md
   S3_LOOP_DECISIONS.md
+  S4_TOOLS_DESIGN.md
+  S4_TOOLS_DECISIONS.md
+  S5_CONTEXT_DECISIONS.md
+  S6_OBSERVABILITY_DECISIONS.md
+  S6_DETERMINISM_AUDIT.md
+  S7_ADAPTER_DECISIONS.md
 
 kernel/
   core/
     types.py
+    provider.py
     loop.py
     registry.py
+    context.py
+  adapters/
+    jsonl_session.py
+    openai.py
+  providers/
+    mock.py
+    replay.py
   tools/
     bash.py
+  trace/
+    __main__.py
 
 tests/
+  adapters/
+    test_openai_adapter.py
   kernel/
     core/
       test_loop_*.py
+      test_provider_conformance.py
       test_run_result.py
       test_registry.py
       test_permissions.py
   tools/
     test_bash.py
+  test_live_smoke.py
 ```
 
 ### License
@@ -260,12 +384,12 @@ The project is built in staged design phases. Each phase freezes a narrow contra
 As of 2026-07-14:
 
 - S1 Scope: complete
-- S2 Core abstractions: partially complete, enough to gate S3
+- S2 Core abstractions: complete
 - S3 Execution loop: core v1 complete
 - S4 Tools and permissions: complete
 - S5 Context and persistence: complete
 - S6 observability and replay: complete
-- S7: not started
+- S7 Provider adapters: OpenAI Responses adapter complete in recorded conformance; live smoke ready and excluded by default
 
 Validation:
 
@@ -276,7 +400,88 @@ python -m pytest -q
 Current result:
 
 ```text
-78 passed
+112 passed, 1 deselected
+```
+
+The `live` marker is excluded from default runs. The single deselected test is the OpenAI smoke test, which requires real credentials and an explicitly selected model.
+
+### Installation and OpenAI Quick Start
+
+Install only the kernel:
+
+```bash
+python -m pip install -e .
+```
+
+Enable the OpenAI adapter:
+
+```bash
+python -m pip install -e ".[openai]"
+```
+
+`OpenAIResponsesAdapter` uses the Responses API and requires the caller to provide a model explicitly. The adapter always sends `store=False` and creates its SDK client with `max_retries=0`; provider retries remain exclusively owned by the kernel loop.
+
+```python
+from kernel.adapters.openai import OpenAIResponsesAdapter
+from kernel.core import (
+    ContentBlock,
+    KernelConfig,
+    Message,
+    PermissionGrant,
+    ToolExecutionContext,
+    ToolPermission,
+    ToolRegistry,
+    ToolSpec,
+    run,
+)
+
+scope = "read-demo"
+registry = ToolRegistry()
+registry.register(
+    ToolSpec(
+        "read_value",
+        "Read a deterministic demo value.",
+        {"type": "object", "additionalProperties": False},
+        frozenset({ToolPermission.READ}),
+    ),
+    lambda args, context: {"value": "hello"},
+)
+dispatcher = registry.bind(
+    PermissionGrant(scope), ToolExecutionContext(scope)
+)
+provider = OpenAIResponsesAdapter("your-model-id", max_output_tokens=128)
+
+result = run(
+    provider,
+    dispatcher,
+    [
+        Message(
+            "user",
+            (
+                ContentBlock(
+                    "text",
+                    {"text": "Call read_value, then return only its value."},
+                ),
+            ),
+        )
+    ],
+    KernelConfig(max_steps=2, max_tool_calls=1),
+    run_id=scope,
+)
+```
+
+The SDK reads `OPENAI_API_KEY`. Recorded conformance requires neither network access nor an API key:
+
+```bash
+python -m pytest -q tests/kernel/core/test_provider_conformance.py tests/kernel/adapters/test_openai_adapter.py
+```
+
+The current result is `29 passed`. The real smoke test must be selected explicitly:
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+$env:OPENAI_LIVE_MODEL = "your-model-id"
+python -m pytest -q -m live -o addopts= tests/test_live_smoke.py
 ```
 
 ### Phase Overview
@@ -309,7 +514,10 @@ Completed artifacts:
 
 - `docs/S2_ABSTRACTIONS_DECISIONS.md`
 - `kernel/core/types.py`
+- `kernel/core/provider.py`
+- `kernel/providers/mock.py`
 - `kernel/core/__init__.py`
+- `tests/kernel/core/test_provider_conformance.py`
 
 Current contracts include:
 
@@ -326,16 +534,15 @@ Current contracts include:
 - `KernelConfig`
 - `ToolPermission`
 - `ToolDispatcher`
-- `MockProvider`
+- `Provider`
+- `ProviderTool`
+- `ProviderCapabilities`
 - `RetryableProviderError`
 - `FatalProviderError`
 
-Completion: partially complete.
+Stable JSON round-trippable types remain in `types.py`; the provider contract lives in `provider.py`, and the `MockProvider` test double lives in `kernel/providers/mock.py`.
 
-Notes:
-
-- The S2 type gate is sufficient for S3.
-- More round-trip and provider conformance tests should be added.
+Completion: complete, with coverage from the shared provider conformance suite.
 
 #### S3 Execution Loop
 
@@ -394,6 +601,8 @@ Implemented behavior:
 - WRITE workspace-root containment
 - structured ToolResult denials without changing the S2/S3 Event contract
 - real unrestricted Bash tool and filesystem canary tests
+- a bound dispatcher's read-only `provider_tools()` snapshot exposes only model-visible `name`, `description`, and `args_schema`
+- provider tool snapshots never contain handlers, PermissionGrant data, workspace roots, destructive grants, or execution context
 
 Completion: core v1 complete.
 
@@ -445,9 +654,28 @@ Completion: S6 v1 complete.
 
 Goal: connect the kernel to real LLM providers and agent frameworks without polluting core contracts.
 
-Planned adapter targets include:
+Completed artifacts:
 
-- OpenAI
+- `docs/S7_ADAPTER_DECISIONS.md`
+- `kernel/adapters/openai.py`
+- `tests/kernel/core/test_provider_conformance.py`
+- `tests/kernel/adapters/test_openai_adapter.py`
+- `tests/test_live_smoke.py`
+
+Implemented behavior:
+
+- a kernel-native `Provider` contract with no provider SDK imports under `kernel/core`
+- the loop records and passes the exact same provider-tools snapshot in `provider_called` and `provider.complete(...)`
+- `tool_dispatcher.dispatch(call)` remains the only execution boundary; adapters never parallel-dispatch calls
+- OpenAI Responses API with `store=False`, explicit model selection, and SDK `max_retries=0`
+- ordered conversion of multiple function calls in one response into multiple `tool_use` blocks
+- connection, timeout, 408/409/429, and 5xx failures mapped to retryable; other SDK API errors mapped to fatal
+- explicit fatal errors for `image_ref`, `artifact_ref`, and unknown content blocks
+- recorded-client coverage for conformance, JSONL/replay identity, and real SDK request/response translation
+- an opt-in `pytest.mark.live` two-step READ-tool smoke test
+
+Future adapter targets include:
+
 - Anthropic
 - Gemini
 - Qwen
@@ -460,7 +688,7 @@ Planned adapter targets include:
 - Ollama
 - vLLM
 
-Completion: not started.
+Completion: OpenAI recorded conformance is complete. The live smoke implementation is complete and awaits credentials when run; adapter #2 has not started.
 
 ### Repository Layout
 
@@ -470,24 +698,44 @@ docs/
   NON_GOALS.md
   S2_ABSTRACTIONS_DECISIONS.md
   S3_LOOP_DECISIONS.md
+  S4_TOOLS_DESIGN.md
+  S4_TOOLS_DECISIONS.md
+  S5_CONTEXT_DECISIONS.md
+  S6_OBSERVABILITY_DECISIONS.md
+  S6_DETERMINISM_AUDIT.md
+  S7_ADAPTER_DECISIONS.md
 
 kernel/
   core/
     types.py
+    provider.py
     loop.py
     registry.py
+    context.py
+  adapters/
+    jsonl_session.py
+    openai.py
+  providers/
+    mock.py
+    replay.py
   tools/
     bash.py
+  trace/
+    __main__.py
 
 tests/
+  adapters/
+    test_openai_adapter.py
   kernel/
     core/
       test_loop_*.py
+      test_provider_conformance.py
       test_run_result.py
       test_registry.py
       test_permissions.py
   tools/
     test_bash.py
+  test_live_smoke.py
 ```
 
 ### License
