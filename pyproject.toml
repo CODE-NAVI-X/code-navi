@@ -18,6 +18,7 @@ openai = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-m 'not live'"
 markers = [
     "live: opt-in tests that call a real external provider",
