@@ -33,11 +33,13 @@ Boundary notes:
 
 Kernel core defines permission semantics only. Host layers decide how to ask for confirmation, display risk, or map permissions to UI policies.
 
-D4. Event v1 minimal event set is frozen as run_started, message_added, tool_called, tool_returned, budget_updated, interrupted, error, and run_finished.
-    Rationale: The skill default set is accepted with one mandatory addition, `run_started`, because the beginning of a run is itself a runtime fact required for replay, audit, debugging, resume, and experiment reproduction.
+D4. Event v1 set is frozen as run_started, message_added, tool_called, tool_returned, budget_updated, context_compressed, interrupted, error, and run_finished.
+    Rationale: `run_started` records the runtime beginning, while the one-time S5 addition `context_compressed` audits a derived provider-visible view without replacing source facts.
     Check: Event type names are stable public kernel vocabulary; every event has the common envelope and JSON round-trips without provider-native objects.
 
-Event v1 deliberately excludes finer tracing events for now, including provider_called, provider_returned, state_updated, step_started, step_finished, context_compacted, permission_checked, and confirmation_requested.
+S5 adds exactly one Event type, `context_compressed`, as a derived-view audit fact. It records the original `message_added` Event range and summary, never replaces source Events, and `AgentState.fold()` ignores it except for advancing the common Event sequence.
+
+Event v1 deliberately excludes finer tracing events for now, including provider_called, provider_returned, state_updated, step_started, step_finished, context_compacted, permission_checked, and confirmation_requested. No other provider/context/summary Event type is permitted by the S5 amendment.
 
 Every Event must use this common envelope:
 
@@ -195,3 +197,4 @@ Changelog:
 - 2026-07-08 froze Message v1 content blocks.
 - 2026-07-08 froze KernelConfig v1 fields and defaults.
 - 2026-07-08 froze S2 deterministic test strategy.
+- 2026-07-14 user-approved one-time D4 amendment adding only `context_compressed` for S5.

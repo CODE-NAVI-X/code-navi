@@ -20,6 +20,7 @@ EVENT_TYPES = frozenset(
         "tool_called",
         "tool_returned",
         "budget_updated",
+        "context_compressed",
         "interrupted",
         "error",
         "run_finished",
@@ -67,6 +68,34 @@ def _validate_error_payload(payload: Mapping[str, Any]) -> None:
     attempt = payload.get("attempt")
     if attempt is not None and (not isinstance(attempt, int) or attempt < 1):
         raise ValueError("error payload attempt must be None or int >= 1")
+
+
+def _validate_context_compressed_payload(payload: Mapping[str, Any]) -> None:
+    if any(
+        not isinstance(payload.get(key), int) or isinstance(payload.get(key), bool)
+        for key in ("start_seq", "end_seq")
+    ):
+        raise ValueError("context_compressed seq bounds must be int")
+    bounds = _required_ints(payload, ("start_seq", "end_seq"))
+    if bounds["start_seq"] < 0 or bounds["end_seq"] < bounds["start_seq"]:
+        raise ValueError("context_compressed payload requires a valid seq range")
+    source_ids = payload.get("source_event_ids")
+    if (
+        not isinstance(source_ids, list)
+        or not source_ids
+        or any(not isinstance(item, str) or not item for item in source_ids)
+        or len(set(source_ids)) != len(source_ids)
+    ):
+        raise ValueError(
+            "context_compressed payload source_event_ids must be unique strings"
+        )
+    if not isinstance(payload.get("summary"), str):
+        raise ValueError("context_compressed payload summary must be str")
+    previous = payload.get("previous_event_id")
+    if previous is not None and (not isinstance(previous, str) or not previous):
+        raise ValueError(
+            "context_compressed payload previous_event_id must be None or str"
+        )
 
 
 class ToolPermission(str, Enum):
@@ -194,10 +223,13 @@ class Message:
     role: str
     content: tuple[ContentBlock, ...] = field(default_factory=tuple)
     metadata: JsonObject = field(default_factory=dict)
+    pinned: bool = False
 
     def __post_init__(self) -> None:
         if not self.role:
             raise ValueError("Message role is required")
+        if not isinstance(self.pinned, bool):
+            raise ValueError("Message pinned must be bool")
         object.__setattr__(self, "content", tuple(self.content))
         object.__setattr__(self, "metadata", _obj(self.metadata))
 
@@ -206,6 +238,7 @@ class Message:
             "role": self.role,
             "content": [item.to_json() for item in self.content],
             "metadata": self.metadata,
+            "pinned": self.pinned,
         }
 
     @classmethod
@@ -214,6 +247,7 @@ class Message:
             str(data["role"]),
             _tuple(ContentBlock, data.get("content", ())),
             _obj(data.get("metadata")),
+            data.get("pinned", False),
         )
 
 
@@ -238,6 +272,8 @@ class Event:
         payload = _obj(self.payload)
         if self.type == "error":
             _validate_error_payload(payload)
+        elif self.type == "context_compressed":
+            _validate_context_compressed_payload(payload)
         object.__setattr__(self, "payload", payload)
 
     def to_json(self) -> JsonObject:
