@@ -150,3 +150,69 @@ def test_interrupted_prefix_without_run_finished_is_kernel_error() -> None:
     assert result.events[-2].type == "error"
     assert result.events[-2].payload["source"] == "kernel"
     assert result.events[-1].payload == {"status": "fatal_error", "reason": "kernel_error"}
+
+
+def test_conflicting_explicit_run_id_uses_prior_event_fact_and_fails() -> None:
+    prior = [
+        Event("e0", "recorded-run", 0, "2026-07-08T00:00:00Z", "run_started", {}),
+        Event(
+            "e1",
+            "recorded-run",
+            1,
+            "2026-07-08T00:00:01Z",
+            "message_added",
+            {"message": Message("user").to_json()},
+        ),
+    ]
+    provider = MockProvider([ProviderResult(Message("assistant"))])
+
+    result = run(
+        provider,
+        Dispatcher(),
+        [],
+        prior_events=prior,
+        run_id="conflicting-run",
+    )
+
+    assert result.status == RunStatus.FATAL_ERROR
+    assert result.state.run_id == "recorded-run"
+    assert result.events[-2].run_id == "recorded-run"
+    assert result.events[-2].type == "error"
+    assert "run_id mismatch" in result.events[-2].payload["message"]
+    assert result.events[-1].payload == {
+        "status": "fatal_error",
+        "reason": "kernel_error",
+    }
+    assert provider.calls == []
+
+
+def test_conflicting_run_id_takes_fatal_path_even_for_terminal_history() -> None:
+    prior = [
+        Event("e0", "recorded-run", 0, "2026-07-08T00:00:00Z", "run_started", {}),
+        Event(
+            "e1",
+            "recorded-run",
+            1,
+            "2026-07-08T00:00:01Z",
+            "run_finished",
+            {"status": "completed", "reason": "completed"},
+        ),
+    ]
+    provider = MockProvider([ProviderResult(Message("assistant"))])
+
+    result = run(
+        provider,
+        Dispatcher(),
+        [],
+        prior_events=prior,
+        run_id="conflicting-run",
+    )
+
+    assert result.status == RunStatus.FATAL_ERROR
+    assert result.state.run_id == "recorded-run"
+    assert result.events[-2].type == "error"
+    assert result.events[-1].payload == {
+        "status": "fatal_error",
+        "reason": "kernel_error",
+    }
+    assert provider.calls == []

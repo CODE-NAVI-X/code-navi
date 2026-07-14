@@ -33,13 +33,13 @@ Boundary notes:
 
 Kernel core defines permission semantics only. Host layers decide how to ask for confirmation, display risk, or map permissions to UI policies.
 
-D4. Event v1 set is frozen as run_started, message_added, tool_called, tool_returned, budget_updated, context_compressed, interrupted, error, and run_finished.
-    Rationale: `run_started` records the runtime beginning, while the one-time S5 addition `context_compressed` audits a derived provider-visible view without replacing source facts.
+D4. Event v1 set is frozen as run_started, message_added, tool_called, tool_returned, budget_updated, context_compressed, provider_called, provider_returned, interrupted, error, and run_finished.
+    Rationale: `run_started` records the runtime beginning, the S5 addition `context_compressed` audits a derived provider-visible view, and the user-approved S6 additions `provider_called` and `provider_returned` record complete kernel-native provider I/O for deterministic replay.
     Check: Event type names are stable public kernel vocabulary; every event has the common envelope and JSON round-trips without provider-native objects.
 
 S5 adds exactly one Event type, `context_compressed`, as a derived-view audit fact. It records the original `message_added` Event range and summary, never replaces source Events, and `AgentState.fold()` ignores it except for advancing the common Event sequence.
 
-Event v1 deliberately excludes finer tracing events for now, including provider_called, provider_returned, state_updated, step_started, step_finished, context_compacted, permission_checked, and confirmation_requested. No other provider/context/summary Event type is permitted by the S5 amendment.
+Event v1 deliberately excludes any other finer tracing events, including provider failure variants, state_updated, step_started, step_finished, context_compacted, permission_checked, and confirmation_requested. The S6 amendment permits exactly `provider_called` and `provider_returned`; `attempt` is payload data, never part of an Event type name.
 
 Every Event must use this common envelope:
 
@@ -197,4 +197,5 @@ Changelog:
 - 2026-07-08 froze Message v1 content blocks.
 - 2026-07-08 froze KernelConfig v1 fields and defaults.
 - 2026-07-08 froze S2 deterministic test strategy.
+- 2026-07-14 user-approved S6 amendment added only `provider_called` and `provider_returned` for complete kernel-native provider I/O.
 - 2026-07-14 user-approved one-time D4 amendment adding only `context_compressed` for S5.

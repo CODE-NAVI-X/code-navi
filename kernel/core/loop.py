@@ -32,7 +32,8 @@ class Provider(Protocol):
 
 
 def _event(run_id: str, seq: int, event_type: str, payload: dict[str, Any]) -> Event:
-    return Event(str(uuid.uuid4()), run_id, seq, datetime.now(UTC).isoformat(), event_type, payload)
+    event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{run_id}:{seq}"))
+    return Event(event_id, run_id, seq, datetime.now(UTC).isoformat(), event_type, payload)
 
 
 def _error_payload(
@@ -85,6 +86,7 @@ def run(
     config: KernelConfig | None = None,
     *,
     prior_events: Sequence[Event] = (),
+    run_id: str | None = None,
     context_policy: ContextPolicy | None = None,
     context_budget_tokens: int | None = None,
     interrupt_check: Callable[[], bool] | None = None,
@@ -96,24 +98,21 @@ def run(
     context_budget = context_budget_tokens
     if context_budget is None:
         context_budget = getattr(provider, "max_context", None) or (2**63 - 1)
+    if run_id is not None and (
+        not isinstance(run_id, str) or not run_id
+    ):
+        raise ValueError("run_id must be a non-empty string when supplied")
     events: list[Event] = list(prior_events)
     recovered = AgentState.fold(events)
-    if recovered.status in {RunStatus.COMPLETED, RunStatus.INTERRUPTED, RunStatus.FATAL_ERROR}:
-        return RunResult(
-            recovered.status,
-            recovered,
-            tuple(events),
-            _final_reason(events),
-            _last_message(recovered),
-        )
-    run_id = recovered.run_id or str(uuid.uuid4())
+    recovered_run_id = recovered.run_id
+    effective_run_id = recovered_run_id or run_id or str(uuid.uuid4())
     seq = recovered.last_seq + 1
     used_steps = recovered.steps_used
     used_tool_calls = recovered.tool_calls_used
 
     def emit(event_type: str, payload: dict[str, Any]) -> None:
         nonlocal seq
-        events.append(_event(run_id, seq, event_type, payload))
+        events.append(_event(effective_run_id, seq, event_type, payload))
         seq += 1
 
     def emit_budget() -> None:
@@ -138,6 +137,31 @@ def run(
             emit("interrupted", {})
             return finish(RunStatus.INTERRUPTED, "interrupted")
         return None
+
+    if (
+        recovered_run_id is not None
+        and run_id is not None
+        and run_id != recovered_run_id
+    ):
+        exc = RuntimeError(
+            f"run_id mismatch: prior Events use {recovered_run_id!r}, "
+            f"caller supplied {run_id!r}"
+        )
+        emit("error", _error_payload("kernel", "fatal", exc, None))
+        return finish(RunStatus.FATAL_ERROR, "kernel_error", str(exc))
+
+    if recovered.status in {
+        RunStatus.COMPLETED,
+        RunStatus.INTERRUPTED,
+        RunStatus.FATAL_ERROR,
+    }:
+        return RunResult(
+            recovered.status,
+            recovered,
+            tuple(events),
+            _final_reason(events),
+            _last_message(recovered),
+        )
 
     if recovered.interrupted:
         exc = RuntimeError("cannot resume from an interrupted event prefix")
@@ -167,10 +191,32 @@ def run(
             context_view = context_policy.view(tuple(events), context_budget)
             if context_view.compression is not None:
                 emit("context_compressed", context_view.compression.to_payload())
-            result = provider.complete(context_view.messages, tools=None)
+            provider_tools: tuple[dict[str, Any], ...] = ()
+            emit(
+                "provider_called",
+                {
+                    "attempt": attempt,
+                    "messages": [
+                        message.to_json() for message in context_view.messages
+                    ],
+                    "tools": list(provider_tools),
+                },
+            )
+            request_event = events[-1]
+            result = provider.complete(context_view.messages, tools=provider_tools)
+            emit(
+                "provider_returned",
+                {
+                    "attempt": attempt,
+                    "request_event_id": request_event.event_id,
+                    "request_seq": request_event.seq,
+                    "response": result.to_json(),
+                },
+            )
             used_steps += 1
             emit_budget()
             emit("message_added", {"message": result.message.to_json()})
+            attempt = 1
             messages += (result.message,)
             tool_calls = _tool_calls_from(result.message)
             if not tool_calls:

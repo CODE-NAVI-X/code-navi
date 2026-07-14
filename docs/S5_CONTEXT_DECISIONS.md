@@ -28,7 +28,7 @@ D8. Policy computes a compression plan but emits no Event. Loop is the only Even
 
 ## 4. Compression Audit
 
-D9. S5 adds exactly one Event type, `context_compressed`; no other provider/context/summary Event type is allowed.
+D9. S5 adds exactly one Event type, `context_compressed`. The later user-approved S6 amendment adds only `provider_called` and `provider_returned`; no other provider/context/summary Event type is allowed.
 
 D10. Its payload contains `start_seq`, `end_seq`, exact `source_event_ids`, `summary`, and optional `previous_event_id`. Sources must be earlier, unpinned `message_added` Events.
 
@@ -50,4 +50,4 @@ D16. Resume passes loaded Events as `prior_events`. The host must construct a fr
 
 D17. Tests cover pinned budgets, a step-40 load-bearing constraint, `context_compressed` and pinned Message round-trips, fold ignoring compression, append-only JSONL, corruption/fork rejection, save-load-resume equivalence, compression de-duplication, and fresh permission grants.
 
-Changelog: 2026-07-14 initial S5 freeze after explicit user approval.
+Changelog: 2026-07-14 initial S5 freeze after explicit user approval; 2026-07-14 S6 amendment acknowledged the two approved provider I/O Events without changing context semantics.

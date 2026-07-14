@@ -256,6 +256,8 @@ def test_denial_is_tool_result_and_loop_continues_without_new_event_types() -> N
         "tool_called",
         "tool_returned",
         "budget_updated",
+        "provider_called",
+        "provider_returned",
         "interrupted",
         "error",
         "run_finished",

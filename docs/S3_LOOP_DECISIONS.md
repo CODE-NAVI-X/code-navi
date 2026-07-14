@@ -45,8 +45,8 @@ D7. Every S3 v1 `run_finished` Event carries both `status` and `reason`.
 
 ## 3. Event Types and Payload Contracts
 
-D8. S3 v1 uses only the S2 frozen Event set.
-    The one-time S5 amendment adds only `context_compressed`, emitted by loop from a `ContextView.compression` plan; provider/context/summary Event variants remain forbidden.
+D8. S3 v1 uses only the S2 frozen Event set as amended by S5 and S6.
+    S5 adds `context_compressed`; S6 adds exactly `provider_called` and `provider_returned`. No provider failure Event or other provider/context/summary Event variant is allowed.
 
 D9. `budget_updated` payload is:
 
@@ -76,7 +76,11 @@ D12. Ordinary tool failure represented as `ToolResult(error=...)` is not an `err
 
 ## 4. Provider Call Semantics
 
-D13. S3 v1 does not add `provider_called` or `provider_returned` Events.
+D13. The user-approved S6 amendment records every provider attempt as `provider_called` and every successful response as `provider_returned`.
+
+`provider_called` contains `attempt`, complete kernel-native `messages`, and complete kernel-native `tools`. It never contains provider SDK objects, handlers, PermissionGrant instances, subprocess runners, secrets held outside the provider request, or host UI state.
+
+`provider_returned` contains `attempt`, `request_event_id`, `request_seq`, and the complete `ProviderResult.to_json()` response.
 
 D14. Provider success is represented by:
 
@@ -94,12 +98,23 @@ error(source="provider", ...)
 D16. Provider success sequence is:
 
 ```text
-provider.complete(...) returns ProviderResult
+provider_called
+-> provider.complete(...) returns ProviderResult
+-> provider_returned
 -> used_steps += 1
 -> budget_updated
 -> message_added(provider_result.message)
 -> scan message.content for tool_use
 ```
+
+Provider failure sequence is exactly:
+
+```text
+provider_called
+-> error(source="provider", classification="retryable" | "fatal", attempt=N)
+```
+
+There is no provider failure Event type.
 
 D17. Provider exceptions do not emit `budget_updated` or `message_added`.
 
@@ -269,7 +284,7 @@ D53. Resume does not re-emit `run_started` or initial `message_added` Events.
 
 D54. Resume must not automatically re-dispatch in-flight tool calls.
 
-D55. Completed, interrupted, and fatal terminal logs are read-only. `run(...)` returns the recovered `RunResult` without calling provider, dispatching tools, or appending Events.
+D55. Completed, interrupted, and fatal terminal logs are read-only. `run(...)` returns the recovered `RunResult` without calling provider, dispatching tools, or appending Events. The user-approved S6 run-ID integrity check is the sole exception: if a caller supplies a run ID that conflicts with prior Events, the kernel appends its fatal mismatch path under the recorded run ID and performs no provider or tool call.
 
 D56. If `prior_events` contains `interrupted` but not `run_finished(status="interrupted")`, S3 v1 treats it as an incomplete or abnormal log and returns `fatal_error` with `reason="kernel_error"`.
 
@@ -297,7 +312,7 @@ D60. Any lifecycle behavior recorded in this document must have at least one cor
 
 ## 12. Explicit Non-goals for S3 v1
 
-D61. No new Event types beyond the single S5-approved `context_compressed` addition.
+D61. No new Event types beyond S5 `context_compressed` and the two S6-approved `provider_called` and `provider_returned` additions.
 
 D62. No async, batch, or streamed tool results.
 
@@ -334,3 +349,9 @@ Rationale: the tool may already have produced side effects, but the event log do
 ### 2026-07-14 — S5 context view integration
 
 The user approved a one-time D8/D61 amendment adding only `context_compressed`. A context policy returns `ContextView(messages, compression)` without mutating Event history; loop remains the sole Event emitter and appends the compression audit Event before the provider call. If pinned content cannot fit the supplied context budget, loop emits a fatal kernel error and finishes with `reason="context_budget_exceeded"`.
+
+### 2026-07-14 — S6 provider I/O and replay amendment
+
+The user approved adding only `provider_called` and `provider_returned`. `attempt` remains payload data. Success ordering is `provider_called -> provider_returned -> budget_updated -> message_added`; failure ordering is `provider_called -> error(source="provider", ...)`. Successful provider calls reset retry attempt state so each new provider step begins at attempt 1.
+
+Replay may supply the recorded `run_id`. When `prior_events` exist they remain the fact source; a conflicting caller-supplied `run_id` follows the kernel fatal path. Event IDs may be derived deterministically from `(run_id, seq)`, while timestamps remain record-only metadata and never affect decisions.

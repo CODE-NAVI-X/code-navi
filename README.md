@@ -13,7 +13,8 @@ Code-Navi Agent Kernel 是一个小型、平台无关的单 Agent 运行时内�
 - S3 Execution loop：core v1 已完成
 - S4 Tools and permissions：已完成
 - S5 Context and persistence：已完成
-- S6-S7：尚未开始
+- S6 Observability and replay：已完成
+- S7：尚未开始
 
 验证命令：
 
@@ -24,7 +25,7 @@ python -m pytest -q
 当前结果：
 
 ```text
-65 passed
+78 passed
 ```
 
 ### 阶段总览
@@ -171,16 +172,23 @@ python -m pytest -q
 
 目标：让 run 可检查、可 replay、可 debug。
 
-计划工作：
+已完成产物：
 
-- unified trace tooling
-- human-readable run traces
-- deterministic replay
-- replay divergence detection
-- trace diffing
-- nondeterminism audits
+- `docs/S6_OBSERVABILITY_DECISIONS.md`
+- `docs/S6_DETERMINISM_AUDIT.md`
+- `kernel/providers/replay.py`
+- `kernel/trace/__main__.py`
+- replay identity、divergence 与 trace CLI 测试
 
-完成度：尚未开始。
+已实现行为：
+
+- 完整 kernel-native provider request/response Events
+- `ReplayProvider` 与字段级 `ReplayDivergence`
+- 确定性 Event ID 与原始 run ID 重放
+- 人类可读、verbose 与结构化 diff trace CLI
+- 旧 S5 日志可 trace、明确不可 replay
+
+完成度：S6 v1 已完成。
 
 #### S7 Provider Adapters
 
@@ -256,7 +264,8 @@ As of 2026-07-14:
 - S3 Execution loop: core v1 complete
 - S4 Tools and permissions: complete
 - S5 Context and persistence: complete
-- S6-S7: not started
+- S6 observability and replay: complete
+- S7: not started
 
 Validation:
 
@@ -267,7 +276,7 @@ python -m pytest -q
 Current result:
 
 ```text
-65 passed
+78 passed
 ```
 
 ### Phase Overview
@@ -414,16 +423,23 @@ Completion: core policy and JSONL adapter v1 complete.
 
 Goal: make runs inspectable, replayable, and debuggable.
 
-Planned work:
+Completed artifacts:
 
-- unified trace tooling
-- human-readable run traces
-- deterministic replay
-- replay divergence detection
-- trace diffing
-- nondeterminism audits
+- `docs/S6_OBSERVABILITY_DECISIONS.md`
+- `docs/S6_DETERMINISM_AUDIT.md`
+- `kernel/providers/replay.py`
+- `kernel/trace/__main__.py`
+- replay identity, divergence, and trace CLI tests
 
-Completion: not started.
+Implemented behavior:
+
+- complete kernel-native provider request/response Events
+- `ReplayProvider` with field-level `ReplayDivergence`
+- deterministic Event IDs and original run ID replay
+- human-readable, verbose, and structural-diff trace CLI
+- old S5 logs remain traceable and are explicitly not replayable
+
+Completion: S6 v1 complete.
 
 #### S7 Provider Adapters
 
