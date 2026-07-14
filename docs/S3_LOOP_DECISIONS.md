@@ -39,13 +39,14 @@ D6. The current S3 v1 reason list is:
 - `fatal_tool_error`
 - `kernel_error`
 - `unsafe_resume_inflight_tool`
+- `context_budget_exceeded`
 
 D7. Every S3 v1 `run_finished` Event carries both `status` and `reason`.
 
 ## 3. Event Types and Payload Contracts
 
-D8. S3 v1 must not introduce new Event types.
-    It uses only the S2 frozen Event set: `run_started`, `message_added`, `tool_called`, `tool_returned`, `budget_updated`, `interrupted`, `error`, and `run_finished`.
+D8. S3 v1 uses only the S2 frozen Event set.
+    The one-time S5 amendment adds only `context_compressed`, emitted by loop from a `ContextView.compression` plan; provider/context/summary Event variants remain forbidden.
 
 D9. `budget_updated` payload is:
 
@@ -296,7 +297,7 @@ D60. Any lifecycle behavior recorded in this document must have at least one cor
 
 ## 12. Explicit Non-goals for S3 v1
 
-D61. No new Event types.
+D61. No new Event types beyond the single S5-approved `context_compressed` addition.
 
 D62. No async, batch, or streamed tool results.
 
@@ -329,3 +330,7 @@ Required behavior:
 - return `RunResult(status="fatal_error", reason="unsafe_resume_inflight_tool")`
 
 Rationale: the tool may already have produced side effects, but the event log does not contain a corresponding result. Redispatch risks duplicate side effects; continuing provider execution risks advancing without the required tool result.
+
+### 2026-07-14 — S5 context view integration
+
+The user approved a one-time D8/D61 amendment adding only `context_compressed`. A context policy returns `ContextView(messages, compression)` without mutating Event history; loop remains the sole Event emitter and appends the compression audit Event before the provider call. If pinned content cannot fit the supplied context budget, loop emits a fatal kernel error and finishes with `reason="context_budget_exceeded"`.

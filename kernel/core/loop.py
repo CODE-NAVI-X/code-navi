@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from .context import ContextBudgetExceeded, ContextPolicy, FullHistory
 from .types import (
     AgentState,
     Event,
@@ -84,11 +85,17 @@ def run(
     config: KernelConfig | None = None,
     *,
     prior_events: Sequence[Event] = (),
+    context_policy: ContextPolicy | None = None,
+    context_budget_tokens: int | None = None,
     interrupt_check: Callable[[], bool] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> RunResult:
     """Run provider calls until one terminal condition is reached."""
     config = config or KernelConfig()
+    context_policy = context_policy or FullHistory()
+    context_budget = context_budget_tokens
+    if context_budget is None:
+        context_budget = getattr(provider, "max_context", None) or (2**63 - 1)
     events: list[Event] = list(prior_events)
     recovered = AgentState.fold(events)
     if recovered.status in {RunStatus.COMPLETED, RunStatus.INTERRUPTED, RunStatus.FATAL_ERROR}:
@@ -157,7 +164,10 @@ def run(
         if used_steps >= config.max_steps:
             return finish(RunStatus.BUDGET_EXHAUSTED, RunStatus.BUDGET_EXHAUSTED.value)
         try:
-            result = provider.complete(messages, tools=None)
+            context_view = context_policy.view(tuple(events), context_budget)
+            if context_view.compression is not None:
+                emit("context_compressed", context_view.compression.to_payload())
+            result = provider.complete(context_view.messages, tools=None)
             used_steps += 1
             emit_budget()
             emit("message_added", {"message": result.message.to_json()})
@@ -183,6 +193,11 @@ def run(
                 tool_message = Message("tool", (make_tool_result_block(tool_result),))
                 emit("message_added", {"message": tool_message.to_json()})
                 messages += (tool_message,)
+        except ContextBudgetExceeded as exc:
+            emit("error", _error_payload("kernel", "fatal", exc, None))
+            return finish(
+                RunStatus.FATAL_ERROR, "context_budget_exceeded", str(exc)
+            )
         except RetryableProviderError as exc:
             emit("error", _error_payload("provider", "retryable", exc, attempt))
             if attempt > config.retry_max_attempts:

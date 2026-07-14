@@ -6,24 +6,25 @@ Code-Navi Agent Kernel 是一个小型、平台无关的单 Agent 运行时内�
 
 ### 当前状态
 
-截至 2026-07-12：
+截至 2026-07-14：
 
 - S1 Scope：已完成
 - S2 Core abstractions：部分完成，已足够作为 S3 gate
 - S3 Execution loop：core v1 已完成
 - S4 Tools and permissions：已完成
-- S5-S7：尚未开始
+- S5 Context and persistence：已完成
+- S6-S7：尚未开始
 
 验证命令：
 
 ```bash
-python -m pytest tests/kernel/core -q
+python -m pytest -q
 ```
 
 当前结果：
 
 ```text
-44 passed
+65 passed
 ```
 
 ### 阶段总览
@@ -113,7 +114,7 @@ python -m pytest tests/kernel/core -q
 - 从 `prior_events` resume
 - terminal logs read-only
 - unsafe resume with in-flight tool calls fails fast
-- 不新增 S2 冻结 Event 集之外的 Event type
+- 除一次批准的 `context_compressed` 外不新增 Event type
 
 完成度：core v1 已完成。
 
@@ -148,16 +149,23 @@ python -m pytest tests/kernel/core -q
 
 目标：定义 context-window policy 和 durable replay/resume 行为。
 
-计划工作：
+已完成产物：
 
-- context views
-- truncation and compression policy
-- pinned load-bearing fields
-- JSONL session persistence
-- save/load semantics
-- resume from persisted Event logs
+- `docs/S5_CONTEXT_DECISIONS.md`
+- `kernel/core/context.py`
+- `kernel/adapters/jsonl_session.py`
+- context pinning、load-bearing 与 session round-trip 测试
 
-完成度：尚未开始。
+已实现行为：
+
+- `ContextView`、`FullHistory` 与 `TailWithSummary`
+- pinned Message 逐字保留与 `context_budget_exceeded` fatal path
+- loop-only `context_compressed` Event emission
+- rolling compression 去重与 resume 复用
+- append-only JSONL prefix/suffix 保存和严格加载校验
+- Event-only persistence；不持久化 AgentState 或真实 PermissionGrant
+
+完成度：core policy 与 JSONL adapter v1 已完成。
 
 #### S6 Observability and Replay
 
@@ -241,24 +249,25 @@ The project is built in staged design phases. Each phase freezes a narrow contra
 
 ### Current Status
 
-As of 2026-07-12:
+As of 2026-07-14:
 
 - S1 Scope: complete
 - S2 Core abstractions: partially complete, enough to gate S3
 - S3 Execution loop: core v1 complete
 - S4 Tools and permissions: complete
-- S5-S7: not started
+- S5 Context and persistence: complete
+- S6-S7: not started
 
 Validation:
 
 ```bash
-python -m pytest tests/kernel/core -q
+python -m pytest -q
 ```
 
 Current result:
 
 ```text
-44 passed
+65 passed
 ```
 
 ### Phase Overview
@@ -348,7 +357,7 @@ Implemented behavior:
 - resume from `prior_events`
 - terminal logs are read-only
 - unsafe resume with in-flight tool calls fails fast
-- no new Event types beyond the S2 frozen Event set
+- no Event type beyond the one approved `context_compressed` addition
 
 Completion: core v1 complete.
 
@@ -383,16 +392,23 @@ Completion: core v1 complete.
 
 Goal: define context-window policy and durable replay/resume behavior.
 
-Planned work:
+Completed artifacts:
 
-- context views
-- truncation and compression policy
-- pinned load-bearing fields
-- JSONL session persistence
-- save/load semantics
-- resume from persisted Event logs
+- `docs/S5_CONTEXT_DECISIONS.md`
+- `kernel/core/context.py`
+- `kernel/adapters/jsonl_session.py`
+- context pinning, load-bearing, and session round-trip tests
 
-Completion: not started.
+Implemented behavior:
+
+- `ContextView`, `FullHistory`, and `TailWithSummary`
+- verbatim pinned Messages and the `context_budget_exceeded` fatal path
+- loop-only `context_compressed` Event emission
+- rolling compression de-duplication and reuse on resume
+- append-only JSONL prefix/suffix saves with strict load validation
+- Event-only persistence without AgentState or real PermissionGrant storage
+
+Completion: core policy and JSONL adapter v1 complete.
 
 #### S6 Observability and Replay
 
