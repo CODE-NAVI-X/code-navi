@@ -14,7 +14,6 @@ from kernel.core import (
     Event,
     KernelConfig,
     Message,
-    MockProvider,
     PermissionGrant,
     ProviderResult,
     TailWithSummary,
@@ -26,6 +25,7 @@ from kernel.core import (
     ToolSpec,
     run,
 )
+from kernel.providers import MockProvider
 
 
 class UnitCounter:
@@ -43,6 +43,9 @@ class Summarizer:
 
 
 class Dispatcher:
+    def provider_tools(self):
+        return ()
+
     def dispatch(self, call: ToolCall) -> ToolResult:
         return ToolResult(call.id, call.name, {"ok": True})
 

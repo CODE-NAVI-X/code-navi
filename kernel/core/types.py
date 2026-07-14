@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence
+
+if TYPE_CHECKING:
+    from .provider import ProviderTool
 
 JsonObject = dict[str, Any]
 EVENT_TYPES = frozenset(
@@ -179,16 +182,11 @@ class RunStatus(str, Enum):
         return self is not RunStatus.RUNNING
 
 
-class RetryableProviderError(Exception):
-    """Provider failure that S3 loop may retry within configured bounds."""
-
-
-class FatalProviderError(Exception):
-    """Provider failure that S3 loop must not retry."""
-
-
 class ToolDispatcher(Protocol):
-    """Single tool execution boundary used by the S3 loop."""
+    """Read-only tool descriptions plus the single execution boundary."""
+
+    def provider_tools(self) -> Sequence["ProviderTool"]:
+        ...
 
     def dispatch(self, call: "ToolCall") -> "ToolResult":
         ...
@@ -572,35 +570,3 @@ class RunResult:
             None if output is None else Message.from_json(output),
             data.get("error"),
         )
-
-
-@dataclass(slots=True)
-class MockProvider:
-    """Deterministic provider test double for S2/S3 lifecycle tests."""
-
-    script: Sequence[ProviderResult | ProviderStreamEvent | Exception | Mapping[str, Any]]
-    supports_streaming: bool = False
-    max_context: int | None = None
-    calls: list[JsonObject] = field(default_factory=list)
-    _index: int = 0
-
-    def complete(
-        self,
-        messages: Sequence[Message],
-        tools: Sequence[Mapping[str, Any]] | None = None,
-    ) -> ProviderResult | ProviderStreamEvent:
-        self.calls.append(
-            {
-                "messages": [message.to_json() for message in messages],
-                "tools": [_obj(tool) for tool in (tools or ())],
-            }
-        )
-        if self._index >= len(self.script):
-            raise RuntimeError("MockProvider script exhausted")
-        item = self.script[self._index]
-        self._index += 1
-        if isinstance(item, Exception):
-            raise item
-        if isinstance(item, (ProviderResult, ProviderStreamEvent)):
-            return item
-        return ProviderResult.from_json(item) if item.get("message") else ProviderStreamEvent.from_json(item)

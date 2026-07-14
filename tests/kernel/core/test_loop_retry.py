@@ -2,7 +2,6 @@ from kernel.core import (
     FatalProviderError,
     KernelConfig,
     Message,
-    MockProvider,
     ProviderResult,
     RetryableProviderError,
     RunStatus,
@@ -10,9 +9,13 @@ from kernel.core import (
     ToolResult,
     run,
 )
+from kernel.providers import MockProvider
 
 
 class Dispatcher:
+    def provider_tools(self):
+        return ()
+
     def dispatch(self, call: ToolCall) -> ToolResult:
         return ToolResult(call.id, call.name, {"ok": True})
 

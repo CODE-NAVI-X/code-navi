@@ -59,6 +59,9 @@ class ProviderBackedSummarizer:
 
 
 class Dispatcher:
+    def provider_tools(self):
+        return ()
+
     def dispatch(self, call: ToolCall) -> ToolResult:
         return ToolResult(call.id, call.name, {"ok": True, "n": call.args["n"]})
 

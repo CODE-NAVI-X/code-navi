@@ -13,6 +13,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .provider import ProviderTool
 from .types import ToolCall, ToolPermission, ToolResult
 
 ToolHandler = Callable[[Mapping[str, Any], "ToolExecutionContext"], Any]
@@ -178,6 +179,17 @@ class RunToolDispatcher:
         self._entries = entries
         self._grant = grant
         self._context = context
+
+    def provider_tools(self) -> tuple[ProviderTool, ...]:
+        """Return only model-visible descriptions from the bound registry snapshot."""
+        return tuple(
+            ProviderTool(
+                entry.spec.name,
+                entry.spec.description,
+                entry.spec.args_schema,
+            )
+            for entry in self._entries.values()
+        )
 
     def dispatch(self, call: ToolCall) -> ToolResult:
         entry = self._entries.get(call.name)

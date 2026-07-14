@@ -54,6 +54,36 @@ def test_explicit_registration_success_and_freeze() -> None:
         )
 
 
+def test_bound_provider_tools_are_model_visible_only_and_snapshot_stable() -> None:
+    registry = ToolRegistry()
+    registry.register(read_spec(), lambda args, context: None)
+    dispatcher = bind(registry)
+
+    registry.register(
+        ToolSpec(
+            "other",
+            "Another tool.",
+            {"type": "object", "additionalProperties": False},
+            frozenset({ToolPermission.SENSITIVE}),
+        ),
+        lambda args, context: None,
+    )
+
+    tools = dispatcher.provider_tools()
+
+    assert [tool.name for tool in tools] == ["lookup"]
+    assert tools[0].to_json() == {
+        "name": "lookup",
+        "description": "Look up a local value.",
+        "args_schema": read_spec().args_schema,
+    }
+    assert frozenset(tools[0].to_json()) == {
+        "name",
+        "description",
+        "args_schema",
+    }
+
+
 def test_duplicate_registration_is_rejected() -> None:
     registry = ToolRegistry()
     registry.register(read_spec(), lambda args, context: None)
