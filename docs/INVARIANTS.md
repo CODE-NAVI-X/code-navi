@@ -1,38 +1,13 @@
-# INVARIANTS (FROZEN)
+# 应用不变量
 
-Amend only by explicit user decision. Record amendments in the changelog at the bottom.
+这些约束保护 `code-navi` 与 kernel 的边界。普通功能 PR 不得破坏它们；如确需修改，必须在 PR 中说明原因、迁移方案和风险，并同步更新架构文档。
 
-First host: code-navi CLI.
-
-I1. Kernel core must stay platform-agnostic and must not know CLI, DingTalk, Lark, Telegram, or other transport details.
-    Rationale: Host and service channels must not leak into runtime semantics.
-    Check: grep core imports and type fields for platform names and transport SDKs.
-I2. Kernel core owns the v1 single-agent execution loop.
-    Rationale: A run needs one portable definition for progression, pause, resume, tool invocation, interruption, and terminal states.
-    Check: review run-loop code for state progression outside kernel core.
-I3. Kernel-native, JSON-round-trippable types are the stable boundary.
-    Rationale: Message, ToolCall, Event, RunResult, AgentState, ProviderResult, and ProviderStreamEvent must not be polluted by provider or platform schemas.
-    Check: review core types for provider-native fields and verify from_json(json.loads(json.dumps(to_json(x)))) == x.
-I4. Every tool call must pass explicit registration, schema validation, and permission checks before execution.
-    Rationale: Auditability and safety depend on rejecting unknown, malformed, or unauthorized calls.
-    Check: tool execution path contains registry lookup, argument validation, and permission enforcement before handler invocation.
-I5. Kernel core defines permission semantics but not confirmation UI.
-    Rationale: READ, WRITE, DESTRUCTIVE, EXECUTE, NETWORK, SENSITIVE, and PUBLISH are runtime rules, while user interaction belongs to hosts.
-    Check: permission types exist in core, while prompts, buttons, dialogs, and CLI confirmation rendering do not.
-I6. Kernel core owns context-window policy.
-    Rationale: Provider-visible context, budgets, pinned fields, compression triggers, truncation triggers, and related events are required for stable runs.
-    Check: context assembly and compression/truncation event emission are in core; prompt text, summarizer choice, and business summaries are not.
-I7. Every durable runtime fact is an append-only Event, and kernel core owns event log, replay semantics, and persistence schema while remaining storage-agnostic.
-    Rationale: Debugging and recovery need immutable source facts, but files, databases, retention, encryption, and sync are deployment choices.
-    Check: core derives state and context views from Events without rewriting them; JSONL appears only in adapters or CLI defaults.
-I8. Kernel core owns the provider interface but imports no provider SDKs.
-    Rationale: OpenAI, Anthropic, Gemini, Qwen, DeepSeek, Ollama, vLLM, and future providers must be replaceable adapters.
-    Check: grep core imports for provider SDK packages and native request/response schemas.
-I9. Kernel extensions must be explicitly registered.
-    Rationale: Tools, providers, context sources, and storage backends must be reproducible and auditable.
-    Check: no core code scans directories, imports packages dynamically, or auto-loads plugins.
-I10. Kernel core contains no business logic, prompt content, RAG implementation, eval harness, or multi-agent orchestration.
-    Rationale: These belong above or beside the kernel; v1 may keep run_id and parent_run_id without becoming an orchestrator.
-    Check: review core modules for domain names, prompt templates, retrievers, benchmark runners, or agent scheduling logic.
-
-Changelog: 2026-07-08 initial freeze; 2026-07-14 user-approved I3/I7 JSON round-trip and append-only Event clarification.
+1. **Kernel 是外部依赖。** 本仓库不复制、分叉或局部修改 `kernel/` 源码。
+2. **运行统一经过公开 Runtime。** 应用调用 `AgentRuntime`，不直接驱动 `kernel.core` 的执行循环。
+3. **依赖单向向下。** 入口依赖应用流程，应用流程依赖领域层和 kernel；领域层不依赖 CLI、Web、消息平台或 Provider SDK。
+4. **工具显式且最小授权。** 未注册、未声明或未授权的工具不可执行；权限不跨 run 继承。
+5. **高风险操作由宿主确认。** 写入、执行、联网、发布和破坏性行为必须有明确的应用层确认与失败路径。
+6. **运行事实可审计。** 应用保留必要 Event 关联，不将模型文本伪装成工具结果或人工决定。
+7. **领域输出保持证据边界。** 面向学生、教师和研究者的内容区分事实、推断与待核验项，不编造来源、成绩或实验结果。
+8. **完成状态真实。** 未经过对应验收的 Web、在线模型、多 Agent 或自动化业务能力不得描述为已完成。
+9. **敏感信息不进入仓库。** 密钥、个人信息和未脱敏业务数据不得出现在源码、配置、日志样例、测试或文档中。

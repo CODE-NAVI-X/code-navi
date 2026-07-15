@@ -1,21 +1,14 @@
-# NON-GOALS (FROZEN)
+# 当前非目标
 
-Amend only by explicit user decision. Record amendments in the changelog at the bottom.
+以下事项不属于当前仓库基线的完成范围：
 
-The Code-Navi kernel is a minimal, platform-agnostic agent runtime for the first host, code-navi CLI.
+- 重新实现或在本仓库维护 agent kernel；
+- 把平台 SDK、Provider 原生类型或确认 UI 写入领域 Agent；
+- 默认启用写入、执行、联网、发布或破坏性工具；
+- 声称已经具备完整助学、助教、助研生产闭环；
+- 未经评估的多 Agent 编排、自动评分、自动发布或自动研究结论；
+- 将 Event JSONL 直接当作完整会话数据库、身份系统或长期记忆；
+- 在缺少来源和人工复核时输出确定性的教学或科研结论；
+- 为方便单一业务而绕过 kernel 的注册、权限、上下文或审计契约。
 
-- No UI ownership. CLI interaction design, Web UI, DingTalk/Lark/Telegram rendering, confirmations, buttons, cards, forms, and platform flows belong to hosts.
-- No prompt or content ownership. Prompt templates, role prompts, workflow wording, and domain content belong to skills, workflows, hosts, or business packages.
-- No business logic. Code navigation, teaching, research, ticket handling, approval, and other domain rules belong above the kernel.
-- No eval harness in core. Benchmarks, scoring, regression harnesses, dataset loaders, and evaluation protocols may consume kernel traces but are not kernel runtime.
-- No vector store or RAG implementation in core. Retrievers, embeddings, rerankers, vector databases, indexing, and RAG selection live outside core, though retrieved context may enter through tools or context sources.
-- No multi-agent orchestration in v1 core. Scheduling, roles, agent-to-agent protocols, debate, voting, decomposition, and aggregation belong to orchestrators; v1 may keep run_id and parent_run_id.
-- No plugin auto-discovery. Tools, providers, context sources, storage backends, and extensions must be explicitly registered by the host or package layer.
-- No config file format ownership. Kernel may define KernelConfig, but hosts read YAML, TOML, JSON, INI, env files, CLI flags, or remote config and pass parsed objects.
-
-Gate test:
-- Add streaming token callbacks: IN if represented as ProviderStreamEvent through the provider interface, OUT if tied to a provider-native stream format.
-- Add a memory/RAG layer: OUT for core retriever/vector store/ranking, IN only as an explicitly registered tool or context source.
-- Support YAML config: OUT for core parsing or file format rules, IN only when host parses YAML into KernelConfig.
-
-Changelog: 2026-07-08 initial freeze.
+非目标不等于永远不做。某项能力进入路线图前，需先定义业务负责人、风险边界、人工复核点、最小验收和回滚方式。
