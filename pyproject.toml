@@ -12,7 +12,13 @@ dependencies = [
     "code-navi-agent-kernel @ git+https://github.com/Dlalmlurn/code-navi-kernel.git@77e7c9e1898f94c42d1fbfcd7bb393a6ce1cb481",
 ]
 
+[project.scripts]
+code-navi = "code_navi.cli:main"
+
 [project.optional-dependencies]
+online = [
+    "openai>=2.44,<3",
+]
 dev = [
     "build>=1.3,<2",
     "pytest>=9,<10",

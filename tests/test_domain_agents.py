@@ -1,7 +1,13 @@
-from code_navi import research_coach_agent, student_tutor_agent, teacher_assistant_agent
 from kernel.core import ContentBlock, Message, ProviderResult, RunStatus
 from kernel.providers import MockProvider
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
+
+from code_navi import (
+    code_learning_agent,
+    research_coach_agent,
+    student_tutor_agent,
+    teacher_assistant_agent,
+)
 
 
 def test_domain_agent_specs_are_valid_markdown_agents() -> None:
@@ -10,6 +16,13 @@ def test_domain_agent_specs_are_valid_markdown_agents() -> None:
         assert agent.name and agent.description and agent.system_prompt
         assert agent.tool_names == ()
         assert agent.output_format == "markdown"
+
+
+def test_general_learning_agent_is_read_only_by_default() -> None:
+    assert isinstance(code_learning_agent, AgentSpec)
+    assert code_learning_agent.name == "code_learning_assistant"
+    assert code_learning_agent.tool_names == ()
+    assert code_learning_agent.output_format == "markdown"
 
 
 def test_domain_agents_run_sequentially_through_one_runtime() -> None:
