@@ -1,0 +1,30 @@
+services:
+  code-navi:
+    build:
+      context: .
+    image: code-navi:local
+    init: true
+    stdin_open: true
+    tty: true
+    read_only: true
+    environment:
+      CODE_NAVI_PROVIDER: ${CODE_NAVI_PROVIDER:-mock}
+      CODE_NAVI_MODEL: ${CODE_NAVI_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+        read_only: true
+      - type: volume
+        source: code_navi_runs
+        target: /data
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  code_navi_runs:
