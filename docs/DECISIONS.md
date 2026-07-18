@@ -4,7 +4,7 @@
 
 ### ADR-001：应用与 Kernel 分仓
 
-- 状态：Accepted
+- 状态：Superseded by ADR-003
 - 日期：2026-07-15
 - 决策：`code-navi` 只维护产品与应用代码；`code-navi-kernel` 作为固定提交的外部依赖接入。
 - 原因：避免两份运行时实现漂移，让产品迭代与通用执行语义分别评审和发布。
@@ -18,6 +18,24 @@
 - 决策：新增一个默认无工具权限的通用助手。CLI 以自然语言问题为入口，装配受预算限制的项目上下文，并用一次性快问和临时问题分支表达 GUI 侧边栏的焦点变化。原三个领域 Agent 暂时保留为兼容导出，不再作为 CLI 入口。
 - 备选：继续让用户选择领域 Agent；直接暴露 Skill/Tool 名称；把完整项目和历史无条件发送给模型。
 - 影响：后续 Tool、Skill 和 Workflow 由应用按任务选择并独立授权；CLI 与未来 GUI 可以共享 ContextSlice 等应用契约。真正的持久化多轮会话仍需要独立设计。
+
+### ADR-003：应用与 Kernel 同仓交付
+
+- 状态：Accepted
+- 日期：2026-07-18
+- 背景：分仓依赖要求开发机和部署服务器在构建时访问私有 GitHub 仓库，增加了凭据分发、Docker Secret 和构建失败面；当前两个仓库由同一项目维护。
+- 决策：将 `code-navi-kernel` 提交 `77e7c9e1898f94c42d1fbfcd7bb393a6ce1cb481` 的 `kernel` 包和测试并入本仓库的 `src/kernel/` 与 `tests/`，移除 VCS 依赖。代码仍保持 `code_navi -> kernel` 的单向依赖和公开接口边界。
+- 备选：继续使用 BuildKit Secret 拉取私有仓库；发布私有 wheel；使用 Git submodule。
+- 影响：安装和镜像构建不再需要 GitHub 凭据，版本可以原子发布；kernel 修改也进入本仓库评审，因此必须用目录边界、契约测试和独立变更范围防止业务逻辑侵入 core。
+
+### ADR-004：CLI 以轻量 Compose 容器交付
+
+- 状态：Accepted
+- 日期：2026-07-18
+- 背景：服务器需要使用一条 `docker compose up --build` 命令构建并拉起完整项目，当前产品只有 CLI，不需要 HTTP、反向代理或数据库。
+- 决策：使用 `python:3.11-slim` 多阶段镜像，Compose 只编排一个非 root CLI 容器；项目目录只读挂载，Event 写入独立 volume，在线 Provider 通过运行时环境变量配置。
+- 备选：Alpine 单阶段镜像；增加常驻 Web 服务；由服务器从私有仓库构建 kernel。
+- 影响：部署组件少、无端口和额外守护进程；交互 Shell 依赖前台 TTY，未来增加 Web 宿主时需另行设计服务入口和健康检查。
 
 ## 新决策格式
 

@@ -9,7 +9,7 @@ description = "Code Navi application for learning, teaching, and research assist
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "code-navi-agent-kernel @ git+https://github.com/Dlalmlurn/code-navi-kernel.git@77e7c9e1898f94c42d1fbfcd7bb393a6ce1cb481",
+    "jsonschema>=4.23,<5",
 ]
 
 [project.scripts]
@@ -31,6 +31,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not live'"
+markers = [
+    "live: opt-in tests that call a real external provider",
+]
 
 [tool.ruff]
 target-version = "py311"

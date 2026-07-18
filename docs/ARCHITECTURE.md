@@ -2,9 +2,9 @@
 
 ## 仓库边界
 
-`code-navi` 是通用代码学习助手的应用仓库，拥有用户入口、项目上下文、应用用例、后续 Skill/Workflow、工具装配和交付代码。`code-navi-kernel` 是独立运行时仓库，拥有平台无关的单 Agent 执行循环、Event、工具权限、上下文策略和 Provider 契约。
+本仓库同时交付两个保持单向依赖的 Python 包：`code_navi` 拥有用户入口、项目上下文、应用用例、后续 Skill/Workflow、工具装配和交付代码；`kernel` 拥有平台无关的单 Agent 执行循环、Event、工具权限、上下文策略和 Provider 契约。
 
-本仓库不复制或修改 kernel 源码。应用运行只通过公开的 `kernel.runtime` 接口；Provider 和持久化使用 kernel 的公开适配器。kernel 自身的执行、回放和权限语义在 kernel 仓库评审。
+两个包同仓是为了消除私有 Git 构建依赖并简化部署，不代表边界消失。应用运行只通过公开的 `kernel.runtime` 接口；Provider 和持久化使用 kernel 的公开适配器。`kernel` 不得反向导入 `code_navi` 或承载产品业务状态。
 
 ## 分层与依赖方向
 
@@ -17,7 +17,7 @@
                  ↓
 通用代码学习 Agent
                  ↓
-code-navi-kernel 公开运行时接口
+内置 kernel 公开运行时接口
                  ↓
 Provider、工具与持久化适配器
 ```
@@ -57,15 +57,16 @@ Provider、工具与持久化适配器
 | `src/code_navi/providers.py` | 离线和显式在线 Provider 装配 |
 | `src/code_navi/cli.py` | 命令、交互焦点、展示与退出码 |
 | `src/code_navi/domains/` | 旧领域 Agent 的兼容声明 |
+| `src/kernel/` | 平台无关的执行循环、Event、权限、上下文、回放和 Provider 适配器 |
 | `examples/` | 最小且可运行的接线示例，不承载生产逻辑 |
 | `tests/` | 上下文安全、CLI、领域契约和集成测试 |
 | `docs/` | 架构、开发规范、路线图和决策记录 |
 
 ## 变更归属判断
 
-- 改变单 Agent 的执行、Event、权限或 Provider 通用语义：在 kernel 仓库提出。
+- 改变单 Agent 的执行、Event、权限或 Provider 通用语义：在 `src/kernel/` 中独立实现和评审，并运行 kernel 全量测试。
 - 改变代码学习提示、项目上下文、Skill 输入输出或业务规则：在本仓库应用层实现。
 - 改变命令、界面、身份、人工确认或部署：在本仓库宿主层实现。
 - 只服务本产品的工具：由本仓库显式注册，不进入 kernel core。
 
-若需求需要反向依赖、复制 kernel 代码、把业务状态写入 Event 语义或把无限制执行作为默认能力，应先记录架构决策。
+若需求需要反向依赖、把业务状态写入 Event 语义或把无限制执行作为默认能力，应先记录架构决策。

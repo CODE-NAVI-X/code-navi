@@ -7,7 +7,8 @@
 | [CLI.md](CLI.md) | CLI 问答、上下文、问题分支和退出码 | 命令或交互协议变化时 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 仓库边界、分层与依赖方向 | 新增层、入口或跨层依赖时 |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | 环境、编码、测试、分支、提交和 PR 规范 | 开发流程或质量门变化时 |
-| [KERNEL_INTEGRATION.md](KERNEL_INTEGRATION.md) | kernel 依赖和运行时接入约束 | 升级 kernel 或改变接入方式时 |
+| [KERNEL_INTEGRATION.md](KERNEL_INTEGRATION.md) | 内置 kernel 的来源和运行时接入约束 | 修改 kernel 或改变接入方式时 |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Docker 构建、配置、运行和持久化 | 修改交付方式时 |
 | [PRODUCT_ROADMAP.md](PRODUCT_ROADMAP.md) | 阶段范围与验收标准 | 阶段开始、验收或调整时 |
 | [INVARIANTS.md](INVARIANTS.md) | 不能被普通功能改动破坏的应用约束 | 经架构评审确认后 |
 | [NON_GOALS.md](NON_GOALS.md) | 当前明确不做的事项 | 产品范围改变时 |

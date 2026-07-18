@@ -3,7 +3,7 @@
 ## 1. 环境与安装
 
 - Python 最低版本为 3.11；开发者应使用独立虚拟环境。
-- GitHub Git 凭据必须能够读取私有 `code-navi-kernel` 仓库；本机可使用 `gh auth setup-git` 配置。
+- Kernel 源码位于 `src/kernel/`，安装和测试不依赖其他私有仓库或 Git 凭据。
 - 依赖只在 `pyproject.toml` 声明，不提交虚拟环境、构建产物或本地密钥。
 
 ```bash
@@ -19,7 +19,7 @@ python -m pip install -e ".[dev]"
 - 新模块使用类型标注；公开接口提供简短 docstring；优先使用小而明确的函数和不可变数据。
 - 行宽为 100；导入、基础错误和常见 Python 反模式由 Ruff 检查。
 - 助手和能力声明只描述业务角色、输入输出和允许的工具，不持有平台 SDK 或密钥。
-- 只通过 kernel 公开接口集成，禁止从本仓库复制 `kernel/` 源码或绕过 `AgentRuntime`。
+- 应用只通过 kernel 公开接口集成，不绕过 `AgentRuntime`；`src/kernel/` 不反向导入应用层。
 - 不在日志、Event metadata、测试样例或文档中提交令牌、个人信息和未脱敏业务数据。
 
 ## 3. 测试与本地质量门
@@ -65,10 +65,10 @@ PR 描述至少包含：问题与范围、实现摘要、验证命令与结果�
 - 没有未说明的 kernel 升级、权限扩大或外部副作用；
 - 评审者能从 PR 中区分已完成能力和后续计划。
 
-## 6. 依赖与 Kernel 升级
+## 6. 依赖与 Kernel 维护
 
-- 生产依赖必须固定兼容范围；私有 kernel 在形成版本发布前固定到完整提交 SHA。
-- 升级 kernel 单独提交，并按照 [KERNEL_INTEGRATION.md](KERNEL_INTEGRATION.md)执行回归验证。
+- 生产依赖必须固定兼容范围；kernel 变更应保持独立提交和清晰的契约说明。
+- 同步旧仓库实现或修改 kernel 契约时，按照 [KERNEL_INTEGRATION.md](KERNEL_INTEGRATION.md)执行完整回归验证。
 - 新依赖应说明用途、维护状态、许可证/安全影响和不使用它的代价；能用标准库清晰实现时不新增依赖。
 
 ## 7. 完成定义
