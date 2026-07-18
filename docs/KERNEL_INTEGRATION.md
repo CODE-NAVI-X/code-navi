@@ -12,7 +12,7 @@
 
 ## 允许的接入面
 
-领域 Agent 使用 `kernel.runtime.AgentSpec`。应用执行使用 `AgentRuntime` 和 `RuntimeRequest`；测试优先使用 `MockProvider`。本仓库不得直接调用 `kernel.core.run()`、复制执行循环或依赖未公开的实现细节。
+助手声明使用 `kernel.runtime.AgentSpec`。应用执行使用 `AgentRuntime` 和 `RuntimeRequest`；测试优先使用离线 Provider。在线模式使用 kernel 提供的 `kernel.adapters.openai.OpenAIResponsesAdapter`，并由应用显式校验可选依赖、模型和密钥。本仓库不得直接调用 `kernel.core.run()`、复制执行循环或依赖未公开的实现细节。
 
 ```python
 from code_navi import student_tutor_agent
@@ -39,6 +39,8 @@ result = AgentRuntime(provider).run(
 ## Event 与持久化
 
 Event 是一次运行的审计事实。应用可以展示、持久化或关联 Event，但不能改写其语义。`session_id` 只用于应用归类时，不应被误当作自动恢复了跨运行对话或权限。
+
+CLI 的问题分支由应用在当前进程内保存受限问答，并将其作为下一次 `RuntimeRequest` 的参考数据。每个问题仍是独立 run；该行为不扩展 kernel 的 session 或 resume 语义。
 
 ## 升级流程
 

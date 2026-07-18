@@ -4,6 +4,7 @@
 
 | 文档 | 用途 | 何时更新 |
 | --- | --- | --- |
+| [CLI.md](CLI.md) | CLI 问答、上下文、问题分支和退出码 | 命令或交互协议变化时 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 仓库边界、分层与依赖方向 | 新增层、入口或跨层依赖时 |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | 环境、编码、测试、分支、提交和 PR 规范 | 开发流程或质量门变化时 |
 | [KERNEL_INTEGRATION.md](KERNEL_INTEGRATION.md) | kernel 依赖和运行时接入约束 | 升级 kernel 或改变接入方式时 |
