@@ -16,6 +16,13 @@ dependencies = [
 code-navi = "code_navi.cli:main"
 
 [project.optional-dependencies]
+server = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "sqlalchemy>=2.0,<3",
+    "python-dotenv>=1.0,<2",
+    "openai>=1.0,<3",
+]
 online = [
     "openai>=2.44,<3",
 ]

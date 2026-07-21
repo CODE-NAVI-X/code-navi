@@ -12,4 +12,6 @@ dist/
 !.env.example
 var/
 .codex/
-.code-navi/
+.code-navi/*
+prompt/
+VIBECODING_PROMPT.md
