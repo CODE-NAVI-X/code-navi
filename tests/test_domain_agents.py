@@ -4,9 +4,24 @@ from code_navi import (
     student_tutor_agent,
     teacher_assistant_agent,
 )
+from code_navi.domains.research import RESEARCH_TOOL_CONTRACTS
 from kernel.core import ContentBlock, Message, ProviderResult, RunStatus
 from kernel.providers import MockProvider
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
+
+
+def test_research_tool_contracts_document_safe_future_capabilities() -> None:
+    names = {item["name"] for item in RESEARCH_TOOL_CONTRACTS}
+    assert names == {
+        "research_clarification",
+        "research_plan",
+        "academic_search",
+        "paper_evidence_card",
+    }
+    academic_search = next(
+        item for item in RESEARCH_TOOL_CONTRACTS if item["name"] == "academic_search"
+    )
+    assert academic_search["permissions"] == ("READ", "NETWORK")
 
 
 def test_domain_agent_specs_are_valid_markdown_agents() -> None:
