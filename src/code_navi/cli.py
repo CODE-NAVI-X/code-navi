@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
-from kernel.core import RunStatus
-
 from code_navi.application import QuestionResult, QuestionService
 from code_navi.context import (
     ContextBuilder,
@@ -25,6 +23,7 @@ from code_navi.providers import (
     ProviderSettings,
     create_provider,
 )
+from kernel.core import RunStatus
 
 EXIT_OK = 0
 EXIT_USAGE = 2

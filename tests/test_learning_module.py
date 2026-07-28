@@ -150,6 +150,21 @@ class TestPersistence:
 
 
 class TestQueryOrchestrator:
+    def test_explain_without_api_key_uses_offline_stub(
+        self,
+        db: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("code_navi.learning.services.DEEPSEEK_API_KEY", "")
+
+        response = QueryOrchestrator().explain(
+            ExplainRequest(knowledge_point="offline learning"),
+            db,
+        )
+
+        assert "[decontaminated]" in response.summary
+        assert response.citations[0].source_title == "PoC stub citation"
+
     def test_explain_persists_to_notebook(self, db: Session) -> None:
         orchestrator = QueryOrchestrator()
         request = ExplainRequest(

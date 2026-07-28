@@ -81,6 +81,10 @@ class PromptDecontaminationEngine:
 
     passphrase: str = _DECONTAMINATION_PASSPHRASE
 
+    def decontaminate(self, knowledge_point: str) -> str:
+        """Attach the stable academic guard used by online and offline flows."""
+        return f"[decontaminated] {knowledge_point}\nGuard: {self.passphrase}"
+
 
 # ---------------------------------------------------------------------------
 # DeepSeek LLM wrapper
@@ -119,6 +123,27 @@ class DeepSeekLLM:
         content = response.choices[0].message.content or ""
         logger.debug("← DeepSeek response: %s", content[:120])
         return content
+
+
+@dataclass
+class OfflineLearningLLM:
+    """Deterministic local fallback for the learning-module PoC."""
+
+    def chat(self, _system_prompt: str, user_message: str) -> str:
+        """Return the documented offline response shape without a network call."""
+        return json.dumps(
+            {
+                "summary": user_message,
+                "detail": "离线 PoC 回退响应；未调用外部模型。",
+                "citations": [
+                    {
+                        "source_title": "PoC stub citation",
+                        "uri": None,
+                        "snippet": "Deterministic offline learning-module fallback.",
+                    }
+                ],
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +203,12 @@ class QueryOrchestrator:
         # 1. Compose prompts (decontamination passphrase baked into system prompt)
         system_prompt = self._build_system_prompt()
         user_message = _USER_TEMPLATE.format(
-            knowledge_point=request.knowledge_point, persona=request.persona or "academic"
+            knowledge_point=self.decontamination_engine.decontaminate(request.knowledge_point),
+            persona=request.persona or "academic",
         )
 
-        # 2. Call DeepSeek
-        llm = DeepSeekLLM()
+        # 2. Use the configured provider when available; otherwise stay offline.
+        llm = DeepSeekLLM() if DEEPSEEK_API_KEY else OfflineLearningLLM()
         raw = llm.chat(system_prompt, user_message)
 
         # 3. Parse structured response

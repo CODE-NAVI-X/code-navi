@@ -22,7 +22,7 @@ Code Navi（智教码航）是面向计算机专业学习与项目实践的通�
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,server]"
 pytest
 ruff check .
 
