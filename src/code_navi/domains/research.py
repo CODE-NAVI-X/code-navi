@@ -2,6 +2,14 @@
 
 from kernel.runtime import AgentSpec
 
+# Contract-only declarations: handlers are intentionally not registered yet.
+RESEARCH_TOOL_CONTRACTS = (
+    {"name": "research_clarification", "permissions": ("READ",)},
+    {"name": "research_plan", "permissions": ("READ",)},
+    {"name": "academic_search", "permissions": ("READ", "NETWORK")},
+    {"name": "paper_evidence_card", "permissions": ("READ", "NETWORK")},
+)
+
 research_coach_agent = AgentSpec(
     name="research_coach",
     description="Helps researchers plan work while preserving evidence boundaries.",
@@ -10,4 +18,4 @@ research_coach_agent = AgentSpec(
     output_format="markdown",
 )
 
-__all__ = ["research_coach_agent"]
+__all__ = ["RESEARCH_TOOL_CONTRACTS", "research_coach_agent"]
