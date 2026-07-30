@@ -8,14 +8,22 @@ from sqlalchemy.orm import Session
 from code_navi.learning.database import get_db
 
 from .schemas import (
+    CreateEvidenceBundleRequest,
     CreateResearchSessionRequest,
+    EvidenceBundle,
     ResearchSessionResponse,
     SubmitResearchTurnRequest,
 )
-from .service import ResearchClarificationService, ResearchSessionNotFoundError
+from .service import (
+    ResearchClarificationService,
+    ResearchEvidenceService,
+    ResearchPlanRequiredError,
+    ResearchSessionNotFoundError,
+)
 
 router = APIRouter(prefix="/api/v1/research", tags=["Research"])
 _service = ResearchClarificationService()
+_evidence_service = ResearchEvidenceService()
 _db_dependency = Depends(get_db)
 
 
@@ -61,3 +69,23 @@ def get_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found.",
         ) from error
+
+
+@router.post(
+    "/sessions/{session_id}/evidence-bundles",
+    response_model=EvidenceBundle,
+)
+def create_evidence_bundle(
+    session_id: str,
+    request: CreateEvidenceBundleRequest,
+    db: Session = _db_dependency,
+) -> EvidenceBundle:
+    """Run one user-triggered, source-restricted academic metadata search."""
+    try:
+        return _evidence_service.create_bundle(session_id, request, db)
+    except ResearchSessionNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Session not found."
+        ) from error
+    except ResearchPlanRequiredError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

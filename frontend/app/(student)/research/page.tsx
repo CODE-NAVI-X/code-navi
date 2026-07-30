@@ -6,15 +6,20 @@ import {
   CheckCircle2,
   CircleAlert,
   ClipboardList,
+  BookOpenText,
   FlaskConical,
   GraduationCap,
   Loader2,
   RotateCcw,
+  Search,
   Send,
 } from "lucide-react";
 
 import {
+  AcademicPaperResult,
+  createEvidenceBundle,
   createResearchSession,
+  EvidenceBundle,
   getResearchSession,
   ResearchApiError,
   ResearchPlanEntry,
@@ -52,12 +57,45 @@ function PlanEntry({ entry }: { entry: ResearchPlanEntry }) {
   );
 }
 
+function EvidenceBadge({ classification }: { classification: "fact" | "inference" | "to_verify" }) {
+  const labels = { fact: "来源事实", inference: "关联推断", to_verify: "待验证" };
+  const colors = {
+    fact: "bg-emerald-950/60 text-emerald-300",
+    inference: "bg-sky-950/60 text-sky-300",
+    to_verify: "bg-amber-950/60 text-amber-300",
+  };
+  return <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${colors[classification]}`}>{labels[classification]}</span>;
+}
+
+function PaperResult({ paper }: { paper: AcademicPaperResult }) {
+  return (
+    <article className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs text-zinc-300">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <a href={paper.url} target="_blank" rel="noreferrer" className="font-semibold text-sky-300 hover:underline">
+          {paper.title}
+        </a>
+        <span className="rounded-md bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">仅元数据/摘要</span>
+      </div>
+      <p className="mt-2 text-zinc-400">{paper.authors.join("、") || "作者信息未提供"}{paper.year ? ` · ${paper.year}` : ""} · {paper.source_name}</p>
+      {paper.abstract_excerpt && <p className="mt-3 leading-relaxed text-zinc-300">摘要片段：{paper.abstract_excerpt}</p>}
+      <div className="mt-3 space-y-2 text-[11px]">
+        <p className="flex gap-2"><EvidenceBadge classification="fact" /><span>{paper.metadata_evidence[0]?.content}</span></p>
+        <p className="flex gap-2"><EvidenceBadge classification="inference" /><span>{paper.relevance.content}</span></p>
+        <p className="flex gap-2"><EvidenceBadge classification="to_verify" /><span>{paper.verification.content}</span></p>
+      </div>
+    </article>
+  );
+}
+
 function ResearchContent() {
   const router = useRouter();
   const [session, setSession] = useState<ResearchSessionResponse | null>(null);
   const [draft, setDraft] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [evidenceBundle, setEvidenceBundle] = useState<EvidenceBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const restoreOrCreate = useCallback(async () => {
@@ -110,6 +148,7 @@ function ResearchContent() {
       const updated = await submitResearchTurn(session.session_id, payload);
       setSession(updated);
       setDraft("");
+      setEvidenceBundle(null);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -130,7 +169,25 @@ function ResearchContent() {
   function startNewSession() {
     window.localStorage.removeItem(STORAGE_KEY);
     setSession(null);
+    setEvidenceBundle(null);
     void restoreOrCreate();
+  }
+
+  async function searchAcademicSources() {
+    if (!session?.research_plan) return;
+    setIsSearching(true);
+    setError(null);
+    try {
+      const bundle = await createEvidenceBundle(session.session_id, {
+        query: searchQuery.trim() || undefined,
+        sources: ["arxiv"],
+      });
+      setEvidenceBundle(bundle);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? `检索未执行：${requestError.message}` : "检索未执行，请重试。");
+    } finally {
+      setIsSearching(false);
+    }
   }
 
   const completed = session?.completed ?? false;
@@ -322,6 +379,30 @@ function ResearchContent() {
                         </span>
                       ))}
                     </div>
+                  </section>
+                  <section className="rounded-2xl border border-violet-900/60 bg-violet-950/15 p-4">
+                    <h3 className="flex items-center gap-2 text-xs font-semibold text-violet-200"><BookOpenText className="h-4 w-4" /> 受限学术检索与证据包</h3>
+                    <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">仅在你点击后查询指定学术来源。本版本只查询 arXiv 元数据与摘要，不进行全网搜索、正文下载或论文精读。</p>
+                    <div className="mt-3 flex gap-2">
+                      <input
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        disabled={isSearching}
+                        maxLength={300}
+                        placeholder={session.research_plan.suggested_search_keywords[0] ?? "输入检索关键词"}
+                        className="min-w-0 flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-violet-700 disabled:opacity-50"
+                      />
+                      <button type="button" onClick={() => void searchAcademicSources()} disabled={isSearching} className="inline-flex items-center gap-1 rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">
+                        {isSearching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />} 查询 arXiv
+                      </button>
+                    </div>
+                    {evidenceBundle && (
+                      <div className="mt-4 space-y-3">
+                        <p className="text-[11px] text-zinc-400">检索词：{evidenceBundle.query} · 查询时间：{new Date(evidenceBundle.searched_at).toLocaleString()} · 实际来源：{evidenceBundle.queried_sources.join("、") || "无"}</p>
+                        {evidenceBundle.source_statuses.map((source) => <p key={`${source.source}-${source.accessed_at}`} className="text-[11px] text-zinc-400">{source.source}：{source.status}{source.reason ? `（${source.reason}）` : ""}</p>)}
+                        {evidenceBundle.papers.length > 0 ? evidenceBundle.papers.map((paper) => <PaperResult key={paper.url} paper={paper} />) : <p className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-xs text-zinc-400">没有可展示的论文结果。{evidenceBundle.failure_reasons.join("；")}</p>}
+                      </div>
+                    )}
                   </section>
                 </div>
               </div>

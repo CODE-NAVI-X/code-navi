@@ -1,0 +1,222 @@
+"""Offline tests for explicit, source-restricted academic evidence search."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Generator
+from datetime import UTC, datetime
+
+import pytest
+from fastapi.testclient import TestClient
+
+os.environ["LEARNING_DATABASE_URL"] = "sqlite:///:memory:"
+
+from code_navi.learning.database import engine  # noqa: E402
+from code_navi.learning.models import Base  # noqa: E402
+from code_navi.research.academic import (  # noqa: E402
+    AcademicSearchTool,
+    AcademicSourceResult,
+    ArxivMetadataClient,
+    PaperMetadata,
+)
+from code_navi.research.router import _evidence_service  # noqa: E402
+from code_navi.research_tools import academic_search_spec, register_research_tools  # noqa: E402
+from code_navi.server import app  # noqa: E402
+from kernel.core import (  # noqa: E402
+    PermissionGrant,
+    ToolCall,
+    ToolExecutionContext,
+    ToolPermission,
+    ToolRegistry,
+)
+
+
+class FakeArxivSource:
+    def __init__(self, result: AcademicSourceResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    def search(self, query: str) -> AcademicSourceResult:
+        self.calls += 1
+        assert query
+        return self.result
+
+
+@pytest.fixture(autouse=True)
+def fresh_tables() -> Generator[None, None, None]:
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture(autouse=True)
+def restore_evidence_service() -> Generator[None, None, None]:
+    original = _evidence_service.search_tool
+    yield
+    _evidence_service.search_tool = original
+
+
+def _paper() -> PaperMetadata:
+    return PaperMetadata(
+        title="A Study of Feedback Systems",
+        authors=["Ada Lovelace", "Grace Hopper"],
+        year=2025,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2501.00001",
+        identifier="arXiv:2501.00001",
+        abstract_excerpt="We compare feedback systems in a controlled learning study.",
+        accessed_at=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+
+
+def _completed_session(client: TestClient) -> str:
+    created = client.post("/api/v1/research/sessions", json={}).json()
+    body = created
+    while not body["completed"]:
+        body = client.post(
+            f"/api/v1/research/sessions/{created['session_id']}/turns",
+            json={"selected_option": body["next_question"]["options"][0]},
+        ).json()
+    return created["session_id"]
+
+
+def test_academic_search_tool_requires_read_and_network_permissions() -> None:
+    spec = academic_search_spec()
+
+    assert spec.required_permissions == frozenset({ToolPermission.READ, ToolPermission.NETWORK})
+
+
+def test_registry_denies_academic_search_without_network_permission() -> None:
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [_paper()]))
+    registry = ToolRegistry()
+    register_research_tools(registry, AcademicSearchTool({"arxiv": source}))
+    dispatcher = registry.bind(
+        PermissionGrant("research"),
+        ToolExecutionContext("research"),
+    )
+
+    result = dispatcher.dispatch(
+        ToolCall("1", "academic_search", {"query": "feedback systems", "sources": ["arxiv"]})
+    )
+
+    assert result.result["ok"] is False
+    assert result.result["error"]["code"] == "permission_denied"
+    assert source.calls == 0
+
+
+def test_academic_search_returns_source_restricted_evidence_bundle() -> None:
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [_paper()]))
+    tool = AcademicSearchTool({"arxiv": source})
+
+    bundle = tool.search("session-1", "feedback systems", ["arxiv"])
+
+    assert bundle["session_id"] == "session-1"
+    assert bundle["allowed_sources"] == ["arxiv"]
+    assert bundle["source_statuses"][0]["status"] == "success"
+    assert bundle["papers"][0]["title"] == "A Study of Feedback Systems"
+    assert bundle["papers"][0]["metadata_evidence"][0]["classification"] == "fact"
+    assert bundle["papers"][0]["relevance"]["classification"] == "inference"
+    assert bundle["papers"][0]["full_text_available"] is False
+    assert source.calls == 1
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["network_error", "timeout", "unavailable", "disabled", "dependency_missing", "no_results"],
+)
+def test_source_failure_returns_safe_empty_bundle(status: str) -> None:
+    source = FakeArxivSource(AcademicSourceResult.failure("arxiv", status, "source unavailable"))
+
+    bundle = AcademicSearchTool({"arxiv": source}).search("session-1", "feedback", ["arxiv"])
+
+    assert bundle["papers"] == []
+    assert bundle["source_statuses"][0]["status"] == status
+    assert bundle["failure_reasons"] == ["source unavailable"]
+    if status == "disabled":
+        assert bundle["queried_sources"] == []
+
+
+def test_unallowed_source_is_never_called() -> None:
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [_paper()]))
+
+    bundle = AcademicSearchTool({"arxiv": source}).search("session-1", "feedback", ["crossref"])
+
+    assert bundle["papers"] == []
+    assert bundle["source_statuses"][0]["status"] == "not_allowed"
+    assert source.calls == 0
+
+
+def test_configured_disabled_arxiv_source_makes_no_network_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_NAVI_ACADEMIC_ARXIV_ENABLED", "false")
+
+    result = ArxivMetadataClient().search("feedback")
+
+    assert result.status == "disabled"
+    assert result.papers == []
+    assert result.queried is False
+
+
+def test_unexpected_source_error_becomes_safe_empty_bundle() -> None:
+    class BrokenSource:
+        def search(self, _query: str) -> AcademicSourceResult:
+            raise ImportError("optional source dependency missing")
+
+    bundle = AcademicSearchTool({"arxiv": BrokenSource()}).search(
+        "session-1", "feedback", ["arxiv"]
+    )
+
+    assert bundle["papers"] == []
+    assert bundle["source_statuses"][0]["status"] == "dependency_missing"
+    assert bundle["failure_reasons"] == ["optional source dependency missing"]
+
+
+def test_api_only_searches_after_explicit_completed_session_request(
+    client: TestClient,
+) -> None:
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [_paper()]))
+    _evidence_service.search_tool = AcademicSearchTool({"arxiv": source})
+    session_id = _completed_session(client)
+
+    assert source.calls == 0
+    response = client.post(
+        f"/api/v1/research/sessions/{session_id}/evidence-bundles",
+        json={"query": "feedback systems", "sources": ["arxiv"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["papers"][0]["information_scope"] == "metadata_and_abstract_only"
+    assert response.json()["tool_audit"]["required_permissions"] == ["NETWORK", "READ"]
+    assert source.calls == 1
+
+
+def test_api_rejects_unallowed_source_without_calling_a_client(client: TestClient) -> None:
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [_paper()]))
+    _evidence_service.search_tool = AcademicSearchTool({"arxiv": source})
+    session_id = _completed_session(client)
+
+    response = client.post(
+        f"/api/v1/research/sessions/{session_id}/evidence-bundles",
+        json={"query": "feedback systems", "sources": ["crossref"]},
+    )
+
+    assert response.status_code == 422
+    assert source.calls == 0
+
+
+def test_api_rejects_search_for_incomplete_session(client: TestClient) -> None:
+    session_id = client.post("/api/v1/research/sessions", json={}).json()["session_id"]
+
+    response = client.post(
+        f"/api/v1/research/sessions/{session_id}/evidence-bundles",
+        json={"query": "feedback systems", "sources": ["arxiv"]},
+    )
+
+    assert response.status_code == 409
