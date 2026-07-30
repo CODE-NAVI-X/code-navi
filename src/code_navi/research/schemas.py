@@ -50,6 +50,65 @@ class ResearchPlan(BaseModel):
     provenance_note: str
 
 
+class EvidenceStatement(BaseModel):
+    """A claim explicitly labelled by the strength of its source support."""
+
+    content: str
+    classification: Literal["fact", "inference", "to_verify"]
+    source_url: str | None = None
+    basis: str
+
+
+class AcademicSourceStatus(BaseModel):
+    source: str
+    status: Literal[
+        "success",
+        "no_results",
+        "network_error",
+        "timeout",
+        "unavailable",
+        "disabled",
+        "not_allowed",
+        "dependency_missing",
+    ]
+    source_url: str | None = None
+    accessed_at: datetime
+    reason: str | None = None
+
+
+class AcademicPaperResult(BaseModel):
+    title: str
+    authors: list[str]
+    year: int | None = None
+    source_name: str
+    url: str
+    identifier: str | None = None
+    abstract_excerpt: str | None = None
+    accessed_at: datetime
+    information_scope: Literal["metadata_and_abstract_only"]
+    metadata_evidence: list[EvidenceStatement]
+    supporting_snippets: list[EvidenceStatement]
+    relevance: EvidenceStatement
+    verification: EvidenceStatement
+    full_text_available: Literal[False]
+
+
+class EvidenceBundle(BaseModel):
+    """Traceable, metadata-only evidence returned by one explicit search action."""
+
+    session_id: str
+    query: str
+    allowed_sources: list[str]
+    queried_sources: list[str]
+    source_statuses: list[AcademicSourceStatus]
+    searched_at: datetime
+    papers: list[AcademicPaperResult]
+    source_links: list[str | None]
+    failure_reasons: list[str]
+    provenance_note: str
+    tool_audit: dict[str, object] | None = None
+
+
 class ClarificationQuestion(BaseModel):
     """One deterministic question and its three recommended responses."""
 
@@ -86,6 +145,15 @@ class SubmitResearchTurnRequest(BaseModel):
         if len(values) != 1:
             raise ValueError("Provide exactly one of answer or selected_option.")
         return self
+
+
+class CreateEvidenceBundleRequest(BaseModel):
+    """Explicit user search request; no endpoint performs automatic network calls."""
+
+    query: str | None = Field(default=None, min_length=2, max_length=300)
+    sources: list[Literal["arxiv"]] = Field(
+        default_factory=lambda: ["arxiv"], min_length=1, max_length=1
+    )
 
 
 class ResearchSessionResponse(BaseModel):

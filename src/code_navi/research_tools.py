@@ -1,10 +1,14 @@
 """Small, local-first research tools for the Code-Navi research coach."""
+
 from collections.abc import Mapping
 from typing import Any
 
+from code_navi.research.academic import AcademicSearchTool
 from kernel.core import ToolExecutionContext, ToolPermission, ToolRegistry, ToolSpec
 
 RESEARCH_CLARIFICATION_TOOL = "research_clarification"
+ACADEMIC_SEARCH_TOOL = "academic_search"
+
 
 def research_clarification_spec() -> ToolSpec:
     return ToolSpec(
@@ -49,5 +53,41 @@ def research_clarification_handler(
     }
 
 
-def register_research_tools(registry: ToolRegistry) -> None:
+def academic_search_spec() -> ToolSpec:
+    return ToolSpec(
+        ACADEMIC_SEARCH_TOOL,
+        "Search explicitly selected, allow-listed academic metadata sources only.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 2, "maxLength": 300},
+                "sources": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": {"type": "string", "enum": ["arxiv"]},
+                },
+            },
+            "required": ["query", "sources"],
+            "additionalProperties": False,
+        },
+        frozenset({ToolPermission.READ, ToolPermission.NETWORK}),
+    )
+
+
+def academic_search_handler(
+    args: Mapping[str, Any], context: ToolExecutionContext, search_tool: AcademicSearchTool
+) -> dict[str, object]:
+    return search_tool.search(context.run_scope, str(args["query"]), list(args["sources"]))
+
+
+def register_research_tools(
+    registry: ToolRegistry,
+    academic_search: AcademicSearchTool | None = None,
+) -> None:
     registry.register(research_clarification_spec(), research_clarification_handler)
+    search_tool = academic_search or AcademicSearchTool()
+    registry.register(
+        academic_search_spec(),
+        lambda args, context: academic_search_handler(args, context, search_tool),
+    )

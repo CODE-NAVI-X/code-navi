@@ -6,6 +6,16 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from code_navi.research.academic import AcademicSearchTool
+from code_navi.research_tools import register_research_tools
+from kernel.core import (
+    PermissionGrant,
+    ToolCall,
+    ToolExecutionContext,
+    ToolPermission,
+    ToolRegistry,
+)
+
 from .llm import GuidanceGenerator, GuidanceOutcome, ProviderGuidanceGenerator
 from .models import ResearchSessionModel
 from .rules import (
@@ -18,7 +28,9 @@ from .rules import (
     rules_reply,
 )
 from .schemas import (
+    CreateEvidenceBundleRequest,
     CreateResearchSessionRequest,
+    EvidenceBundle,
     ResearchSessionResponse,
     ResearchState,
     ResearchTurn,
@@ -28,6 +40,55 @@ from .schemas import (
 
 class ResearchSessionNotFoundError(LookupError):
     """Raised when a requested application-owned research session is absent."""
+
+
+class ResearchPlanRequiredError(ValueError):
+    """Raised when an explicit search is requested before the plan is complete."""
+
+
+class ResearchEvidenceService:
+    """Host-owned API service that explicitly dispatches the registered network Tool."""
+
+    def __init__(self, search_tool: AcademicSearchTool | None = None) -> None:
+        self.search_tool = search_tool or AcademicSearchTool()
+
+    def create_bundle(
+        self,
+        session_id: str,
+        request: CreateEvidenceBundleRequest,
+        db: Session,
+    ) -> EvidenceBundle:
+        session = db.get(ResearchSessionModel, session_id)
+        if session is None:
+            raise ResearchSessionNotFoundError(session_id)
+        state = ResearchState(**session.state_data)
+        plan = build_research_plan(state)
+        if plan is None:
+            raise ResearchPlanRequiredError(
+                "Complete the five-field research plan before searching."
+            )
+        query = request.query or plan.suggested_search_keywords[0]
+        registry = ToolRegistry()
+        register_research_tools(registry, self.search_tool)
+        dispatcher = registry.bind(
+            PermissionGrant(
+                session_id,
+                frozenset({ToolPermission.READ, ToolPermission.NETWORK}),
+            ),
+            ToolExecutionContext(session_id),
+        )
+        result = dispatcher.dispatch(
+            ToolCall(
+                f"academic-search-{session_id}",
+                "academic_search",
+                {"query": query, "sources": request.sources},
+            )
+        )
+        if not result.result["ok"]:
+            raise RuntimeError("academic_search Tool did not return an evidence bundle")
+        payload = dict(result.result["value"])
+        payload["tool_audit"] = result.result["audit"]
+        return EvidenceBundle.model_validate(payload)
 
 
 class ResearchClarificationService:

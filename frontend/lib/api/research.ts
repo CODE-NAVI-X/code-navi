@@ -1,6 +1,7 @@
 /** Client for the rules-driven research clarification API. */
 
 export type PlanClassification = "inference" | "to_verify";
+export type EvidenceClassification = "fact" | "inference" | "to_verify";
 
 export interface ResearchState {
   research_domain: string | null;
@@ -59,6 +60,52 @@ export interface ResearchSessionResponse {
   turns: ResearchTurn[];
 }
 
+export interface EvidenceStatement {
+  content: string;
+  classification: EvidenceClassification;
+  source_url: string | null;
+  basis: string;
+}
+
+export interface AcademicSourceStatus {
+  source: string;
+  status: string;
+  source_url: string | null;
+  accessed_at: string;
+  reason: string | null;
+}
+
+export interface AcademicPaperResult {
+  title: string;
+  authors: string[];
+  year: number | null;
+  source_name: string;
+  url: string;
+  identifier: string | null;
+  abstract_excerpt: string | null;
+  accessed_at: string;
+  information_scope: "metadata_and_abstract_only";
+  metadata_evidence: EvidenceStatement[];
+  supporting_snippets: EvidenceStatement[];
+  relevance: EvidenceStatement;
+  verification: EvidenceStatement;
+  full_text_available: false;
+}
+
+export interface EvidenceBundle {
+  session_id: string;
+  query: string;
+  allowed_sources: string[];
+  queried_sources: string[];
+  source_statuses: AcademicSourceStatus[];
+  searched_at: string;
+  papers: AcademicPaperResult[];
+  source_links: (string | null)[];
+  failure_reasons: string[];
+  provenance_note: string;
+  tool_audit: { required_permissions?: string[]; grant_check?: string } | null;
+}
+
 export class ResearchApiError extends Error {
   constructor(
     public readonly status: number,
@@ -95,6 +142,16 @@ export async function submitResearchTurn(
 ): Promise<ResearchSessionResponse> {
   return request<ResearchSessionResponse>(
     `/api/v1/research/sessions/${encodeURIComponent(sessionId)}/turns`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function createEvidenceBundle(
+  sessionId: string,
+  payload: { query?: string; sources: ["arxiv"] },
+): Promise<EvidenceBundle> {
+  return request<EvidenceBundle>(
+    `/api/v1/research/sessions/${encodeURIComponent(sessionId)}/evidence-bundles`,
     { method: "POST", body: JSON.stringify(payload) },
   );
 }
