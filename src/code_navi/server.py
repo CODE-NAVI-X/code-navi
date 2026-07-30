@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from .learning.database import engine
 from .learning.models import Base
 from .learning.router import router as learning_router
+from .research.router import router as research_router
 
 # ---------------------------------------------------------------------------
 # Lifespan — ensure database tables exist on startup
@@ -46,6 +47,7 @@ app = FastAPI(
 # Mount business-module routers
 # ---------------------------------------------------------------------------
 app.include_router(learning_router)
+app.include_router(research_router)
 
 # ---------------------------------------------------------------------------
 # CORS — allow all origins during PoC; tighten before production.
