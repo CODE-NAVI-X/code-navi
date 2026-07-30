@@ -107,6 +107,34 @@ def test_recommended_options_advance_all_fields_and_return_research_brief(
     assert body["next_question"] is None
 
 
+def test_completed_session_returns_rules_only_research_plan(client: TestClient) -> None:
+    created = create_session(client)
+    session_id = created["session_id"]
+    body = created
+
+    while not body["completed"]:
+        body = submit_turn(
+            client,
+            session_id,
+            {"selected_option": body["next_question"]["options"][0]},
+        )
+
+    plan = body["research_plan"]
+    assert plan["research_title"]["classification"] == "inference"
+    assert plan["research_goal"]["content"].startswith("建议")
+    assert len(plan["candidate_methods_or_baselines"]) >= 1
+    assert len(plan["two_week_mvp_plan"]) == 4
+    assert plan["suggested_datasets_or_metrics"][0]["classification"] == "to_verify"
+    assert "未调用模型、网络或论文来源" in plan["provenance_note"]
+
+
+def test_incomplete_session_has_no_research_plan(client: TestClient) -> None:
+    body = create_session(client)
+
+    assert body["research_brief"] is None
+    assert body["research_plan"] is None
+
+
 def test_missing_session_returns_404(client: TestClient) -> None:
     response = client.get("/api/v1/research/sessions/missing-session")
 

@@ -46,9 +46,15 @@ export function StructuredNotebook({
   }, [sessionId]);
 
   useEffect(() => {
+    let cancelled = false;
     if (open && sessionId) {
-      void loadItems();
+      queueMicrotask(() => {
+        if (!cancelled) void loadItems();
+      });
     }
+    return () => {
+      cancelled = true;
+    };
   }, [open, sessionId, loadItems]);
 
   if (!open) return null;
