@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -19,6 +20,34 @@ class ResearchState(BaseModel):
 
 class ResearchBrief(ResearchState):
     """Completed, structured research brief produced only by rules."""
+
+
+class ResearchPlanEntry(BaseModel):
+    """One plan entry labelled as a suggestion or an item that needs verification."""
+
+    content: str
+    classification: Literal["inference", "to_verify"]
+    basis: str
+
+
+class ResearchPlanRisk(BaseModel):
+    """A stated delivery risk and a corresponding non-factual mitigation suggestion."""
+
+    risk: ResearchPlanEntry
+    mitigation: ResearchPlanEntry
+
+
+class ResearchPlan(BaseModel):
+    """Rules-only plan derived from a completed brief, never from external evidence."""
+
+    research_title: ResearchPlanEntry
+    research_goal: ResearchPlanEntry
+    candidate_methods_or_baselines: list[ResearchPlanEntry]
+    suggested_datasets_or_metrics: list[ResearchPlanEntry]
+    two_week_mvp_plan: list[ResearchPlanEntry]
+    risks_and_mitigations: list[ResearchPlanRisk]
+    suggested_search_keywords: list[str]
+    provenance_note: str
 
 
 class ClarificationQuestion(BaseModel):
@@ -68,4 +97,5 @@ class ResearchSessionResponse(BaseModel):
     next_question: ClarificationQuestion | None
     completed: bool
     research_brief: ResearchBrief | None = None
+    research_plan: ResearchPlan | None = None
     turns: list[ResearchTurn]

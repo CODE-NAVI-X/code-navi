@@ -12,9 +12,10 @@ Code Navi（智教码航）是面向计算机专业学习与项目实践的通�
 - README、可选 `.code-navi/task.json`、显式文件片段和上一条回答的受限上下文装配；
 - 默认离线 Mock Provider、显式启用的 OpenAI Provider 和 Event JSONL；
 - 原助学、助教、助研 `AgentSpec` 的兼容导出。
-- 规则驱动、可恢复的科研澄清 API：在应用层 SQLite 中收集五个固定字段并生成研究简报。
+- 规则驱动、可恢复的科研澄清 API：在应用层 SQLite 中收集五个固定字段，并生成研究简报和明确标注建议/待验证项的研究计划；
+- 学生端科研页面：可恢复会话、选择规则推荐项或自由输入，并展示研究简报与规则研究计划。
 
-科研澄清 API 当前不接入 LLM 个性化追问、联网检索、MCP、研究计划或论文证据卡；这些能力仍按[产品路线图](docs/PRODUCT_ROADMAP.md)分期实现。该 API 不会自动调用现有 `research_coach_agent` 或 Tool。除此以外，真实模型、代码执行、完整 Web 产品、多 Agent、信息检索和远程仓库接入仍未完成。
+科研澄清与研究计划当前不接入 LLM 个性化追问、联网检索、MCP 或论文证据卡；这些能力仍按[产品路线图](docs/PRODUCT_ROADMAP.md)分期实现。规则计划仅根据用户完成的五字段生成，所有内容均标记为“推断建议”或“待验证”，不代表论文事实或已验证结论。该 API 不会自动调用现有 `research_coach_agent` 或 Tool。除此以外，真实模型、代码执行、完整 Web 产品、多 Agent、信息检索和远程仓库接入仍未完成。
 
 ## 快速开始
 
@@ -48,7 +49,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/sessions \
   -d '{"initial_description":"教育场景中的人工智能"}'
 ```
 
-客户端可在每轮提交 `selected_option` 或 `answer` 之一，并使用同一个 `session_id` 恢复会话。五个字段齐全后，响应中的 `research_brief` 才会出现。具体契约见 [科研澄清 Skill](docs/skills/research-clarification/SKILL.md)。
+客户端可在每轮提交 `selected_option` 或 `answer` 之一，并使用同一个 `session_id` 恢复会话。五个字段齐全后，响应中的 `research_brief` 和 `research_plan` 才会出现；`research_plan` 不访问外部资料，每个条目都带有 `inference` 或 `to_verify` 标记。学生端页面读取 `NEXT_PUBLIC_CODE_NAVI_API_URL`（或 `NEXT_PUBLIC_API_BASE`）连接后端，并仅在浏览器 `localStorage` 保存科研会话 ID，不保存密钥。具体契约见 [科研澄清 Skill](docs/skills/research-clarification/SKILL.md)。
 
 ## Docker 部署
 

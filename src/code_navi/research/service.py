@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from .models import ResearchSessionModel
-from .rules import build_brief, is_complete, missing_fields, next_question
+from .rules import build_brief, build_research_plan, is_complete, missing_fields, next_question
 from .schemas import (
     CreateResearchSessionRequest,
     ResearchSessionResponse,
@@ -89,5 +89,6 @@ class ResearchClarificationService:
             next_question=next_question(state),
             completed=is_complete(state),
             research_brief=build_brief(state),
+            research_plan=build_research_plan(state),
             turns=[ResearchTurn(**turn) for turn in session.turns_data],
         )

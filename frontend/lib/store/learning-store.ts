@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 /**
  * Lightweight external-store snapshot for the learning page.
  *
@@ -35,7 +37,5 @@ export function clearLearningSnapshot() {
 export function useLearningStore<T>(
   selector: (snapshot: LearningSnapshot | null) => T,
 ): T {
-  // useSyncExternalStore is from react
-  const { useSyncExternalStore } = require("react");
   return useSyncExternalStore(subscribe, () => selector(getSnapshot()), () => selector(null));
 }

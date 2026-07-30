@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { setFlowPayload } from "@/lib/store/flow-store";
 import { Target, Terminal, GraduationCap, X } from "lucide-react";
@@ -54,7 +54,7 @@ export function DownstreamGoCard({
     router.push(
       `/student/research?knowledge_id=${encodeURIComponent(knowledgePointId)}&session_id=${encodeURIComponent(sessionId)}`
     );
-  }, [knowledgePoint, knowledgePointId, sessionId, setFlowPayload, router]);
+  }, [knowledgePoint, knowledgePointId, sessionId, router]);
 
   return (
     <div className="fixed bottom-6 right-6 z-50 w-84 rounded-2xl border border-slate-200/80 bg-white/95 p-4.5 shadow-2xl backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/95 animate-in slide-in-from-bottom-5 duration-300">
