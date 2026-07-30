@@ -96,6 +96,8 @@ class ResearchSessionResponse(BaseModel):
     missing_fields: list[str]
     next_question: ClarificationQuestion | None
     completed: bool
+    reply: str
+    generation_mode: Literal["rules", "llm", "rules_fallback"]
     research_brief: ResearchBrief | None = None
     research_plan: ResearchPlan | None = None
     turns: list[ResearchTurn]

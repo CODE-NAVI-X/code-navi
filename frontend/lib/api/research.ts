@@ -42,7 +42,7 @@ export interface ResearchPlan {
 export interface ResearchTurn {
   field: keyof ResearchState;
   value: string;
-  input_mode: "initial_description" | "free_text" | "recommended_option";
+  input_mode: "initial_description" | "free_text" | "recommended_option" | "llm_suggested";
   recorded_at: string;
 }
 
@@ -52,6 +52,8 @@ export interface ResearchSessionResponse {
   missing_fields: (keyof ResearchState)[];
   next_question: ClarificationQuestion | null;
   completed: boolean;
+  reply: string;
+  generation_mode: "rules" | "llm" | "rules_fallback";
   research_brief: ResearchState | null;
   research_plan: ResearchPlan | null;
   turns: ResearchTurn[];

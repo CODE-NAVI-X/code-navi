@@ -80,6 +80,22 @@ def next_question(state: ResearchState) -> ClarificationQuestion | None:
     )
 
 
+def is_recommendation_request(value: str) -> bool:
+    """Recognize uncertainty requests that must not be persisted as field values."""
+    normalized = value.replace(" ", "").lower()
+    return any(
+        marker in normalized
+        for marker in ("不知道", "不清楚", "帮我推荐", "有什么推荐", "推荐一下")
+    )
+
+
+def rules_reply(question: ClarificationQuestion | None) -> str:
+    """Return a deterministic reply when no validated model guidance is available."""
+    if question is None:
+        return "五项科研需求已经完整记录，已生成结构化研究简报和规则研究计划。"
+    return f"请继续补充“{question.label}”，也可以从下面三个规则推荐项中选择。"
+
+
 def build_brief(state: ResearchState) -> ResearchBrief | None:
     """Return a brief only after every required rule field is available."""
     if not is_complete(state):

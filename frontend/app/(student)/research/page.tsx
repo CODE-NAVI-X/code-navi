@@ -135,6 +135,12 @@ function ResearchContent() {
 
   const completed = session?.completed ?? false;
   const question = session?.next_question;
+  const guidanceMessage =
+    session?.generation_mode === "llm"
+      ? "当前为模型个性化建议：字段顺序、状态保存与完成判定仍由规则控制。"
+      : session?.generation_mode === "rules_fallback"
+        ? "模型建议暂不可用，已安全降级为规则生成：不调用联网检索，也不会把建议当作论文事实。"
+        : "当前为规则生成：未使用模型个性化建议，不联网检索，也不会把建议当作论文事实。";
 
   return (
     <div className="max-w-3xl w-full bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md space-y-6">
@@ -169,7 +175,7 @@ function ResearchContent() {
       <div className="rounded-2xl border border-sky-900/60 bg-gradient-to-r from-sky-950/30 to-zinc-900 p-4 text-xs text-sky-200">
         <div className="flex items-center gap-2 font-semibold">
           <FlaskConical className="h-4 w-4" />
-          当前为规则模式：不调用 LLM、不联网检索，也不会把建议当作论文事实。
+          {guidanceMessage}
         </div>
       </div>
 
@@ -229,6 +235,7 @@ function ResearchContent() {
             <section className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-5">
               <div>
                 <p className="text-[11px] font-semibold text-sky-300">当前字段：{question.label}</p>
+                <p className="mt-2 text-xs leading-relaxed text-zinc-300">{session.reply}</p>
                 <h2 className="mt-1 text-sm font-bold text-zinc-100">{question.question}</h2>
               </div>
 
