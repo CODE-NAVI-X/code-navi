@@ -194,10 +194,10 @@ function ResearchContent() {
   const question = session?.next_question;
   const guidanceMessage =
     session?.generation_mode === "llm"
-      ? "当前为模型个性化建议：字段顺序、状态保存与完成判定仍由规则控制。"
+      ? "当前为模型个性化建议：模型只影响个性化追问；字段顺序、状态保存与完成判定仍由规则控制。不会自动联网检索，受限学术检索仅在你主动点击后执行，也不会把建议当作论文事实。"
       : session?.generation_mode === "rules_fallback"
-        ? "模型建议暂不可用，已安全降级为规则生成：不调用联网检索，也不会把建议当作论文事实。"
-        : "当前为规则生成：未使用模型个性化建议，不联网检索，也不会把建议当作论文事实。";
+        ? "模型建议暂不可用，已安全降级为规则生成：不会自动联网检索，受限学术检索仅在你主动点击后执行，也不会把建议当作论文事实。"
+        : "当前为规则生成：未使用模型个性化建议，不会自动联网检索；受限学术检索仅在你主动点击后执行，也不会把建议当作论文事实。";
 
   return (
     <div className="max-w-3xl w-full bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md space-y-6">
