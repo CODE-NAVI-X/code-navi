@@ -6,14 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from kernel.runtime import AgentRuntime, RuntimeRequest, RuntimeResult
-
 from code_navi.assistant import code_learning_agent
 from code_navi.context import (
     ContextBuilder,
     ContextSlice,
     ConversationTurn,
 )
+from kernel.runtime import AgentRuntime, RuntimeRequest, RuntimeResult
 
 
 @dataclass(frozen=True, slots=True)

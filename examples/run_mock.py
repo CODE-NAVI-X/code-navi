@@ -1,14 +1,13 @@
 """Run the three built-in agents without calling an external model."""
 
-from kernel.core import ContentBlock, Message, ProviderResult
-from kernel.providers import MockProvider
-from kernel.runtime import AgentRuntime, RuntimeRequest
-
 from code_navi import (
     research_coach_agent,
     student_tutor_agent,
     teacher_assistant_agent,
 )
+from kernel.core import ContentBlock, Message, ProviderResult
+from kernel.providers import MockProvider
+from kernel.runtime import AgentRuntime, RuntimeRequest
 
 
 def main() -> None:

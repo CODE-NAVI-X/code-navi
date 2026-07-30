@@ -1,13 +1,12 @@
-from kernel.core import ContentBlock, Message, ProviderResult, RunStatus
-from kernel.providers import MockProvider
-from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
-
 from code_navi import (
     code_learning_agent,
     research_coach_agent,
     student_tutor_agent,
     teacher_assistant_agent,
 )
+from kernel.core import ContentBlock, Message, ProviderResult, RunStatus
+from kernel.providers import MockProvider
+from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
 
 def test_domain_agent_specs_are_valid_markdown_agents() -> None:
