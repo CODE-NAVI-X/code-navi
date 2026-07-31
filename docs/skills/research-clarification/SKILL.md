@@ -1,7 +1,7 @@
 # 规则控流程的科研澄清 Skill
 
 - 名称：`research_clarification`
-- 版本：`0.3.0`
+- 版本：`0.4.0`
 - 用途：通过可恢复的规则会话收集科研需求，并在五个字段完整后生成结构化研究简报和规则研究计划。可选模型仅用于生成更贴合上下文的澄清文案。
 
 ## 输入与输出
@@ -23,14 +23,14 @@
 ## 权限、信息源与持久化
 
 - 所需 Kernel 权限：无。本 Skill 作为应用层 Workflow API，不会自动调用 AgentRuntime 或 ToolRegistry。
-- 可访问的信息源：规则层仅访问本次 API 请求和本应用 SQLite 会话记录。可选文案生成复用应用已有 OpenAI Provider 配置，只在 `CODE_NAVI_PROVIDER=openai`、模型名和服务器环境变量 `OPENAI_API_KEY` 都已配置时向该 Provider 发送当前规则状态与本轮输入；不保存 Key，也不访问论文库、MCP 或文件系统。学生端仅在浏览器本地保存 `session_id`。
+- 可访问的信息源：规则层仅访问本次 API 请求和本应用 SQLite 会话记录。可选文案生成支持现有 OpenAI Provider，或在 `CODE_NAVI_PROVIDER=deepseek` 时使用 DeepSeek 的 OpenAI-compatible `chat/completions` 接口；DeepSeek 复用 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）和 `DEEPSEEK_MODEL`（默认 `deepseek-v4-flash`）环境变量。该设置使科研澄清使用 DeepSeek；未显式选择 Provider 的通用 CLI 仍保持离线 Mock。既有学习模块会在其学习解释入口独立读取同名环境变量，本 Skill 不修改该既有行为。两种科研文案 Provider 都只发送当前规则状态与本轮输入，不保存 Key，也不访问论文库、MCP 或文件系统。学生端仅在浏览器本地保存 `session_id`。
 - 写操作：仅写入应用层 SQLite 的 `research_sessions` 表，以保存会话状态、用户回合历史，以及最后一轮已校验的展示文案或降级状态；不保存 Key、原始 Provider 异常或论文内容，不写入 Kernel Event，也不写入用户项目。
 
 ## 失败与降级
 
 - 不存在的 `session_id` 返回 HTTP 404；
 - 同时提供或同时缺少 `answer` 与 `selected_option` 返回 HTTP 422；
-- 无 Key、未选择 OpenAI Provider、超过 8 秒的调用、网络/Provider 失败、无文本响应或 JSON/字段校验失败时，均返回固定规则问题和三个选项，不中断或丢失会话。页面明确显示规则生成或规则降级。
+- 无 Key、未选择 OpenAI/DeepSeek Provider、超过 8 秒的调用、网络/Provider 失败、无文本响应或 JSON/字段校验失败时，均返回固定规则问题和三个选项，不中断或丢失会话。页面明确显示规则生成或规则降级；模型绝不自动触发学术检索，检索仍必须由用户主动请求。
 - 8 秒限制保证本 API 响应不再等待上游调用；由于现有 Provider 契约没有暴露可取消请求句柄，超时后的底层网络请求可能由守护线程自行结束，其结果会被丢弃且绝不会写入会话。高并发限流与 Provider 级取消属于后续 Provider/宿主层工作，不在本 Skill 中绕过 Kernel 实现。
 - 模型不能决定字段名、字段顺序、缺失判定或完成条件；这些均由 `rules.py` 控制。模型输出含多余字段、非字符串内容、空值、不是三项/重复选项，或在非推荐请求中提供 `suggested_value` 时一律降级。
 - 用户表达“不知道/帮我推荐”时，只有校验通过的 `suggested_value` 可以作为当前字段的 `llm_suggested` 回合写入；无有效建议时该字段保持待填写，不能把“不知道”保存为研究数据。
