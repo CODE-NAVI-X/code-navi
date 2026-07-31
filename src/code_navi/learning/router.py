@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from .database import get_db
+from code_navi.db import get_db
+
 from .models import NotebookItemModel
 from .schemas import ExplainRequest, ExplainResponse
 from .services import QueryOrchestrator

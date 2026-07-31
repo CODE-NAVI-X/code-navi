@@ -2,9 +2,13 @@
 
 - ``PromptDecontaminationEngine`` isolates academic knowledge points from
   narrative / anecdotal contamination.
-- ``DeepSeekLLM`` wraps the DeepSeek V4 Flash API (OpenAI-compatible).
 - ``QueryOrchestrator`` produces an explanation with citations and persists the
   result in the student notebook.
+
+Every model call goes through ``code_navi.providers.create_provider`` and the
+kernel's ``AgentRuntime``.  The module never instantiates a vendor SDK client
+itself, so each explanation produces an auditable Event log and runs under the
+kernel's deny-by-default permission layer with no tools granted.
 """
 
 from __future__ import annotations
@@ -13,10 +17,14 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+from uuid import uuid4
 
 from dotenv import load_dotenv
-from openai import OpenAI
 from sqlalchemy.orm import Session
+
+from code_navi.providers import ProviderSettings, create_provider
+from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
 from .models import NotebookItemModel
 from .schemas import Citation, ExplainRequest, ExplainResponse
@@ -34,6 +42,8 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 _DEFAULT_TIMEOUT = 30.0  # seconds
+_DEFAULT_MAX_TOKENS = 1024
+_DEFAULT_TEMPERATURE = 0.3
 
 # ---------------------------------------------------------------------------
 # Prompt-decontamination engine
@@ -87,63 +97,53 @@ class PromptDecontaminationEngine:
 
 
 # ---------------------------------------------------------------------------
-# DeepSeek LLM wrapper
+# Agent declaration
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class DeepSeekLLM:
-    """Thin wrapper around the DeepSeek V4 Flash API (OpenAI-compatible)."""
+def build_knowledge_explainer_agent(passphrase: str = _DECONTAMINATION_PASSPHRASE) -> AgentSpec:
+    """Declare the knowledge-point explainer run by the kernel runtime.
 
-    client: OpenAI = field(init=False)
+    ``tool_names`` stays empty: explanation is a pure model call, so the run
+    gets no tool permissions at all.
+    """
+    return AgentSpec(
+        name="knowledge_explainer",
+        description="Explains one academic knowledge point as validated JSON with citations.",
+        system_prompt=_SYSTEM_TEMPLATE.format(passphrase=passphrase),
+        tool_names=(),
+        output_format="json",
+    )
 
-    def __post_init__(self) -> None:
-        if not DEEPSEEK_API_KEY:
-            raise RuntimeError(
-                "DEEPSEEK_API_KEY is not set.  Create a .env file or export the variable."
-            )
-        self.client = OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=_DEFAULT_TIMEOUT,
-        )
 
-    def chat(self, system_prompt: str, user_message: str) -> str:
-        """Send a single-turn request and return the raw assistant text."""
-        logger.debug("→ DeepSeek request: %s", user_message[:120])
-        response = self.client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+knowledge_explainer_agent = build_knowledge_explainer_agent()
+
+
+# ---------------------------------------------------------------------------
+# Offline fallback payload
+# ---------------------------------------------------------------------------
+
+
+def _offline_payload(user_message: str) -> str:
+    """Return the documented offline response shape without a network call."""
+    return json.dumps(
+        {
+            "summary": user_message,
+            "detail": "离线 PoC 回退响应；未调用外部模型。",
+            "citations": [
+                {
+                    "source_title": "PoC stub citation",
+                    "uri": None,
+                    "snippet": "Deterministic offline learning-module fallback.",
+                }
             ],
-            temperature=0.3,
-            max_tokens=1024,
-        )
-        content = response.choices[0].message.content or ""
-        logger.debug("← DeepSeek response: %s", content[:120])
-        return content
+        }
+    )
 
 
-@dataclass
-class OfflineLearningLLM:
-    """Deterministic local fallback for the learning-module PoC."""
-
-    def chat(self, _system_prompt: str, user_message: str) -> str:
-        """Return the documented offline response shape without a network call."""
-        return json.dumps(
-            {
-                "summary": user_message,
-                "detail": "离线 PoC 回退响应；未调用外部模型。",
-                "citations": [
-                    {
-                        "source_title": "PoC stub citation",
-                        "uri": None,
-                        "snippet": "Deterministic offline learning-module fallback.",
-                    }
-                ],
-            }
-        )
+def _events_dir() -> Path:
+    """Directory where per-run Event JSONL logs are written."""
+    return Path(os.getenv("CODE_NAVI_EVENTS_DIR") or Path("var") / "runs")
 
 
 # ---------------------------------------------------------------------------
@@ -153,14 +153,31 @@ class OfflineLearningLLM:
 
 @dataclass
 class QueryOrchestrator:
-    """Orchestrates: decontaminate → explain with citations → archive to notebook."""
+    """Orchestrates: decontaminate → explain via kernel runtime → archive."""
 
     decontamination_engine: PromptDecontaminationEngine = field(
         default_factory=PromptDecontaminationEngine,
     )
 
-    def _build_system_prompt(self) -> str:
-        return _SYSTEM_TEMPLATE.format(passphrase=self.decontamination_engine.passphrase)
+    def _provider_settings(self, offline_response: str) -> ProviderSettings:
+        """Pick the provider without ever constructing a vendor client here.
+
+        Falls back to the offline mock provider whenever no DeepSeek key is
+        configured, so the PoC stays runnable with zero credentials.
+        """
+        name = (os.getenv("CODE_NAVI_PROVIDER") or "").strip().lower()
+        if not name:
+            name = "deepseek" if DEEPSEEK_API_KEY else "mock"
+        if name == "mock":
+            return ProviderSettings("mock", None, offline_response)
+        return ProviderSettings(
+            name,
+            os.getenv("CODE_NAVI_MODEL") or (DEEPSEEK_MODEL if name == "deepseek" else None),
+            offline_response,
+            max_tokens=_DEFAULT_MAX_TOKENS,
+            temperature=_DEFAULT_TEMPERATURE,
+            timeout=_DEFAULT_TIMEOUT,
+        )
 
     def _parse_response(self, raw: str, knowledge_point: str) -> ExplainResponse:
         """Extract JSON from the LLM output, falling back gracefully."""
@@ -200,16 +217,26 @@ class QueryOrchestrator:
     def explain(self, request: ExplainRequest, db: Session) -> ExplainResponse:
         """Run the full explain pipeline and persist the result."""
 
-        # 1. Compose prompts (decontamination passphrase baked into system prompt)
-        system_prompt = self._build_system_prompt()
+        # 1. Compose the user turn (decontamination guard baked into the prompt)
+        persona = request.persona or "academic"
         user_message = _USER_TEMPLATE.format(
             knowledge_point=self.decontamination_engine.decontaminate(request.knowledge_point),
-            persona=request.persona or "academic",
+            persona=persona,
         )
 
-        # 2. Use the configured provider when available; otherwise stay offline.
-        llm = DeepSeekLLM() if DEEPSEEK_API_KEY else OfflineLearningLLM()
-        raw = llm.chat(system_prompt, user_message)
+        # 2. One audited kernel run — no tools granted, Events persisted to disk.
+        agent = build_knowledge_explainer_agent(self.decontamination_engine.passphrase)
+        provider = create_provider(self._provider_settings(_offline_payload(user_message)))
+        runtime = AgentRuntime(provider, session_dir=_events_dir())
+        result = runtime.run(
+            agent,
+            RuntimeRequest(
+                user_message,
+                session_id=f"learning-{uuid4()}",
+                metadata={"interface": "api", "persona": persona},
+            ),
+        )
+        raw = result.output_text or ""
 
         # 3. Parse structured response
         response = self._parse_response(raw, request.knowledge_point)
@@ -228,9 +255,19 @@ class QueryOrchestrator:
                 "citations": [c.model_dump() for c in response.citations],
                 "persona": request.persona,
                 "detail": response.detail,
+                "run_id": result.run_id,
+                "event_log_path": result.event_log_path,
             },
         )
         db.add(notebook_entry)
         db.commit()
 
         return response
+
+
+__all__ = [
+    "PromptDecontaminationEngine",
+    "QueryOrchestrator",
+    "build_knowledge_explainer_agent",
+    "knowledge_explainer_agent",
+]

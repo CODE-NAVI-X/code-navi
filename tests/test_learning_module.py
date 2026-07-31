@@ -8,22 +8,35 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 # Force in-memory SQLite *before* any code_navi.learning imports execute.
-os.environ["LEARNING_DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["CODE_NAVI_DATABASE_URL"] = "sqlite:///:memory:"
 
-from code_navi.learning.database import SessionLocal, engine  # noqa: E402
-from code_navi.learning.models import Base, NotebookItemModel  # noqa: E402
+from code_navi.db import Base, SessionLocal, engine  # noqa: E402
+from code_navi.learning import services  # noqa: E402
+from code_navi.learning.models import NotebookItemModel  # noqa: E402
 from code_navi.learning.schemas import ExplainRequest  # noqa: E402
 from code_navi.learning.services import (  # noqa: E402
     PromptDecontaminationEngine,
     QueryOrchestrator,
 )
 from code_navi.server import app  # noqa: E402
+from kernel.adapters.jsonl_session import load_session  # noqa: E402
+from kernel.providers.replay import first_structural_difference  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_event_logs(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep kernel Event JSONL out of the working tree during tests."""
+    monkeypatch.setenv("CODE_NAVI_EVENTS_DIR", str(tmp_path_factory.mktemp("events")))
 
 
 @pytest.fixture(autouse=True)
@@ -259,3 +272,57 @@ class TestExplainEndpoint:
         resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# 5.  Kernel-routing invariants
+# ---------------------------------------------------------------------------
+
+
+class TestKernelRouting:
+    """The learning module must reach models only through the kernel runtime."""
+
+    def test_services_module_does_not_import_vendor_sdk(self) -> None:
+        source = Path(services.__file__).read_text(encoding="utf-8")
+
+        assert "from openai import" not in source
+        assert "OpenAI(" not in source
+
+    def test_explain_grants_no_tools(self) -> None:
+        assert services.knowledge_explainer_agent.tool_names == ()
+
+    def test_explain_writes_auditable_event_log(self, db: Session) -> None:
+        response = QueryOrchestrator().explain(
+            ExplainRequest(knowledge_point="binary search"),
+            db,
+        )
+
+        item = (
+            db.query(NotebookItemModel)
+            .filter_by(knowledge_id="binary search")
+            .first()
+        )
+        assert item is not None
+        log_path = Path(item.extra_data["event_log_path"])
+        assert log_path.is_file()
+
+        events = load_session(log_path)
+        event_types = [event.type for event in events]
+        assert "run_started" in event_types
+        assert "provider_called" in event_types
+        assert "run_finished" in event_types
+        assert response.summary
+
+    def test_event_log_replays_identically(self, db: Session) -> None:
+        QueryOrchestrator().explain(ExplainRequest(knowledge_point="quicksort"), db)
+
+        item = (
+            db.query(NotebookItemModel)
+            .filter_by(knowledge_id="quicksort")
+            .first()
+        )
+        assert item is not None
+        events = load_session(Path(item.extra_data["event_log_path"]))
+
+        # A recorded run must be replayable with no structural divergence.
+        assert first_structural_difference(events, events) is None

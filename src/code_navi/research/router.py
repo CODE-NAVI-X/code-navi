@@ -7,7 +7,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from code_navi.learning.database import get_db
+from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
 from .conversation_schemas import (

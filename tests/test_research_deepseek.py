@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 os.environ["LEARNING_DATABASE_URL"] = "sqlite:///:memory:"
 
-from code_navi.learning.database import engine  # noqa: E402
+from code_navi.db import engine  # noqa: E402
 from code_navi.learning.models import Base  # noqa: E402
 from code_navi.providers import (  # noqa: E402
     ProviderConfigurationError,

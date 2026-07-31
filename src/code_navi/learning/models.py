@@ -12,9 +12,8 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, String, Text
-from sqlalchemy.orm import declarative_base
 
-Base = declarative_base()
+from code_navi.db import Base
 
 
 class NotebookItemModel(Base):

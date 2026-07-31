@@ -8,10 +8,9 @@ from collections.abc import Generator
 import pytest
 from fastapi.testclient import TestClient
 
-os.environ["LEARNING_DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["CODE_NAVI_DATABASE_URL"] = "sqlite:///:memory:"
 
-from code_navi.learning.database import engine  # noqa: E402
-from code_navi.learning.models import Base  # noqa: E402
+from code_navi.db import Base, engine  # noqa: E402
 from code_navi.server import app  # noqa: E402
 
 

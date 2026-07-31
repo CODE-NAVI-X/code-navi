@@ -10,10 +10,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .learning.database import engine
-from .learning.models import Base
+from .db import DATABASE_URL, Base, engine
+from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
 from .provider_config import load_local_provider_config
+from .research import models as research_models  # noqa: F401  (register tables)
 from .research.router import router as research_router
 
 
@@ -34,7 +35,6 @@ async def lifespan(_app: FastAPI):
     """Create database directory and tables on startup."""
     load_local_provider_config()
     # Ensure parent directory exists for SQLite file-based storage
-    from .learning.database import DATABASE_URL
     if DATABASE_URL.startswith("sqlite:///"):
         db_path = DATABASE_URL.replace("sqlite:///", "", 1)
         if db_path and not db_path.startswith("/"):
