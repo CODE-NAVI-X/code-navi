@@ -293,6 +293,14 @@ def _create_service(args: argparse.Namespace) -> QuestionService:
         model=args.model,
         mock_response=args.mock_response,
     )
+    if args.provider is None and settings.name == "deepseek":
+        # DeepSeek is currently a research-clarification-only provider.  Keep
+        # the CLI's documented offline default stable when both surfaces share
+        # a server environment.
+        settings = ProviderSettings.resolve(
+            name="mock",
+            mock_response=args.mock_response,
+        )
     return QuestionService(
         create_provider(settings),
         builder,

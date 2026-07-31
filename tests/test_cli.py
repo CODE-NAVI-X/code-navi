@@ -68,6 +68,29 @@ def test_one_shot_json_output_is_machine_readable(tmp_path: Path, capsys: object
     assert payload["output"] == "answer"
 
 
+def test_cli_ignores_research_only_deepseek_environment(
+    tmp_path: Path, capsys: object, monkeypatch: object
+) -> None:
+    root = make_project(tmp_path)
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")  # type: ignore[attr-defined]
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")  # type: ignore[attr-defined]
+
+    exit_code = main(
+        [
+            "ask",
+            "解释当前项目",
+            "--project",
+            str(root),
+            "--mock-response",
+            "CLI 仍使用离线模式",
+        ]
+    )
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert exit_code == EXIT_OK
+    assert captured.out == "CLI 仍使用离线模式\n"
+
+
 def test_interactive_shell_supports_quick_questions_and_focus_branch(
     tmp_path: Path,
 ) -> None:
