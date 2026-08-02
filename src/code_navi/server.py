@@ -14,8 +14,12 @@ from fastapi.responses import JSONResponse
 from .db import DATABASE_URL, Base, engine
 from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
+<<<<<<< HEAD
 from .provider_config import load_local_provider_config
 from .research import models as research_models  # noqa: F401  (register tables)
+=======
+from .online_compiler.router import router as compiler_router
+>>>>>>> 1306496 (feat(compiler): add online Python practice module)
 from .research.router import router as research_router
 
 logger = logging.getLogger(__name__)
@@ -32,7 +36,7 @@ def _cors_origins() -> list[str]:
 CORS_ORIGINS = _cors_origins()
 
 # ---------------------------------------------------------------------------
-# Lifespan — ensure database tables exist on startup
+# Lifespan 閳?ensure database tables exist on startup
 # ---------------------------------------------------------------------------
 
 
@@ -64,9 +68,10 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 app.include_router(learning_router)
 app.include_router(research_router)
+app.include_router(compiler_router)
 
 # ---------------------------------------------------------------------------
-# CORS — explicit origin allowlist.
+# CORS 閳?explicit origin allowlist.
 #
 # A wildcard cannot be combined with credentials: browsers reject
 # ``Access-Control-Allow-Origin: *`` on credentialed requests, so the previous
@@ -85,7 +90,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Global exception handler — ensures all error responses carry CORS headers
+# Global exception handler 閳?ensures all error responses carry CORS headers
 # ---------------------------------------------------------------------------
 
 
@@ -106,5 +111,5 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health", status_code=200)
 async def health_check() -> dict[str, str]:
-    """Basic liveness probe — returns 200 when the server is running."""
+    """Basic liveness probe 閳?returns 200 when the server is running."""
     return {"status": "ok"}

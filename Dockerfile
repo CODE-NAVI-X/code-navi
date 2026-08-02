@@ -9,7 +9,7 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src/ src/
 
-RUN /opt/venv/bin/pip install --no-compile ".[online]"
+RUN /opt/venv/bin/pip install --no-compile ".[server,online]"
 
 
 FROM python:3.11-slim AS runtime
