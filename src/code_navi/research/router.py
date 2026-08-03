@@ -66,8 +66,27 @@ def configure_provider(
     request: Request,
 ) -> ProviderStatusResponse:
     """Save a provider secret only when the caller connects from this machine."""
+    _require_local_browser_provider_access(request)
+    try:
+        return _provider_connection_service.configure(configuration)
+    except ProviderConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+
+@router.post("/provider/test", response_model=ProviderConnectionTestResponse)
+def test_provider_connection(request: Request) -> ProviderConnectionTestResponse:
+    """Run one local-only, no-tool structured model connection check."""
+    _require_local_browser_provider_access(request)
+    return _provider_connection_service.test()
+
+
+def _require_local_browser_provider_access(request: Request) -> None:
+    """Guard browser key operations behind explicit local-development opt-in."""
     browser_configuration_enabled = os.getenv(
-        "CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true"
+        "CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "false"
     ).lower() in {"1", "true", "yes", "on"}
     if not browser_configuration_enabled:
         raise HTTPException(
@@ -80,19 +99,6 @@ def configure_provider(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="网页配置 API Key 仅允许本机访问。",
         )
-    try:
-        return _provider_connection_service.configure(configuration)
-    except ProviderConfigurationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(error),
-        ) from error
-
-
-@router.post("/provider/test", response_model=ProviderConnectionTestResponse)
-def test_provider_connection() -> ProviderConnectionTestResponse:
-    """Explicitly run one no-tool structured model connection check."""
-    return _provider_connection_service.test()
 
 
 @router.post(

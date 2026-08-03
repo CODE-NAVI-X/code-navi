@@ -62,6 +62,7 @@ def test_provider_status_distinguishes_rules_from_configured_model(
 def test_provider_status_rejects_truncated_key_without_calling_it_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true")
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "xx")
 
@@ -86,9 +87,53 @@ class FakeConnectionGenerator:
         return self.outcome
 
 
+def test_browser_provider_mutations_are_disabled_by_default() -> None:
+    """A server must opt in before browser requests can persist or use a key."""
+    with TestClient(app) as client:
+        configure_response = client.put(
+            "/api/v1/research/provider/configuration",
+            json={
+                "provider": "deepseek",
+                "api_key": "secret-browser-test-value",
+                "model": "deepseek-v4-flash",
+                "base_url": "https://api.deepseek.com",
+            },
+        )
+        test_response = client.post("/api/v1/research/provider/test")
+
+    assert configure_response.status_code == 403
+    assert test_response.status_code == 403
+    assert "已禁用" in configure_response.json()["detail"]
+    assert "已禁用" in test_response.json()["detail"]
+
+
+def test_browser_provider_mutations_reject_non_loopback_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true")
+
+    with TestClient(app, client=("203.0.113.10", 50000)) as client:
+        configure_response = client.put(
+            "/api/v1/research/provider/configuration",
+            json={
+                "provider": "deepseek",
+                "api_key": "secret-browser-test-value",
+                "model": "deepseek-v4-flash",
+                "base_url": "https://api.deepseek.com",
+            },
+        )
+        test_response = client.post("/api/v1/research/provider/test")
+
+    assert configure_response.status_code == 403
+    assert test_response.status_code == 403
+    assert "仅允许本机访问" in configure_response.json()["detail"]
+    assert "仅允许本机访问" in test_response.json()["detail"]
+
+
 def test_connection_test_returns_audit_id_without_leaking_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true")
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-test-value")
     fake = FakeConnectionGenerator(
@@ -111,7 +156,9 @@ def test_connection_test_returns_audit_id_without_leaking_provider_error(
 
 def test_local_ui_can_save_and_immediately_activate_provider_without_echoing_key(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true")
     secret = "secret-browser-test-value"
 
     with TestClient(app) as client:
@@ -138,7 +185,9 @@ def test_local_ui_can_save_and_immediately_activate_provider_without_echoing_key
 
 def test_ui_configuration_rejects_incomplete_keys_without_writing_file(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true")
     with TestClient(app) as client:
         response = client.put(
             "/api/v1/research/provider/configuration",

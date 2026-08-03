@@ -113,7 +113,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/sessions \
 
 新对话流程使用 DeepSeek 生成经过严格 JSON 校验的画像 patch、自然回复、候选问题和下一问；画像写入、成熟度、会话恢复与搜索权限仍由应用规则控制。使用其 OpenAI-compatible `chat/completions` 接口前，在**运行服务的环境**中设置：
 
-本地演示推荐在 `/research` 页面顶部打开“科研模型连接”，点击“输入 API Key”，填写 Provider、Key、模型和 Base URL 后选择“保存并测试连接”。该入口只接受来自本机回环地址的请求；Key 只随本机请求发送一次，服务端原子写入当前项目 Git 已忽略的 `.code-navi/provider.env`，随后立即在当前进程生效。响应不会回显 Key，页面不会写入 `localStorage`，保存成功后密码框立即清空。
+本地演示如需在 `/research` 页面配置模型，必须先在运行服务的本机环境显式设置 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=true`；默认关闭。随后可在页面顶部打开“科研模型连接”，点击“输入 API Key”，填写 Provider、Key、模型和 Base URL 后选择“保存并测试连接”。保存和测试接口都只接受来自本机回环地址的请求；Key 只随本机请求发送一次，服务端原子写入当前项目 Git 已忽略的 `.code-navi/provider.env`，随后立即在当前进程生效。响应不会回显 Key，页面不会写入 `localStorage`，保存成功后密码框立即清空。
 
 不希望 Key 经过浏览器时，仍可使用隐藏输入命令：
 
@@ -136,7 +136,7 @@ export DEEPSEEK_MODEL=deepseek-v4-flash               # 可省略
 uvicorn code_navi.server:app --reload
 ```
 
-Windows PowerShell 可用 `$env:CODE_NAVI_PROVIDER = "deepseek"` 等对应语法。未显式选择 Provider 时科研对话保持基础规则模式，通用 CLI 仍保持离线 Mock。Key 只能持久化在服务端环境或项目内 Git 已忽略的 `.code-navi/provider.env`，不能写入仓库、SQLite、localStorage、日志或 Event metadata。本机 UI 配置会把 Key 放入一次 HTTPS/localhost 请求体，因此只用于单机开发；公开部署必须设置 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`，或替换为带身份认证、TLS 和专用密钥管理的管理端。无 Key、10 秒超时、网络/Provider 失败或结构化输出不合法时，页面明确显示基础规则或规则接管，科研会话不会中断。DeepSeek 不会自动触发学术检索。
+Windows PowerShell 可用 `$env:CODE_NAVI_PROVIDER = "deepseek"` 等对应语法。未显式选择 Provider 时科研对话保持基础规则模式，通用 CLI 仍保持离线 Mock。Key 只能持久化在服务端环境或项目内 Git 已忽略的 `.code-navi/provider.env`，不能写入仓库、SQLite、localStorage、日志或 Event metadata。网页配置默认关闭，且即使显式开启也只用于单机开发；公开部署应保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`，并使用服务端环境变量或带身份认证、TLS 和专用密钥管理的管理端。无 Key、10 秒超时、网络/Provider 失败或结构化输出不合法时，页面明确显示基础规则或规则接管，科研会话不会中断。DeepSeek 不会自动触发学术检索。
 
 ### 显式受限学术检索
 
