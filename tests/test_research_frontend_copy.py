@@ -7,6 +7,7 @@ WORKSPACE = Path("frontend/components/research/ResearchConversation.tsx")
 PROFILE = Path("frontend/components/research/ResearchProfilePanel.tsx")
 PROVIDER = Path("frontend/components/research/ProviderStatusCard.tsx")
 PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
+MINDMAP = Path("frontend/components/research/ResearchMindMapPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -15,10 +16,7 @@ def test_research_page_uses_conversation_api_instead_of_fixed_sessions() -> None
     api_source = API.read_text(encoding="utf-8")
 
     assert '"/api/v1/research/conversations"' in api_source
-    message_path = (
-        "/api/v1/research/conversations/"
-        "${encodeURIComponent(conversationId)}/messages"
-    )
+    message_path = "/api/v1/research/conversations/${encodeURIComponent(conversationId)}/messages"
     assert message_path in api_source
     assert "research-conversation.v1" in api_source
     assert "/api/v1/research/sessions" not in api_source
@@ -43,6 +41,8 @@ def test_research_profile_explains_search_boundary() -> None:
     profile_source = PROFILE.read_text(encoding="utf-8")
 
     assert "当前对话不会自动联网检索" in profile_source
+    assert "只有你明确触发" in profile_source
+    assert "下一阶段接入" not in profile_source
     assert "科研画像" in profile_source
     assert "候选研究问题" in profile_source
 
@@ -89,3 +89,15 @@ def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:
     assert "待确认或待验证" in plan_source
     assert "<PlanEntry entry={item.risk} />" in plan_source
     assert "<PlanEntry entry={item.mitigation} />" in plan_source
+
+
+def test_research_workspace_exposes_a_traceable_mind_map_without_a_graph_runtime() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    mindmap_source = MINDMAP.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "ResearchMindMapPanel" in workspace_source
+    assert "research_mindmap" in workspace_source
+    assert "research-mindmap.v1" in api_source
+    assert "不联网" in mindmap_source
+    assert "导出 SVG" in mindmap_source

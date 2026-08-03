@@ -13,8 +13,10 @@ from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
 )
+from .conversation_mindmap import build_research_mindmap
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
+    ConversationEvidenceBundle,
     CreateResearchConversationRequest,
     ResearchConversationDecision,
     ResearchConversationMessage,
@@ -24,7 +26,7 @@ from .conversation_schemas import (
     ResearchReadiness,
     SendResearchMessageRequest,
 )
-from .models import ResearchConversationModel
+from .models import ResearchConversationModel, ResearchEvidenceBundleModel
 
 
 class ConversationNotFoundError(LookupError):
@@ -51,9 +53,7 @@ class ResearchConversationService:
         self,
         decision_generator: ConversationDecisionGenerator | None = None,
     ) -> None:
-        self.decision_generator = (
-            decision_generator or RuntimeConversationDecisionGenerator()
-        )
+        self.decision_generator = decision_generator or RuntimeConversationDecisionGenerator()
 
     def create(
         self,
@@ -94,7 +94,7 @@ class ResearchConversationService:
             )
             db.commit()
             db.refresh(conversation)
-        return self._to_response(conversation)
+        return self._to_response(conversation, db)
 
     def send_message(
         self,
@@ -105,11 +105,11 @@ class ResearchConversationService:
         """Process one free-form user message and return the restorable state."""
         conversation = self._get_model(conversation_id, db)
         self._process_message(conversation, request.message, db)
-        return self._to_response(conversation)
+        return self._to_response(conversation, db)
 
     def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
         """Restore a conversation without invoking a model or external service."""
-        return self._to_response(self._get_model(conversation_id, db))
+        return self._to_response(self._get_model(conversation_id, db), db)
 
     @staticmethod
     def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:
@@ -200,6 +200,7 @@ class ResearchConversationService:
     @staticmethod
     def _to_response(
         conversation: ResearchConversationModel,
+        db: Session,
     ) -> ResearchConversationResponse:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         messages = _messages(conversation)
@@ -210,20 +211,33 @@ class ResearchConversationService:
         if assistant is None:
             raise ValueError("research conversation has no assistant message")
         readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile,
+            ready_for_plan=readiness.stage == "ready_for_plan",
+        )
+        bundles = [
+            ConversationEvidenceBundle.model_validate(record.bundle_data)
+            for record in (
+                db.query(ResearchEvidenceBundleModel)
+                .filter(ResearchEvidenceBundleModel.conversation_id == conversation.id)
+                .order_by(ResearchEvidenceBundleModel.created_at.desc())
+                .all()
+            )
+        ]
         return ResearchConversationResponse(
             conversation_id=conversation.id,
             next_skill=(
-                "academic-search"
-                if assistant.recommended_action == "prepare_search"
-                else None
+                "academic-search" if assistant.recommended_action == "prepare_search" else None
             ),
             profile=profile,
             readiness=readiness,
             stage=readiness.stage,
             ready_for_plan=readiness.stage == "ready_for_plan",
-            research_plan=build_conversation_research_plan(
+            research_plan=plan,
+            research_mindmap=build_research_mindmap(
                 profile,
-                ready_for_plan=readiness.stage == "ready_for_plan",
+                plan=plan,
+                evidence_bundles=bundles,
             ),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
@@ -334,9 +348,7 @@ def _enforce_runtime_decision(
         None,
     )
     answered_suggestion = bool(
-        previous
-        and user_message.strip() in previous.suggested_answers
-        and previous.next_question
+        previous and user_message.strip() in previous.suggested_answers and previous.next_question
     )
     if (
         answered_suggestion
@@ -406,9 +418,7 @@ def _fallback_decision(
         question, suggestions, uncertainties = _narrowing_step(provisional)
     else:
         question, suggestions, uncertainties = _next_dialogue_step(provisional)
-    uncertainties = list(
-        dict.fromkeys([*uncertainties, *_explicit_uncertainties(user_message)])
-    )
+    uncertainties = list(dict.fromkeys([*uncertainties, *_explicit_uncertainties(user_message)]))
     reply = (
         "我已经先记录你明确表达的信息。当前没有可用的模型个性化分析，"
         "我们仍可以通过自由对话继续收窄方向。"
@@ -513,9 +523,7 @@ def _fallback_patch(
         if "实验" in message and "对照实验" not in message:
             method_names.append("实验")
         methods = list(dict.fromkeys(method_names)) or None
-        if methods is None or any(
-            marker in message for marker in ("数据", "材料", "案例", "样本")
-        ):
+        if methods is None or any(marker in message for marker in ("数据", "材料", "案例", "样本")):
             data_requirements = message.strip()
     return ResearchProfilePatch(
         topic=topic,
@@ -659,8 +667,7 @@ def _profile_review_reply(profile: ResearchProfile) -> str:
 def _is_uncertainty(message: str) -> bool:
     normalized = message.replace(" ", "")
     return any(
-        marker in normalized
-        for marker in ("不知道", "不清楚", "没想好", "帮我分析", "帮我推荐")
+        marker in normalized for marker in ("不知道", "不清楚", "没想好", "帮我分析", "帮我推荐")
     )
 
 

@@ -126,9 +126,7 @@ class ResearchConversationDecision(BaseModel):
         "prepare_search",
     ] = "continue_dialogue"
 
-    @field_validator(
-        "candidate_questions", "assumptions", "uncertainties", "suggested_answers"
-    )
+    @field_validator("candidate_questions", "assumptions", "uncertainties", "suggested_answers")
     @classmethod
     def normalize_decision_lists(cls, values: list[str]) -> list[str]:
         """Keep assistant-facing suggestions non-empty and unique."""
@@ -151,11 +149,14 @@ class ResearchConversationMessage(BaseModel):
     next_question: str | None = None
     suggested_answers: list[str] = Field(default_factory=list)
     candidate_questions: list[str] = Field(default_factory=list)
-    recommended_action: Literal[
-        "continue_dialogue",
-        "review_profile",
-        "prepare_search",
-    ] | None = None
+    recommended_action: (
+        Literal[
+            "continue_dialogue",
+            "review_profile",
+            "prepare_search",
+        ]
+        | None
+    ) = None
 
 
 class ResearchReadiness(BaseModel):
@@ -168,6 +169,7 @@ class ResearchReadiness(BaseModel):
 
 
 PlanClassification = Literal["inference", "to_verify"]
+MindMapNodeStatus = Literal["confirmed", "inference", "to_verify", "evidence", "risk"]
 
 
 class ResearchPlanEntry(BaseModel):
@@ -203,6 +205,50 @@ class ConversationResearchPlan(BaseModel):
     risks_and_mitigations: list[ResearchPlanRisk] = Field(min_length=1)
     suggested_search_keywords: list[str] = Field(min_length=1, max_length=8)
     pending_items: list[ResearchPlanEntry] = Field(default_factory=list)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class ResearchMindMapSource(BaseModel):
+    """One traceable source attached to a mind-map evidence node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=500)
+    url: str = Field(min_length=1, max_length=2000)
+    accessed_at: datetime
+
+
+class ResearchMindMapNode(BaseModel):
+    """A display-safe research concept with an explicit epistemic status."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=500)
+    status: MindMapNodeStatus
+    detail: str = Field(min_length=1, max_length=1000)
+    sources: list[ResearchMindMapSource] = Field(default_factory=list, max_length=6)
+
+
+class ResearchMindMapEdge(BaseModel):
+    """A directed, explainable relationship between two mind-map nodes."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_id: str = Field(min_length=1, max_length=100)
+    target_id: str = Field(min_length=1, max_length=100)
+    relation: str = Field(min_length=1, max_length=200)
+
+
+class ResearchMindMap(BaseModel):
+    """Offline node-and-edge graph derived from a profile, plan, and saved evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["research-mindmap.v1"] = "research-mindmap.v1"
+    root_node_id: str = Field(min_length=1, max_length=100)
+    nodes: list[ResearchMindMapNode] = Field(min_length=1, max_length=40)
+    edges: list[ResearchMindMapEdge] = Field(default_factory=list, max_length=80)
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
@@ -249,6 +295,7 @@ class ResearchConversationResponse(BaseModel):
     stage: Literal["exploring", "focusing", "ready_for_plan"]
     ready_for_plan: bool
     research_plan: ConversationResearchPlan | None = None
+    research_mindmap: ResearchMindMap
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
     recommended_action: Literal[

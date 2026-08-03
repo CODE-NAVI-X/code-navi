@@ -41,6 +41,7 @@ import { AcademicSearchPanel } from "./AcademicSearchPanel";
 import { ProviderStatusCard } from "./ProviderStatusCard";
 import { ResearchProfilePanel } from "./ResearchProfilePanel";
 import { ResearchPlanPanel } from "./ResearchPlanPanel";
+import { ResearchMindMapPanel } from "./ResearchMindMapPanel";
 
 const STORAGE_KEY = "code-navi.research.conversation-id";
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
@@ -410,6 +411,7 @@ export function ResearchConversation() {
           <div className="hidden lg:block">
             <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
             {conversation.research_plan && <div className="mt-4"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
+            <div className="mt-4"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
           </div>
 
           <details className="group rounded-2xl border border-slate-200 bg-white lg:hidden dark:border-zinc-800 dark:bg-zinc-900">
@@ -420,6 +422,7 @@ export function ResearchConversation() {
             <div className="border-t border-slate-200 p-3 dark:border-zinc-800">
               <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
               {conversation.research_plan && <div className="mt-3"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
+              <div className="mt-3"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
             </div>
           </details>
         </div>

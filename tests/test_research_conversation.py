@@ -105,9 +105,7 @@ def test_one_message_can_update_multiple_profile_dimensions(client: TestClient) 
                         context="本科生编程课程",
                         constraints=["只能使用公开数据", "不训练模型"],
                     ),
-                    candidate_questions=[
-                        "不同提示策略是否影响编程解释的学习效果？"
-                    ],
+                    candidate_questions=["不同提示策略是否影响编程解释的学习效果？"],
                     uncertainties=["尚未确定评价指标"],
                 ),
                 run_id="run-multi-field",
@@ -121,8 +119,7 @@ def test_one_message_can_update_multiple_profile_dimensions(client: TestClient) 
         "/api/v1/research/conversations",
         json={
             "initial_message": (
-                "我想研究生成式 AI 辅助编程学习，面向本科生，"
-                "只能用公开数据，而且不想自己训练模型。"
+                "我想研究生成式 AI 辅助编程学习，面向本科生，只能用公开数据，而且不想自己训练模型。"
             )
         },
     )
@@ -132,9 +129,7 @@ def test_one_message_can_update_multiple_profile_dimensions(client: TestClient) 
     assert body["profile"]["topic"] == "生成式 AI 辅助编程学习"
     assert body["profile"]["context"] == "本科生编程课程"
     assert body["profile"]["constraints"] == ["只能使用公开数据", "不训练模型"]
-    assert body["candidate_questions"] == [
-        "不同提示策略是否影响编程解释的学习效果？"
-    ]
+    assert body["candidate_questions"] == ["不同提示策略是否影响编程解释的学习效果？"]
     assert body["last_run_id"] == "run-multi-field"
     assert len(body["messages"]) == 2
 
@@ -153,9 +148,7 @@ def test_follow_up_can_correct_existing_profile_and_restore_without_model_call(
                 _decision(
                     reply="已将主题收窄到编程学习场景。",
                     intent="correct",
-                    profile_patch=ResearchProfilePatch(
-                        topic="生成式 AI 辅助编程学习"
-                    ),
+                    profile_patch=ResearchProfilePatch(topic="生成式 AI 辅助编程学习"),
                 ),
                 run_id="run-2",
                 event_count=3,
@@ -172,9 +165,7 @@ def test_follow_up_can_correct_existing_profile_and_restore_without_model_call(
         f"/api/v1/research/conversations/{created['conversation_id']}/messages",
         json={"message": "范围太大了，改成生成式 AI 辅助编程学习"},
     )
-    restored = client.get(
-        f"/api/v1/research/conversations/{created['conversation_id']}"
-    )
+    restored = client.get(f"/api/v1/research/conversations/{created['conversation_id']}")
 
     assert progressed.status_code == 200
     assert progressed.json()["profile"]["topic"] == "生成式 AI 辅助编程学习"
@@ -200,9 +191,7 @@ def test_follow_up_can_explicitly_clear_rejected_candidate_questions(
             ConversationDecisionOutcome.generated(
                 _decision(
                     intent="correct",
-                    profile_patch=ResearchProfilePatch(
-                        clear_fields=["candidate_questions"]
-                    ),
+                    profile_patch=ResearchProfilePatch(clear_fields=["candidate_questions"]),
                     candidate_questions=[],
                 ),
                 run_id="run-clear",
@@ -532,13 +521,19 @@ def test_ready_conversation_returns_a_restorable_rules_research_plan(
     assert body["research_plan"]["two_week_mvp_plan"]
     assert body["research_plan"]["suggested_search_keywords"]
     assert "论文事实" in body["research_plan"]["provenance_note"]
-
-    restored = client.get(
-        f"/api/v1/research/conversations/{body['conversation_id']}"
+    assert body["research_mindmap"]["schema_version"] == "research-mindmap.v1"
+    assert body["research_mindmap"]["root_node_id"] == "topic"
+    assert any(
+        node["id"] == "research-plan" and node["status"] == "inference"
+        for node in body["research_mindmap"]["nodes"]
     )
+    assert body["research_mindmap"]["edges"]
+
+    restored = client.get(f"/api/v1/research/conversations/{body['conversation_id']}")
 
     assert restored.status_code == 200
     assert restored.json()["research_plan"] == body["research_plan"]
+    assert restored.json()["research_mindmap"] == body["research_mindmap"]
 
 
 def test_incomplete_conversation_has_no_research_plan(client: TestClient) -> None:

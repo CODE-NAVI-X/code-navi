@@ -58,6 +58,41 @@ export interface ConversationResearchPlan {
   provenance_note: string;
 }
 
+export type ResearchMindMapNodeStatus =
+  | "confirmed"
+  | "inference"
+  | "to_verify"
+  | "evidence"
+  | "risk";
+
+export interface ResearchMindMapSource {
+  label: string;
+  url: string;
+  accessed_at: string;
+}
+
+export interface ResearchMindMapNode {
+  id: string;
+  label: string;
+  status: ResearchMindMapNodeStatus;
+  detail: string;
+  sources: ResearchMindMapSource[];
+}
+
+export interface ResearchMindMapEdge {
+  source_id: string;
+  target_id: string;
+  relation: string;
+}
+
+export interface ResearchMindMap {
+  schema_version: "research-mindmap.v1";
+  root_node_id: string;
+  nodes: ResearchMindMapNode[];
+  edges: ResearchMindMapEdge[];
+  provenance_note: string;
+}
+
 export interface ResearchConversationMessage {
   message_id: string;
   role: "user" | "assistant";
@@ -83,6 +118,7 @@ export interface ResearchConversationResponse {
   stage: ResearchStage;
   ready_for_plan: boolean;
   research_plan: ConversationResearchPlan | null;
+  research_mindmap: ResearchMindMap;
   reply: string;
   generation_mode: GenerationMode;
   recommended_action: RecommendedAction;
