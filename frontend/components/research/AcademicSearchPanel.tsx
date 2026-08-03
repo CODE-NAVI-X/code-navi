@@ -13,6 +13,8 @@ import { useEffect, useState } from "react";
 import {
   type AcademicSourceId,
   type ConversationEvidenceBundle,
+  type PaperAnalysis,
+  analyzeResearchPaper,
   getResearchSearchPlan,
   listResearchEvidence,
   ResearchApiError,
@@ -36,6 +38,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
   const [selectedSources, setSelectedSources] = useState<AcademicSourceId[]>([]);
   const [phase, setPhase] = useState<"planning" | "ready" | "searching">("planning");
   const [error, setError] = useState<string | null>(null);
+  const [paperAnalysis, setPaperAnalysis] = useState<PaperAnalysis | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -72,6 +75,15 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
       setError(searchErrorMessage(requestError));
     } finally {
       setPhase("ready");
+    }
+  }
+
+  async function analyzePaper(paperUrl: string) {
+    setError(null);
+    try {
+      setPaperAnalysis(await analyzeResearchPaper(conversationId, paperUrl));
+    } catch (requestError) {
+      setError(searchErrorMessage(requestError));
     }
   }
 
@@ -189,12 +201,20 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                   {paper.abstract_excerpt && (
                     <p className="mt-2 line-clamp-4 text-xs leading-5 text-slate-600 dark:text-zinc-300">{paper.abstract_excerpt}</p>
                   )}
+                  <button type="button" onClick={() => void analyzePaper(paper.url)} className="mt-3 rounded-lg border border-orange-200 px-2 py-1 text-[11px] font-semibold text-orange-800 hover:bg-orange-50 dark:border-orange-900 dark:text-orange-300 dark:hover:bg-orange-950/30">分析元数据/摘要难点</button>
                 </article>
               ))
             ) : (
               <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-zinc-950 dark:text-zinc-400">
                 本次没有可展示的论文。{bundle.failure_reasons.join("；") || "可以调整检索词后重试。"}
               </p>
+            )}
+            {paperAnalysis && (
+              <article className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 text-xs leading-5 dark:border-orange-900/60 dark:bg-orange-950/20">
+                <p className="font-bold text-orange-900 dark:text-orange-200">论文/方向难点分析：{paperAnalysis.title}</p>
+                <p className="mt-1 text-[11px] text-orange-800 dark:text-orange-300">仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
+                <ul className="mt-2 space-y-2">{paperAnalysis.items.map((item) => <li key={item.area}><span className="font-semibold">{item.area}：</span>{item.content}</li>)}</ul>
+              </article>
             )}
           </div>
         )}

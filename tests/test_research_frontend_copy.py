@@ -8,6 +8,7 @@ PROFILE = Path("frontend/components/research/ResearchProfilePanel.tsx")
 PROVIDER = Path("frontend/components/research/ProviderStatusCard.tsx")
 PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
 MINDMAP = Path("frontend/components/research/ResearchMindMapPanel.tsx")
+DIFFICULTY = Path("frontend/components/research/ResearchDifficultyPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -101,3 +102,16 @@ def test_research_workspace_exposes_a_traceable_mind_map_without_a_graph_runtime
     assert "research-mindmap.v1" in api_source
     assert "不联网" in mindmap_source
     assert "导出 SVG" in mindmap_source
+
+
+def test_research_workspace_labels_direction_analysis_as_a_non_paper_fact() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    difficulty_source = DIFFICULTY.read_text(encoding="utf-8")
+    search_source = Path("frontend/components/research/AcademicSearchPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ResearchDifficultyPanel" in workspace_source
+    assert "topic_difficulty_analysis" in workspace_source
+    assert "不是论文精读或实验结论" in difficulty_source
+    assert "分析元数据/摘要难点" in search_source

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from code_navi.research.conversation_difficulty import (
+    build_paper_analysis,
+    build_topic_difficulty_analysis,
+)
 from code_navi.research.conversation_mindmap import build_research_mindmap
 from code_navi.research.conversation_plan import build_conversation_research_plan
 from code_navi.research.conversation_schemas import (
@@ -101,3 +105,46 @@ def test_mindmap_marks_saved_paper_metadata_as_evidence_instead_of_a_fact_claim(
     assert evidence_node.status == "evidence"
     assert evidence_node.sources[0].url == paper.url
     assert evidence_node.sources[0].accessed_at == accessed_at
+
+
+def test_topic_difficulty_analysis_marks_unverified_feasibility_as_to_verify() -> None:
+    profile = ResearchProfile(
+        topic="RAG 回答可信度评测",
+        research_questions=["检索质量如何影响回答可信度？"],
+        context="高校课程知识库",
+    )
+
+    analysis = build_topic_difficulty_analysis(profile, plan=None, evidence_bundles=[])
+
+    assert analysis.schema_version == "topic-difficulty-analysis.v1"
+    assert analysis.information_scope == "profile_and_plan_only"
+    assert any(item.classification == "inference" for item in analysis.items)
+    assert any(item.classification == "to_verify" for item in analysis.items)
+    assert all("论文结论" not in item.content for item in analysis.items)
+
+
+def test_paper_analysis_without_an_abstract_returns_only_verification_gaps() -> None:
+    paper = AcademicPaperResult(
+        title="Metadata-only paper",
+        authors=["Example Author"],
+        source_name="Crossref",
+        url="https://doi.org/10.0000/example",
+        accessed_at=datetime(2026, 8, 3, tzinfo=UTC),
+        information_scope="metadata_and_abstract_only",
+        metadata_evidence=[],
+        supporting_snippets=[],
+        relevance=EvidenceStatement(
+            content="可能相关。", classification="inference", basis="关键词匹配"
+        ),
+        verification=EvidenceStatement(
+            content="需要阅读全文。", classification="to_verify", basis="只有元数据"
+        ),
+        full_text_available=False,
+    )
+
+    analysis = build_paper_analysis(paper)
+
+    assert analysis.schema_version == "paper-analysis.v1"
+    assert analysis.abstract_available is False
+    assert all(item.classification == "to_verify" for item in analysis.items[1:])
+    assert "不下载全文" in analysis.provenance_note

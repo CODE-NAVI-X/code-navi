@@ -17,9 +17,12 @@ from kernel.core import (
     ToolRegistry,
 )
 
+from .conversation_difficulty import build_paper_analysis
 from .conversation_schemas import (
+    AnalyzeConversationPaperRequest,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
+    PaperAnalysis,
     ResearchProfile,
     ResearchSearchPlan,
     ResearchSearchSource,
@@ -30,6 +33,10 @@ from .models import ResearchConversationModel, ResearchEvidenceBundleModel
 
 class ConversationSearchNotReadyError(ValueError):
     """Raised when the current profile is too sparse for a bounded search."""
+
+
+class ConversationPaperNotFoundError(LookupError):
+    """Raised when a user has not selected a paper from saved evidence."""
 
 
 class ResearchConversationSearchService:
@@ -68,7 +75,7 @@ class ResearchConversationSearchService:
                     display_name="arXiv",
                     homepage="https://arxiv.org",
                     scope="预印本论文的题录与摘要，不下载或声称已阅读全文",
-                )
+                ),
             ],
             provenance_note=(
                 "检索词仅由当前科研画像中已确认的主题、问题、场景和方法组合生成；"
@@ -120,9 +127,7 @@ class ResearchConversationSearchService:
         db.commit()
         return bundle
 
-    def list_bundles(
-        self, conversation_id: str, db: Session
-    ) -> list[ConversationEvidenceBundle]:
+    def list_bundles(self, conversation_id: str, db: Session) -> list[ConversationEvidenceBundle]:
         """Restore prior evidence without performing another network request."""
         self._profile(conversation_id, db)
         records = (
@@ -132,6 +137,19 @@ class ResearchConversationSearchService:
             .all()
         )
         return [ConversationEvidenceBundle.model_validate(record.bundle_data) for record in records]
+
+    def analyze_paper(
+        self,
+        conversation_id: str,
+        request: AnalyzeConversationPaperRequest,
+        db: Session,
+    ) -> PaperAnalysis:
+        """Analyze only a paper the user explicitly selected from saved evidence."""
+        for bundle in self.list_bundles(conversation_id, db):
+            for paper in bundle.papers:
+                if paper.url == request.paper_url:
+                    return build_paper_analysis(paper)
+        raise ConversationPaperNotFoundError(request.paper_url)
 
     def _cached_bundle(
         self,
@@ -159,8 +177,7 @@ class ResearchConversationSearchService:
                 break
             bundle = ConversationEvidenceBundle.model_validate(record.bundle_data)
             if (
-                " ".join(bundle.query.split()).casefold()
-                == " ".join(query.split()).casefold()
+                " ".join(bundle.query.split()).casefold() == " ".join(query.split()).casefold()
                 and bundle.requested_sources == expected_sources
             ):
                 return bundle
@@ -193,6 +210,7 @@ def _bounded_query(parts: list[str | None]) -> str:
 
 
 __all__ = [
+    "ConversationPaperNotFoundError",
     "ConversationSearchNotReadyError",
     "ResearchConversationSearchService",
 ]

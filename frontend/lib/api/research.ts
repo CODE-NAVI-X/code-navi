@@ -93,6 +93,34 @@ export interface ResearchMindMap {
   provenance_note: string;
 }
 
+export type AnalysisClassification = "fact" | "inference" | "to_verify";
+
+export interface ResearchAnalysisItem {
+  area: string;
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+  source_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+}
+
+export interface TopicDifficultyAnalysis {
+  schema_version: "topic-difficulty-analysis.v1";
+  title: string;
+  information_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+  items: ResearchAnalysisItem[];
+  provenance_note: string;
+}
+
+export interface PaperAnalysis {
+  schema_version: "paper-analysis.v1";
+  title: string;
+  paper_url: string;
+  information_scope: "metadata_and_abstract_only";
+  abstract_available: boolean;
+  items: ResearchAnalysisItem[];
+  provenance_note: string;
+}
+
 export interface ResearchConversationMessage {
   message_id: string;
   role: "user" | "assistant";
@@ -119,6 +147,7 @@ export interface ResearchConversationResponse {
   ready_for_plan: boolean;
   research_plan: ConversationResearchPlan | null;
   research_mindmap: ResearchMindMap;
+  topic_difficulty_analysis: TopicDifficultyAnalysis;
   reply: string;
   generation_mode: GenerationMode;
   recommended_action: RecommendedAction;
@@ -327,6 +356,16 @@ export async function listResearchEvidence(
 ): Promise<ConversationEvidenceBundle[]> {
   return request<ConversationEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles`,
+  );
+}
+
+export async function analyzeResearchPaper(
+  conversationId: string,
+  paperUrl: string,
+): Promise<PaperAnalysis> {
+  return request<PaperAnalysis>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-analysis`,
+    { method: "POST", body: JSON.stringify({ paper_url: paperUrl }) },
   );
 }
 

@@ -13,6 +13,7 @@ from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
 )
+from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_mindmap import build_research_mindmap
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
@@ -235,6 +236,11 @@ class ResearchConversationService:
             ready_for_plan=readiness.stage == "ready_for_plan",
             research_plan=plan,
             research_mindmap=build_research_mindmap(
+                profile,
+                plan=plan,
+                evidence_bundles=bundles,
+            ),
+            topic_difficulty_analysis=build_topic_difficulty_analysis(
                 profile,
                 plan=plan,
                 evidence_bundles=bundles,

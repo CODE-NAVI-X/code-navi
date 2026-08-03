@@ -11,14 +11,17 @@ from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
 from .conversation_schemas import (
+    AnalyzeConversationPaperRequest,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
     CreateResearchConversationRequest,
+    PaperAnalysis,
     ResearchConversationResponse,
     ResearchSearchPlan,
     SendResearchMessageRequest,
 )
 from .conversation_search_service import (
+    ConversationPaperNotFoundError,
     ConversationSearchNotReadyError,
     ResearchConversationSearchService,
 )
@@ -199,6 +202,27 @@ def list_conversation_evidence_bundles(
         return _conversation_search_service.list_bundles(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/paper-analysis",
+    response_model=PaperAnalysis,
+)
+def analyze_conversation_paper(
+    conversation_id: str,
+    request: AnalyzeConversationPaperRequest,
+    db: Session = _db_dependency,
+) -> PaperAnalysis:
+    """Analyze only metadata/abstract from a user-selected saved evidence item."""
+    try:
+        return _conversation_search_service.analyze_paper(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ConversationPaperNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Paper is not present in this conversation's saved evidence bundles.",
+        ) from error
 
 
 @router.post(

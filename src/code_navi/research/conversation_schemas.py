@@ -252,6 +252,55 @@ class ResearchMindMap(BaseModel):
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
+AnalysisClassification = Literal["fact", "inference", "to_verify"]
+
+
+class ResearchAnalysisItem(BaseModel):
+    """One scoped difficulty observation with its epistemic boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    area: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=1000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+    source_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+
+
+class TopicDifficultyAnalysis(BaseModel):
+    """Rules-only direction analysis; it does not claim paper-specific findings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["topic-difficulty-analysis.v1"] = "topic-difficulty-analysis.v1"
+    title: str = Field(min_length=1, max_length=500)
+    information_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+    items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class PaperAnalysis(BaseModel):
+    """Metadata/abstract-only paper analysis returned for an explicitly selected paper."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-analysis.v1"] = "paper-analysis.v1"
+    title: str = Field(min_length=1, max_length=1000)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    information_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+    abstract_available: bool
+    items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class AnalyzeConversationPaperRequest(BaseModel):
+    """Identify a paper already stored in the current conversation's evidence bundles."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    paper_url: str = Field(min_length=1, max_length=2000)
+
+
 class CreateResearchConversationRequest(BaseModel):
     """Create a conversation, optionally processing the first user message."""
 
@@ -296,6 +345,7 @@ class ResearchConversationResponse(BaseModel):
     ready_for_plan: bool
     research_plan: ConversationResearchPlan | None = None
     research_mindmap: ResearchMindMap
+    topic_difficulty_analysis: TopicDifficultyAnalysis
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
     recommended_action: Literal[
