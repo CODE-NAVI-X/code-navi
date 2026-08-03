@@ -13,7 +13,16 @@ from fastapi.responses import JSONResponse
 from .learning.database import engine
 from .learning.models import Base
 from .learning.router import router as learning_router
+from .provider_config import load_local_provider_config
 from .research.router import router as research_router
+
+
+def _cors_origins() -> list[str]:
+    """Return configured browser origins, with loopback-only development defaults."""
+    configured = os.getenv("CODE_NAVI_CORS_ORIGINS")
+    if not configured:
+        return ["http://127.0.0.1:3000", "http://localhost:3000"]
+    return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
 
 # ---------------------------------------------------------------------------
 # Lifespan — ensure database tables exist on startup
@@ -23,6 +32,7 @@ from .research.router import router as research_router
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Create database directory and tables on startup."""
+    load_local_provider_config()
     # Ensure parent directory exists for SQLite file-based storage
     from .learning.database import DATABASE_URL
     if DATABASE_URL.startswith("sqlite:///"):
@@ -50,13 +60,13 @@ app.include_router(learning_router)
 app.include_router(research_router)
 
 # ---------------------------------------------------------------------------
-# CORS — allow all origins during PoC; tighten before production.
+# CORS — the browser secret configuration endpoint is restricted to the local UI.
 # Register middleware AFTER mounting routers so it applies to all routes.
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],

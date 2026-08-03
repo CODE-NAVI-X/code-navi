@@ -74,6 +74,7 @@ class AcademicSourceStatus(BaseModel):
     source_url: str | None = None
     accessed_at: datetime
     reason: str | None = None
+    duration_ms: int = Field(default=0, ge=0)
 
 
 class AcademicPaperResult(BaseModel):
@@ -151,8 +152,10 @@ class CreateEvidenceBundleRequest(BaseModel):
     """Explicit user search request; no endpoint performs automatic network calls."""
 
     query: str | None = Field(default=None, min_length=2, max_length=300)
-    sources: list[Literal["arxiv"]] = Field(
-        default_factory=lambda: ["arxiv"], min_length=1, max_length=1
+    sources: list[Literal["arxiv", "openalex", "crossref"]] = Field(
+        default_factory=lambda: ["openalex", "crossref", "arxiv"],
+        min_length=1,
+        max_length=3,
     )
 
 

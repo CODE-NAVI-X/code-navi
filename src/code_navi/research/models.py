@@ -25,3 +25,31 @@ class ResearchSessionModel(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class ResearchConversationModel(Base):
+    """Dynamic research profile and full conversational message history."""
+
+    __tablename__ = "research_conversations"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    profile_data = Column(JSON, nullable=False, default=dict)
+    messages_data = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class ResearchEvidenceBundleModel(Base):
+    """Persisted, restorable output from one explicit academic search run."""
+
+    __tablename__ = "research_evidence_bundles"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String(36), nullable=False, index=True)
+    bundle_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))

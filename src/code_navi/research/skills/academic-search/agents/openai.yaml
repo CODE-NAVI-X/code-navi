@@ -1,0 +1,4 @@
+interface:
+  display_name: "学术信息源检索"
+  short_description: "根据科研画像规划检索词并仅查询用户确认的学术信息来源"
+  default_prompt: "Use $academic-search to prepare a source-restricted academic evidence search."

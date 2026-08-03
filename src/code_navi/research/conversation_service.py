@@ -1,0 +1,689 @@
+"""Application-owned orchestration for conversational research clarification."""
+
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import UTC, datetime
+from typing import Literal, Protocol
+
+from sqlalchemy.orm import Session
+
+from .conversation_agent import (
+    ConversationDecisionOutcome,
+    RuntimeConversationDecisionGenerator,
+)
+from .conversation_schemas import (
+    CreateResearchConversationRequest,
+    ResearchConversationDecision,
+    ResearchConversationMessage,
+    ResearchConversationResponse,
+    ResearchProfile,
+    ResearchProfilePatch,
+    ResearchReadiness,
+    SendResearchMessageRequest,
+)
+from .models import ResearchConversationModel
+
+
+class ConversationNotFoundError(LookupError):
+    """Raised when a requested research conversation does not exist."""
+
+
+class ConversationDecisionGenerator(Protocol):
+    """Application boundary for an online or deterministic decision generator."""
+
+    def generate(
+        self,
+        *,
+        profile: ResearchProfile,
+        messages: list[ResearchConversationMessage],
+        user_message: str,
+        conversation_id: str,
+    ) -> ConversationDecisionOutcome: ...
+
+
+class ResearchConversationService:
+    """Persist dialogue while keeping profile mutations validated and auditable."""
+
+    def __init__(
+        self,
+        decision_generator: ConversationDecisionGenerator | None = None,
+    ) -> None:
+        self.decision_generator = (
+            decision_generator or RuntimeConversationDecisionGenerator()
+        )
+
+    def create(
+        self,
+        request: CreateResearchConversationRequest,
+        db: Session,
+    ) -> ResearchConversationResponse:
+        """Create a conversation and optionally process its first user message."""
+        conversation = ResearchConversationModel(
+            profile_data=ResearchProfile().model_dump(mode="json"),
+            messages_data=[],
+        )
+        db.add(conversation)
+        db.flush()
+        if request.initial_message:
+            self._process_message(conversation, request.initial_message, db)
+        else:
+            welcome = ResearchConversationDecision(
+                reply=(
+                    "先不用按表格回答。请用自己的话说说你最近想研究的现象、"
+                    "困惑或项目背景，我会边聊边整理研究画像。"
+                ),
+                intent="explore",
+                uncertainties=["尚未了解用户的初步研究想法"],
+                next_question="你最近最想弄清楚、比较或解决的事情是什么？",
+                suggested_answers=[
+                    "我有一个模糊想法",
+                    "我有项目但没有研究问题",
+                    "我想先比较几个方向",
+                ],
+            )
+            self._append_assistant(
+                conversation,
+                welcome,
+                generation_mode="rules",
+            )
+            conversation.profile_data = _apply_decision(ResearchProfile(), welcome).model_dump(
+                mode="json"
+            )
+            db.commit()
+            db.refresh(conversation)
+        return self._to_response(conversation)
+
+    def send_message(
+        self,
+        conversation_id: str,
+        request: SendResearchMessageRequest,
+        db: Session,
+    ) -> ResearchConversationResponse:
+        """Process one free-form user message and return the restorable state."""
+        conversation = self._get_model(conversation_id, db)
+        self._process_message(conversation, request.message, db)
+        return self._to_response(conversation)
+
+    def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
+        """Restore a conversation without invoking a model or external service."""
+        return self._to_response(self._get_model(conversation_id, db))
+
+    @staticmethod
+    def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:
+        conversation = db.get(ResearchConversationModel, conversation_id)
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        return conversation
+
+    def _process_message(
+        self,
+        conversation: ResearchConversationModel,
+        user_message: str,
+        db: Session,
+    ) -> None:
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        existing_messages = _messages(conversation)
+        self._append_user(conversation, user_message)
+        outcome = self.decision_generator.generate(
+            profile=profile,
+            messages=existing_messages,
+            user_message=user_message,
+            conversation_id=conversation.id,
+        )
+        if outcome.status == "generated" and outcome.decision is not None:
+            decision = _enforce_runtime_decision(
+                profile,
+                existing_messages,
+                user_message,
+                outcome.decision,
+            )
+            mode = "agent"
+        else:
+            decision = _fallback_decision(profile, user_message, existing_messages)
+            mode = "rules_fallback" if outcome.status == "failed" else "rules"
+        updated_profile = _apply_decision(profile, decision)
+        conversation.profile_data = updated_profile.model_dump(mode="json")
+        self._append_assistant(
+            conversation,
+            decision,
+            generation_mode=mode,
+            run_id=outcome.run_id,
+            event_count=outcome.event_count,
+        )
+        db.commit()
+        db.refresh(conversation)
+
+    @staticmethod
+    def _append_user(conversation: ResearchConversationModel, content: str) -> None:
+        message = ResearchConversationMessage(
+            message_id=str(uuid.uuid4()),
+            role="user",
+            content=content,
+            created_at=datetime.now(UTC),
+        )
+        conversation.messages_data = [
+            *conversation.messages_data,
+            message.model_dump(mode="json"),
+        ]
+
+    @staticmethod
+    def _append_assistant(
+        conversation: ResearchConversationModel,
+        decision: ResearchConversationDecision,
+        *,
+        generation_mode: Literal["agent", "rules", "rules_fallback"],
+        run_id: str | None = None,
+        event_count: int = 0,
+    ) -> None:
+        message = ResearchConversationMessage(
+            message_id=str(uuid.uuid4()),
+            role="assistant",
+            content=decision.reply,
+            created_at=datetime.now(UTC),
+            generation_mode=generation_mode,
+            run_id=run_id,
+            event_count=event_count,
+            intent=decision.intent,
+            next_question=decision.next_question,
+            suggested_answers=decision.suggested_answers,
+            candidate_questions=decision.candidate_questions,
+            recommended_action=decision.recommended_action,
+        )
+        conversation.messages_data = [
+            *conversation.messages_data,
+            message.model_dump(mode="json"),
+        ]
+
+    @staticmethod
+    def _to_response(
+        conversation: ResearchConversationModel,
+    ) -> ResearchConversationResponse:
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        messages = _messages(conversation)
+        assistant = next(
+            (message for message in reversed(messages) if message.role == "assistant"),
+            None,
+        )
+        if assistant is None:
+            raise ValueError("research conversation has no assistant message")
+        readiness = assess_readiness(profile)
+        return ResearchConversationResponse(
+            conversation_id=conversation.id,
+            next_skill=(
+                "academic-search"
+                if assistant.recommended_action == "prepare_search"
+                else None
+            ),
+            profile=profile,
+            readiness=readiness,
+            stage=readiness.stage,
+            ready_for_plan=readiness.stage == "ready_for_plan",
+            reply=assistant.content,
+            generation_mode=assistant.generation_mode or "rules",
+            recommended_action=assistant.recommended_action or "continue_dialogue",
+            next_question=assistant.next_question,
+            suggested_answers=assistant.suggested_answers,
+            candidate_questions=profile.candidate_questions,
+            messages=messages,
+            last_run_id=assistant.run_id,
+        )
+
+
+def _messages(conversation: ResearchConversationModel) -> list[ResearchConversationMessage]:
+    return [
+        ResearchConversationMessage.model_validate(message)
+        for message in conversation.messages_data
+    ]
+
+
+def _apply_decision(
+    profile: ResearchProfile,
+    decision: ResearchConversationDecision,
+) -> ResearchProfile:
+    data = profile.model_dump(mode="json")
+    patch = decision.profile_patch.model_dump(mode="json", exclude_none=True)
+    clear_fields = patch.pop("clear_fields", [])
+    for field in clear_fields:
+        data[field] = [] if isinstance(data[field], list) else None
+    for field, value in patch.items():
+        data[field] = value
+    if decision.candidate_questions:
+        data["candidate_questions"] = decision.candidate_questions
+    data["assumptions"] = decision.assumptions
+    data["uncertainties"] = decision.uncertainties
+    return ResearchProfile.model_validate(data)
+
+
+def assess_readiness(profile: ResearchProfile) -> ResearchReadiness:
+    """Calculate explainable readiness without imposing a fixed questionnaire."""
+    score = 0
+    reasons: list[str] = []
+    if profile.topic:
+        score += 20
+    else:
+        reasons.append("还没有形成可描述的研究主题")
+    if profile.research_questions or profile.candidate_questions:
+        score += 25
+    else:
+        reasons.append("还没有候选研究问题")
+    if profile.context:
+        score += 15
+    else:
+        reasons.append("研究对象或应用场景仍不清楚")
+    if profile.motivation:
+        score += 10
+    if profile.methods or profile.data_requirements:
+        score += 10
+    else:
+        reasons.append("数据或研究路径尚未讨论")
+    if profile.constraints:
+        score += 10
+    if profile.expected_output:
+        score += 5
+    if profile.evidence_preferences or profile.time_scope:
+        score += 5
+    if score < 35:
+        stage = "exploring"
+    elif score < 70:
+        stage = "focusing"
+    else:
+        stage = "ready_for_plan"
+    return ResearchReadiness(
+        score=score,
+        stage=stage,
+        can_prepare_search=bool(
+            profile.topic and (profile.research_questions or profile.candidate_questions)
+        ),
+        reasons=reasons,
+    )
+
+
+def _enforce_runtime_decision(
+    profile: ResearchProfile,
+    messages: list[ResearchConversationMessage],
+    user_message: str,
+    decision: ResearchConversationDecision,
+) -> ResearchConversationDecision:
+    """Enforce critical Skill transitions even when a model ignores its instructions."""
+    provisional = _apply_decision(profile, decision)
+    if (
+        _requests_prepare_search(user_message)
+        and assess_readiness(provisional).stage == "ready_for_plan"
+    ):
+        return decision.model_copy(
+            update={
+                "reply": (
+                    "需求确认 Skill 已完成本轮澄清，当前画像已经可以形成检索约束。"
+                    "下一步应由信息源检索 Skill 接管，并且只在你明确触发后访问允许的学术来源。"
+                ),
+                "intent": "prepare_search",
+                "next_question": None,
+                "suggested_answers": [],
+                "recommended_action": "prepare_search",
+            }
+        )
+    previous = next(
+        (item for item in reversed(messages) if item.role == "assistant"),
+        None,
+    )
+    answered_suggestion = bool(
+        previous
+        and user_message.strip() in previous.suggested_answers
+        and previous.next_question
+    )
+    if (
+        answered_suggestion
+        and decision.next_question
+        and decision.next_question.strip() == previous.next_question.strip()
+    ):
+        question, suggestions, uncertainties = _next_dialogue_step(provisional)
+        if question.strip() == previous.next_question.strip():
+            question, suggestions, uncertainties = _narrowing_step(provisional)
+        return decision.model_copy(
+            update={
+                "next_question": question,
+                "suggested_answers": suggestions,
+                "uncertainties": uncertainties,
+            }
+        )
+    return decision
+
+
+def _fallback_decision(
+    profile: ResearchProfile,
+    user_message: str,
+    messages: list[ResearchConversationMessage] | None = None,
+) -> ResearchConversationDecision:
+    """Provide a dynamic, non-fabricating dialogue step when no model is available."""
+    patch = _fallback_patch(profile, messages or [], user_message)
+    provisional = _apply_patch_only(profile, patch)
+    candidate_questions = list(provisional.candidate_questions)
+    if provisional.topic and not (
+        provisional.research_questions or provisional.candidate_questions
+    ):
+        candidate_questions = [
+            f"{provisional.topic}会带来什么可观察的效果或变化？",
+            f"{provisional.topic}在不同方法或场景之间有什么差异？",
+            f"哪些因素会影响{provisional.topic}的结果？",
+        ]
+    readiness = assess_readiness(provisional)
+    if _requests_prepare_search(user_message) and readiness.stage == "ready_for_plan":
+        return ResearchConversationDecision(
+            reply=(
+                "需求确认 Skill 已完成本轮澄清，当前画像已经可以形成检索约束。"
+                "下一步应由信息源检索 Skill 接管；它只会在你明确触发后访问允许的学术来源。"
+            ),
+            intent="prepare_search",
+            profile_patch=patch,
+            candidate_questions=candidate_questions,
+            assumptions=list(provisional.assumptions),
+            uncertainties=list(provisional.uncertainties),
+            next_question=None,
+            suggested_answers=[],
+            recommended_action="prepare_search",
+        )
+    if _requests_profile_review(user_message):
+        return ResearchConversationDecision(
+            reply=_profile_review_reply(provisional),
+            intent="summarize",
+            profile_patch=patch,
+            candidate_questions=candidate_questions,
+            assumptions=list(provisional.assumptions),
+            uncertainties=list(provisional.uncertainties),
+            next_question="当前画像中哪一项需要修改或补充？",
+            suggested_answers=["修改研究问题", "补充研究方法", "准备探索性检索"],
+            recommended_action="review_profile",
+        )
+    continuing_narrowing = _requests_continue_narrowing(user_message)
+    if continuing_narrowing:
+        question, suggestions, uncertainties = _narrowing_step(provisional)
+    else:
+        question, suggestions, uncertainties = _next_dialogue_step(provisional)
+    uncertainties = list(
+        dict.fromkeys([*uncertainties, *_explicit_uncertainties(user_message)])
+    )
+    reply = (
+        "我已经先记录你明确表达的信息。当前没有可用的模型个性化分析，"
+        "我们仍可以通过自由对话继续收窄方向。"
+    )
+    if patch.expected_output:
+        reply = (
+            f"已记录你的预期产出是“{patch.expected_output}”。这不会直接生成或承诺一篇论文；"
+            "我们会先把研究问题、方法与证据来源约束整理清楚。"
+        )
+    return ResearchConversationDecision(
+        reply=reply,
+        intent="explore" if not provisional.topic else "clarify",
+        profile_patch=patch,
+        candidate_questions=candidate_questions,
+        uncertainties=uncertainties,
+        next_question=question,
+        suggested_answers=suggestions,
+        recommended_action=(
+            "continue_dialogue"
+            if continuing_narrowing or readiness.stage != "ready_for_plan"
+            else "review_profile"
+        ),
+    )
+
+
+def _fallback_patch(
+    profile: ResearchProfile,
+    messages: list[ResearchConversationMessage],
+    message: str,
+) -> ResearchProfilePatch:
+    if (
+        _requests_prepare_search(message)
+        or _requests_profile_review(message)
+        or _requests_continue_narrowing(message)
+    ):
+        return ResearchProfilePatch()
+    topic: str | None = None
+    match = re.search(r"(?:我想|希望|准备)?(?:研究|探索|了解)([^，。；,;？?]+)", message)
+    explicitly_reframes_topic = any(
+        marker in message for marker in ("改成", "换成", "主题是", "方向改为")
+    )
+    if match and (profile.topic is None or explicitly_reframes_topic):
+        candidate = match.group(1).strip("：: ")
+        if candidate not in {"什么", "一下", "这个", "这个方向"} and len(candidate) >= 2:
+            topic = candidate
+    context: str | None = None
+    context_match = re.search(r"(?:面向|针对)([^，。；,;]+)", message)
+    if context_match:
+        context = context_match.group(1).strip()
+    active_question = next(
+        (
+            item.next_question
+            for item in reversed(messages)
+            if item.role == "assistant" and item.next_question
+        ),
+        None,
+    )
+    if (
+        context is None
+        and profile.context is None
+        and active_question
+        and _asks_for_context(active_question)
+        and not _is_uncertainty(message)
+    ):
+        context = message.strip()
+    constraints: list[str] = []
+    markers = (
+        "公开数据",
+        "数据不好找",
+        "不训练模型",
+        "不想自己训练模型",
+        "时间有限",
+        "两周内",
+        "本科生",
+    )
+    constraints.extend(marker for marker in markers if marker in message)
+    expected_output = next(
+        (value for value in ("论文", "文献综述", "开题报告", "原型系统") if value in message),
+        None,
+    )
+    research_questions: list[str] | None = None
+    if any(marker in message for marker in ("是否", "如何", "为什么", "影响", "比较")):
+        research_questions = [message.strip()]
+    methods: list[str] | None = None
+    data_requirements: str | None = None
+    if (
+        profile.context
+        and not (profile.methods or profile.data_requirements)
+        and active_question
+        and _asks_for_data_or_method(active_question)
+        and not _is_uncertainty(message)
+    ):
+        method_names = [
+            method
+            for marker, method in (
+                ("问卷", "问卷"),
+                ("访谈", "访谈"),
+                ("对照实验", "对照实验"),
+            )
+            if marker in message
+        ]
+        if "实验" in message and "对照实验" not in message:
+            method_names.append("实验")
+        methods = list(dict.fromkeys(method_names)) or None
+        if methods is None or any(
+            marker in message for marker in ("数据", "材料", "案例", "样本")
+        ):
+            data_requirements = message.strip()
+    return ResearchProfilePatch(
+        topic=topic,
+        context=context,
+        methods=methods,
+        data_requirements=data_requirements,
+        constraints=constraints or None,
+        expected_output=expected_output,
+        research_questions=research_questions,
+    )
+
+
+def _apply_patch_only(
+    profile: ResearchProfile,
+    patch: ResearchProfilePatch,
+) -> ResearchProfile:
+    decision = ResearchConversationDecision(
+        reply="继续澄清。",
+        intent="clarify",
+        profile_patch=patch,
+    )
+    return _apply_decision(profile, decision)
+
+
+def _next_dialogue_step(
+    profile: ResearchProfile,
+) -> tuple[str, list[str], list[str]]:
+    if not profile.topic:
+        return (
+            "先不考虑正式题目：你最近遇到的哪个现象、问题或项目最让你想继续了解？",
+            ["从课程或项目出发", "从感兴趣的技术出发", "先比较几个方向"],
+            ["尚未识别初步研究主题"],
+        )
+    if not (profile.research_questions or profile.candidate_questions):
+        return (
+            f"围绕“{profile.topic}”，你更想比较效果、解释原因，还是解决一个具体问题？",
+            ["比较不同方案", "分析影响因素", "解决实际问题"],
+            ["研究主题已有，但研究问题还没有收窄"],
+        )
+    if not profile.context:
+        return (
+            "这个问题准备放在哪类人群、数据、课程或项目场景中研究？",
+            ["公开数据集", "真实课程或用户", "已有项目案例"],
+            ["研究对象或场景尚未确认"],
+        )
+    if not (profile.methods or profile.data_requirements):
+        return (
+            "为了判断是否做得动，你现在能获得哪些数据、样本或项目材料？",
+            ["只能使用公开材料", "可以做问卷或访谈", "可以运行对照实验"],
+            ["数据可得性和实施路径尚未确认"],
+        )
+    return (
+        "要继续收窄研究问题，还是先检查当前研究画像并准备探索性检索？",
+        ["继续收窄", "检查研究画像", "准备探索性检索"],
+        list(profile.uncertainties),
+    )
+
+
+def _narrowing_step(
+    profile: ResearchProfile,
+) -> tuple[str, list[str], list[str]]:
+    """Ask a useful unresolved dimension instead of repeating the completion choice."""
+    if not profile.motivation:
+        return (
+            "你希望这项研究最终解释什么现象，或帮助解决什么实际问题？",
+            ["解释行为或机制", "比较不同方案效果", "改进一个实际项目"],
+            ["研究动机和尚未解决的问题需要进一步明确"],
+        )
+    if not profile.research_questions and profile.candidate_questions:
+        return (
+            "这些候选问题中，你最希望优先验证哪一个？也可以直接改写成自己的问题。",
+            list(profile.candidate_questions[:3]),
+            ["候选研究问题尚未由用户确认"],
+        )
+    if not profile.methods:
+        return (
+            "基于现有场景和数据条件，你倾向用什么方法分析或验证这个问题？",
+            ["案例比较", "问卷或访谈", "实验或仿真"],
+            ["研究方法尚未明确"],
+        )
+    if not profile.evidence_preferences:
+        return (
+            "后续检索时，你希望优先参考哪些类型的可信来源？",
+            ["同行评审期刊", "高质量会议论文", "权威机构报告"],
+            ["证据来源偏好尚未明确"],
+        )
+    if not profile.time_scope:
+        return (
+            "你希望研究和文献证据重点覆盖哪个时间范围？",
+            ["近三年", "近五年", "不限年份但优先经典与最新研究"],
+            ["研究和证据的时间范围尚未明确"],
+        )
+    return (
+        "目前画像已经较完整。你还想进一步比较哪个变量、对象或边界条件？",
+        ["细化研究变量", "缩小研究对象", "检查研究画像"],
+        list(profile.uncertainties),
+    )
+
+
+def _requests_prepare_search(message: str) -> bool:
+    normalized = message.replace(" ", "")
+    return any(
+        marker in normalized
+        for marker in (
+            "准备探索性检索",
+            "开始探索性检索",
+            "准备检索",
+            "开始检索",
+            "搜索文献",
+            "检索文献",
+        )
+    )
+
+
+def _requests_profile_review(message: str) -> bool:
+    normalized = message.replace(" ", "")
+    return any(marker in normalized for marker in ("检查研究画像", "查看研究画像", "总结画像"))
+
+
+def _requests_continue_narrowing(message: str) -> bool:
+    normalized = message.replace(" ", "")
+    return any(marker in normalized for marker in ("继续收窄", "继续细化", "继续澄清"))
+
+
+def _profile_review_reply(profile: ResearchProfile) -> str:
+    lines = ["请检查当前科研画像："]
+    for label, value in (
+        ("研究主题", profile.topic),
+        ("研究动机", profile.motivation),
+        ("对象与场景", profile.context),
+        ("方法路径", "、".join(profile.methods) or None),
+        ("数据需求", profile.data_requirements),
+        ("预期产出", profile.expected_output),
+    ):
+        lines.append(f"- {label}：{value or '尚未明确'}")
+    if profile.uncertainties:
+        lines.append("- 待确认：" + "；".join(profile.uncertainties))
+    return "\n".join(lines)
+
+
+def _is_uncertainty(message: str) -> bool:
+    normalized = message.replace(" ", "")
+    return any(
+        marker in normalized
+        for marker in ("不知道", "不清楚", "没想好", "帮我分析", "帮我推荐")
+    )
+
+
+def _asks_for_context(question: str) -> bool:
+    return "哪类人群" in question or "场景中研究" in question
+
+
+def _asks_for_data_or_method(question: str) -> bool:
+    return "哪些数据" in question or "哪些数据、样本或项目材料" in question
+
+
+def _explicit_uncertainties(message: str) -> list[str]:
+    normalized = message.replace(" ", "")
+    uncertainties: list[str] = []
+    data_uncertainty = (
+        r"数据(?:来源|从哪里来|怎么获取)?.{0,6}"
+        r"(?:不(?:太)?清楚|不知道|没想好)"
+    )
+    if re.search(data_uncertainty, normalized):
+        uncertainties.append("数据来源或获取方式尚不清楚")
+    if _is_uncertainty(message) and not uncertainties:
+        uncertainties.append("用户表示当前方向仍不确定，需要继续共同探索")
+    return uncertainties
+
+
+__all__ = [
+    "ConversationDecisionGenerator",
+    "ConversationNotFoundError",
+    "ResearchConversationService",
+    "assess_readiness",
+]

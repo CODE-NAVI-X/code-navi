@@ -7,6 +7,7 @@ import json
 import sys
 import traceback
 from dataclasses import dataclass, field
+from getpass import getpass
 from pathlib import Path
 from typing import TextIO
 
@@ -18,6 +19,7 @@ from code_navi.context import (
     ConversationTurn,
     discover_project_root,
 )
+from code_navi.provider_config import LocalProviderConfig, write_local_provider_config
 from code_navi.providers import (
     ProviderConfigurationError,
     ProviderSettings,
@@ -211,6 +213,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     shell = subparsers.add_parser("shell", help="start the interactive question shell")
     _add_common_options(shell)
+
+    configure = subparsers.add_parser(
+        "configure-provider",
+        help="securely configure the local research model provider",
+    )
+    configure.add_argument("--project", help="project directory; defaults to discovery")
+    configure.add_argument(
+        "--provider",
+        required=True,
+        choices=("deepseek", "openai"),
+    )
+    configure.add_argument("--model", help="provider model name; required for OpenAI")
+    configure.add_argument(
+        "--base-url",
+        help="optional DeepSeek-compatible API base URL",
+    )
     return parser
 
 
@@ -246,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return EXIT_USAGE
     try:
+        if args.command == "configure-provider":
+            return _configure_provider(args)
         service = _create_service(args)
         if args.command == "shell":
             return InteractiveShell(
@@ -276,6 +296,47 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sys.stderr.write(f"runtime error: {exc}\n")
         return EXIT_RUNTIME
+
+
+def _configure_provider(args: argparse.Namespace) -> int:
+    """Prompt for a key without echoing it or placing it in shell history."""
+    root = discover_project_root(args.project)
+    config: LocalProviderConfig | None = None
+    for attempt in range(1, 4):
+        api_key = getpass(
+            f"请输入 {args.provider} API Key（粘贴后不会显示，按 Enter 确认）："
+        ).strip()
+        try:
+            config = LocalProviderConfig(
+                provider=args.provider,
+                api_key=api_key,
+                model=args.model,
+                base_url=args.base_url,
+            )
+        except ProviderConfigurationError:
+            sys.stderr.write(
+                f"未保存：本次只读取到 {len(api_key)} 个字符，API Key 看起来不完整。\n"
+                "请重新复制完整密钥，在提示处按 Ctrl+V 或单击鼠标右键粘贴；"
+                "粘贴后屏幕仍为空是正常的。\n"
+            )
+            if attempt == 3:
+                raise ProviderConfigurationError(
+                    "连续 3 次未读取到完整 API Key，请重新运行命令后再试"
+                ) from None
+            continue
+        sys.stdout.write(
+            f"已读取 {len(api_key)} 个字符并通过基础格式检查；密钥内容不会显示。\n"
+        )
+        break
+
+    assert config is not None
+    path = write_local_provider_config(root, config)
+    sys.stdout.write(
+        f"已保存 {args.provider} 本地配置：{path}\n"
+        "该文件已被 Git 忽略。请重启后端，再在页面点击“测试连接”；"
+        "只有连接测试成功才算配置完成。\n"
+    )
+    return EXIT_OK
 
 
 def _create_service(args: argparse.Namespace) -> QuestionService:

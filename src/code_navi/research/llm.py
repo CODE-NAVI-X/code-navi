@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Thread
-from types import SimpleNamespace
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from code_navi.provider_config import is_plausible_api_key
 from code_navi.providers import ProviderConfigurationError, ProviderSettings, create_provider
-from kernel.core import ContentBlock, Message
+from kernel.core import ContentBlock, Message, ProviderResult
+from kernel.core.provider import ProviderTool
 
 from .schemas import ClarificationQuestion, ResearchState
 
@@ -87,8 +89,10 @@ class DeepSeekGuidanceProvider:
 
     def __init__(self, client: object | None = None) -> None:
         api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise ProviderConfigurationError("DeepSeek research guidance requires DEEPSEEK_API_KEY")
+        if not is_plausible_api_key(api_key):
+            raise ProviderConfigurationError(
+                "DeepSeek research guidance requires a complete DEEPSEEK_API_KEY"
+            )
         if client is None and OpenAI is None:
             raise ProviderConfigurationError(
                 'DeepSeek support is not installed; run pip install -e ".[server]"'
@@ -100,12 +104,22 @@ class DeepSeekGuidanceProvider:
             max_retries=0,
         )
 
-    def complete(self, messages: tuple[Message, ...]) -> object:
+    def complete(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ProviderTool] = (),
+    ) -> ProviderResult:
+        if tools:
+            raise ProviderConfigurationError(
+                "DeepSeek research guidance does not expose tools"
+            )
         response = self.client.chat.completions.create(  # type: ignore[attr-defined]
             model=self.model,
             messages=[self._message_payload(message) for message in messages],
             temperature=0.2,
-            max_tokens=900,
+            max_tokens=1800,
+            response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "disabled"}},
         )
         try:
             content = response.choices[0].message.content
@@ -113,8 +127,9 @@ class DeepSeekGuidanceProvider:
             raise ValueError("DeepSeek response did not contain a message") from error
         if not isinstance(content, str) or not content.strip():
             raise ValueError("DeepSeek response did not contain text")
-        return SimpleNamespace(
-            message=Message("assistant", (ContentBlock("text", {"text": content}),))
+        return ProviderResult(
+            Message("assistant", (ContentBlock("text", {"text": content}),)),
+            metadata={"provider": "deepseek", "model": self.model},
         )
 
     @staticmethod
