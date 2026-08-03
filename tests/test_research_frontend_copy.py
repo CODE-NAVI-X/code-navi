@@ -6,6 +6,7 @@ PAGE = Path("frontend/app/(student)/research/page.tsx")
 WORKSPACE = Path("frontend/components/research/ResearchConversation.tsx")
 PROFILE = Path("frontend/components/research/ResearchProfilePanel.tsx")
 PROVIDER = Path("frontend/components/research/ProviderStatusCard.tsx")
+PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -74,3 +75,17 @@ def test_next_development_server_allows_documented_loopback_host() -> None:
     config_source = NEXT_CONFIG.read_text(encoding="utf-8")
 
     assert 'allowedDevOrigins: ["127.0.0.1", "localhost"]' in config_source
+
+
+def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    plan_source = PLAN.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "ResearchPlanPanel" in workspace_source
+    assert "research_plan" in workspace_source
+    assert "research-plan.v1" in api_source
+    assert "规则研究计划" in plan_source
+    assert "待确认或待验证" in plan_source
+    assert "<PlanEntry entry={item.risk} />" in plan_source
+    assert "<PlanEntry entry={item.mitigation} />" in plan_source

@@ -494,6 +494,152 @@ def test_readiness_is_explainable_instead_of_a_required_field_gate(
     assert body["recommended_action"] == "review_profile"
 
 
+def test_ready_conversation_returns_a_restorable_rules_research_plan(
+    client: TestClient,
+) -> None:
+    """A plan is derived from the dynamic profile, not the legacy questionnaire."""
+    _conversation_service.decision_generator = FakeDecisionGenerator(
+        [
+            ConversationDecisionOutcome.generated(
+                _decision(
+                    profile_patch=ResearchProfilePatch(
+                        topic="RAG 回答可信度评测",
+                        research_questions=["检索质量如何影响回答可信度？"],
+                        context="高校课程知识库",
+                        methods=["离线对照评测"],
+                        data_requirements="公开课程材料与检索日志",
+                        constraints=["两周内完成最小验证"],
+                        expected_output="研究简报与可复现评测原型",
+                    ),
+                    recommended_action="review_profile",
+                ),
+                run_id="run-plan",
+                event_count=3,
+            )
+        ]
+    )
+
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想评测 RAG 回答的可信度"},
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["ready_for_plan"] is True
+    assert body["research_plan"]["schema_version"] == "research-plan.v1"
+    assert body["research_plan"]["research_title"]["classification"] == "inference"
+    assert body["research_plan"]["two_week_mvp_plan"]
+    assert body["research_plan"]["suggested_search_keywords"]
+    assert "论文事实" in body["research_plan"]["provenance_note"]
+
+    restored = client.get(
+        f"/api/v1/research/conversations/{body['conversation_id']}"
+    )
+
+    assert restored.status_code == 200
+    assert restored.json()["research_plan"] == body["research_plan"]
+
+
+def test_incomplete_conversation_has_no_research_plan(client: TestClient) -> None:
+    response = client.post("/api/v1/research/conversations", json={})
+
+    assert response.status_code == 201
+    assert response.json()["research_plan"] is None
+
+
+@pytest.mark.parametrize(
+    ("profile_patch", "missing_label"),
+    [
+        (
+            ResearchProfilePatch(
+                motivation="提高课程知识库回答的可核验性",
+                research_questions=["检索质量如何影响回答可信度？"],
+                context="高校课程知识库",
+                methods=["离线对照评测"],
+                data_requirements="公开材料",
+                evidence_preferences=["同行评审期刊"],
+                time_scope="近三年",
+                constraints=["两周内完成"],
+                expected_output="研究简报",
+            ),
+            "研究主题",
+        ),
+        (
+            ResearchProfilePatch(
+                topic="RAG 回答可信度评测",
+                motivation="提高课程知识库回答的可核验性",
+                context="高校课程知识库",
+                methods=["离线对照评测"],
+                data_requirements="公开材料",
+                evidence_preferences=["同行评审期刊"],
+                time_scope="近三年",
+                constraints=["两周内完成"],
+                expected_output="研究简报",
+            ),
+            "研究问题",
+        ),
+    ],
+)
+def test_ready_plan_marks_missing_topic_or_question_for_verification(
+    client: TestClient,
+    profile_patch: ResearchProfilePatch,
+    missing_label: str,
+) -> None:
+    _conversation_service.decision_generator = FakeDecisionGenerator(
+        [
+            ConversationDecisionOutcome.generated(
+                _decision(profile_patch=profile_patch, recommended_action="review_profile"),
+                run_id="run-partial-plan",
+                event_count=2,
+            )
+        ]
+    )
+
+    response = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "请整理我已经明确的研究设想"},
+    )
+
+    assert response.status_code == 201
+    plan = response.json()["research_plan"]
+    assert plan["research_title"]["classification"] == "to_verify"
+    assert missing_label in plan["research_title"]["content"]
+    assert "None" not in plan["research_title"]["content"]
+
+
+def test_ready_plan_safely_bounds_a_long_profile_question(client: TestClient) -> None:
+    long_question = "问题" * 800
+    _conversation_service.decision_generator = FakeDecisionGenerator(
+        [
+            ConversationDecisionOutcome.generated(
+                _decision(
+                    profile_patch=ResearchProfilePatch(
+                        topic="RAG 回答可信度评测",
+                        research_questions=[long_question],
+                        context="高校课程知识库",
+                        methods=["离线对照评测"],
+                        data_requirements="公开材料",
+                    ),
+                    recommended_action="review_profile",
+                ),
+                run_id="run-long-plan",
+                event_count=2,
+            )
+        ]
+    )
+
+    response = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "请按这个很长的问题整理计划"},
+    )
+
+    assert response.status_code == 201
+    plan = response.json()["research_plan"]
+    assert len(plan["research_title"]["content"]) <= 1000
+    assert all(len(keyword) <= 300 for keyword in plan["suggested_search_keywords"])
+
+
 def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> None:
     decision = _decision(
         profile_patch=ResearchProfilePatch(topic="RAG 评测"),

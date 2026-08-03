@@ -47,6 +47,7 @@ GET /api/v1/research/conversations/{conversation_id}
 - `profile`：动态科研画像，包括主题、动机、候选研究问题、场景、方法、数据需求、证据偏好、时间范围、约束、预期产出、假设与不确定项；
 - `readiness`：可解释的 0–100 分成熟度、当前阶段、是否具备准备检索的条件及原因；
 - `stage` / `ready_for_plan`：`exploring`、`focusing` 或 `ready_for_plan`，只是对当前画像的建议，不是固定问卷的必填门禁；
+- `research_plan`：仅在 `ready_for_plan=true` 时返回的 `research-plan.v1`；固定包含建议题目、目标、候选方法/基线、数据/指标、两周 MVP、风险与规避、检索关键词和待确认项。除检索关键词外的结构化计划条目只允许 `inference` 或 `to_verify`，且依据仅能来自当前已校验的画像；
 - `reply`、`next_question`、`suggested_answers`：自然回复、最多一个主要追问和可选回答；
 - `candidate_questions`：可供用户比较、修改的候选科研问题；
 - `recommended_action`：继续对话、检查画像或准备检索；
@@ -77,6 +78,7 @@ GET /api/v1/research/conversations/{conversation_id}
 7. 页面恢复只读数据库，不产生新的 Agent run，避免刷新页面造成费用、重复回复或状态漂移。
 8. 用户选择上一轮建议后不得重复同一问题；若模型忽略该约束，应用层必须推进到新的澄清维度。
 9. 用户明确选择“准备探索性检索”且画像满足最低检索条件时，当前 Skill 必须结束提问，返回 `recommended_action=prepare_search`、`next_skill=academic-search`、空 `next_question`，但不得自动联网。
+10. `research_plan` 是确定性、离线的对话产物：模型不能决定其字段、完成条件或事实状态。画像不具备计划准备度时必须返回 `null`；画像中的不确定项必须保留为 `to_verify`，不得补造数据集、指标、论文或实验结论。
 
 ## Provider、超时与降级
 
@@ -103,4 +105,4 @@ pytest -p no:cacheprovider
 python -m build
 ```
 
-测试必须覆盖：自由对话创建与恢复、单轮多维提取、后续纠正、非固定成熟度、无 Key 降级、模型非法输出降级、已知信息与“不清楚”共存、404，以及经 `AgentRuntime` + `MockProvider` 完成的可审计离线运行。真实 Provider 与外部网络测试只能显式标记并单独运行。
+测试必须覆盖：自由对话创建与恢复、单轮多维提取、后续纠正、非固定成熟度、`research-plan.v1` 的离线生成与恢复、无 Key 降级、模型非法输出降级、已知信息与“不清楚”共存、404，以及经 `AgentRuntime` + `MockProvider` 完成的可审计离线运行。真实 Provider 与外部网络测试只能显式标记并单独运行。

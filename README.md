@@ -13,6 +13,7 @@ Code Navi（智教码航）是面向计算机专业学习与项目实践的通�
 - 默认离线 Mock Provider、显式启用的 OpenAI Provider 和 Event JSONL；
 - 原助学、助教、助研 `AgentSpec` 的兼容导出。
 - 对话式科研澄清后端核心：用户可自由表达、修正方向并恢复完整对话；服务维护动态科研画像和可解释成熟度，在线决策统一经 `AgentRuntime`，失败时安全降级；
+- 对话主流程的规则研究计划：科研画像达到计划准备度后，离线生成并恢复带“建议/待确认”边界的结构化计划；
 - 旧规则五字段科研 API 作为兼容层保留，不再驱动学生端主流程；
 - 对话式学生端科研页面：展示完整消息、动态科研画像、候选问题、可解释成熟度与可折叠处理摘要；支持自由输入、建议选项、会话恢复、移动端布局和明确的请求失败重试。
 - 显式、受限的学术检索：从科研画像生成可复核查询，只检索用户勾选的 OpenAlex、Crossref、arXiv，持久化可追溯 EvidenceBundle，并允许部分来源失败。
@@ -89,7 +90,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/conversations \
   -d '{"initial_message":"我想研究演化博弈法，数据来源不太清楚"}'
 ```
 
-后续向 `/api/v1/research/conversations/{conversation_id}/messages` 提交 `{"message":"..."}`，或用 GET 请求同一 `conversation_id` 恢复对话。响应包含动态 `profile`、可解释 `readiness`、候选问题、下一问、建议答案、完整消息以及 Kernel `last_run_id`。具体契约、降级边界和验收方法见 [科研澄清 Skill](docs/skills/research-clarification/SKILL.md)。
+后续向 `/api/v1/research/conversations/{conversation_id}/messages` 提交 `{"message":"..."}`，或用 GET 请求同一 `conversation_id` 恢复对话。响应包含动态 `profile`、可解释 `readiness`、候选问题、下一问、建议答案、完整消息以及 Kernel `last_run_id`。当画像处于 `ready_for_plan` 时，响应还会包含 `research_plan`：题目/问题、目标、候选方法或基线、数据或指标、两周 MVP、风险与规避、检索关键词和待确认项。它只读取用户已确认的画像，所有内容明确标为建议或待验证，不访问模型、网络或论文，也不会把推断写成论文事实。具体契约、降级边界和验收方法见 [科研澄清 Skill](docs/skills/research-clarification/SKILL.md)。
 
 学生端启动后访问 `/research`。页面只在浏览器 `localStorage` 保存 `conversation_id`，刷新时通过 GET 恢复服务端消息和最近一次 EvidenceBundle；模型回复使用不执行 HTML 的安全 Markdown 子集展示。“本轮处理过程”只展示生成方式、意图、事件数量和 Run ID 等审计摘要，不暴露或伪造内部思维链。页面不会在刷新或澄清对话时自动联网。
 

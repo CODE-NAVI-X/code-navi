@@ -43,7 +43,7 @@ Provider、工具与持久化适配器
 4. 模型只能返回 `ResearchConversationDecision`；Pydantic 校验后，应用层 reducer 才能修改画像。失败或无 Provider 时使用不伪造事实的确定性降级规则。
 5. 本地开发密钥可由 CLI 隐藏输入，或由仅接受回环地址请求的 Web 配置入口一次性提交；服务端校验后原子写入 Git 已忽略的 `.code-navi/provider.env` 并立即激活。响应永不返回密钥，浏览器不持久化密钥。部署环境继续使用宿主环境变量或外部密钥管理，并不得直接暴露本地配置入口。
 6. `research_conversation_agent` 直接加载随包交付的 `research-clarification` Skill。模型负责自适应澄清，应用层强制执行不重复建议题和显式检索交接；`academic-search` 只能在 `next_skill` 明确后由后续用户动作触发。
-7. 应用层把画像、消息以及 Kernel `run_id` 等必要关联写回 SQLite；GET 恢复不会重新运行 Agent。
+7. 应用层把画像、消息以及 Kernel `run_id` 等必要关联写回 SQLite；画像达到计划准备度时，纯规则生成器只基于已校验画像派生 `research-plan.v1`，GET 恢复不会重新运行 Agent、模型或网络。
 8. 澄清 Agent 不具备网络工具。论文检索仍是用户显式触发、独立授权的后续能力。
 
 ## 当前受限学术检索请求路径

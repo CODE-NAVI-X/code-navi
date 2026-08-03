@@ -13,6 +13,7 @@ from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
 )
+from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     CreateResearchConversationRequest,
     ResearchConversationDecision,
@@ -220,6 +221,10 @@ class ResearchConversationService:
             readiness=readiness,
             stage=readiness.stage,
             ready_for_plan=readiness.stage == "ready_for_plan",
+            research_plan=build_conversation_research_plan(
+                profile,
+                ready_for_plan=readiness.stage == "ready_for_plan",
+            ),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",
