@@ -117,10 +117,11 @@ class NotebookItemModel(Base):
 
 ```python
 # PoC 开发环境 (SQLite)
-DATABASE_URL = "sqlite:///.code-navi/learning_poc.db"
+# 默认由 code_navi.paths.application_data_dir() 生成当前机器的绝对路径；
+# 也可以通过 CODE_NAVI_DATA_DIR 或 LEARNING_DATABASE_URL 覆盖。
 
 # 生产/全量环境 (PostgreSQL)
-# DATABASE_URL = "postgresql+psycopg2://user:password@localhost:5432/codenavi_db"
+# LEARNING_DATABASE_URL = "postgresql+psycopg2://user:password@db-host:5432/codenavi_db"
 ```
 由于采用了 SQLAlchemy 统一模型，**上层 Service 与 API 路由逻辑不需要修改一行代码**！
 

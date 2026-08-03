@@ -1,78 +1,125 @@
-/** Client for the rules-driven research clarification API. */
+/** Browser client for the versioned conversational research API. */
 
-export type PlanClassification = "inference" | "to_verify";
-export type EvidenceClassification = "fact" | "inference" | "to_verify";
+export const RESEARCH_CONVERSATION_SCHEMA = "research-conversation.v1" as const;
 
-export interface ResearchState {
-  research_domain: string | null;
-  core_question: string | null;
-  data_and_method: string | null;
-  constraints: string | null;
-  expected_deliverable: string | null;
+export type ResearchStage = "exploring" | "focusing" | "ready_for_plan";
+export type GenerationMode = "agent" | "rules" | "rules_fallback";
+export type RecommendedAction =
+  | "continue_dialogue"
+  | "review_profile"
+  | "prepare_search";
+
+export interface ResearchProfile {
+  topic: string | null;
+  motivation: string | null;
+  research_questions: string[];
+  candidate_questions: string[];
+  context: string | null;
+  methods: string[];
+  data_requirements: string | null;
+  evidence_preferences: string[];
+  time_scope: string | null;
+  constraints: string[];
+  expected_output: string | null;
+  assumptions: string[];
+  uncertainties: string[];
 }
 
-export interface ClarificationQuestion {
-  field: keyof ResearchState;
-  label: string;
-  question: string;
-  options: [string, string, string];
+export interface ResearchReadiness {
+  score: number;
+  stage: ResearchStage;
+  can_prepare_search: boolean;
+  reasons: string[];
 }
 
-export interface ResearchPlanEntry {
+export interface ResearchConversationMessage {
+  message_id: string;
+  role: "user" | "assistant";
   content: string;
-  classification: PlanClassification;
-  basis: string;
+  created_at: string;
+  generation_mode: GenerationMode | null;
+  run_id: string | null;
+  event_count: number;
+  intent: string | null;
+  next_question: string | null;
+  suggested_answers: string[];
+  candidate_questions: string[];
+  recommended_action: RecommendedAction | null;
 }
 
-export interface ResearchPlanRisk {
-  risk: ResearchPlanEntry;
-  mitigation: ResearchPlanEntry;
-}
-
-export interface ResearchPlan {
-  research_title: ResearchPlanEntry;
-  research_goal: ResearchPlanEntry;
-  candidate_methods_or_baselines: ResearchPlanEntry[];
-  suggested_datasets_or_metrics: ResearchPlanEntry[];
-  two_week_mvp_plan: ResearchPlanEntry[];
-  risks_and_mitigations: ResearchPlanRisk[];
-  suggested_search_keywords: string[];
-  provenance_note: string;
-}
-
-export interface ResearchTurn {
-  field: keyof ResearchState;
-  value: string;
-  input_mode: "initial_description" | "free_text" | "recommended_option" | "llm_suggested";
-  recorded_at: string;
-}
-
-export interface ResearchSessionResponse {
-  session_id: string;
-  state: ResearchState;
-  missing_fields: (keyof ResearchState)[];
-  next_question: ClarificationQuestion | null;
-  completed: boolean;
+export interface ResearchConversationResponse {
+  schema_version: typeof RESEARCH_CONVERSATION_SCHEMA;
+  active_skill: "research-clarification";
+  next_skill: "academic-search" | null;
+  conversation_id: string;
+  profile: ResearchProfile;
+  readiness: ResearchReadiness;
+  stage: ResearchStage;
+  ready_for_plan: boolean;
   reply: string;
-  generation_mode: "rules" | "llm" | "rules_fallback";
-  research_brief: ResearchState | null;
-  research_plan: ResearchPlan | null;
-  turns: ResearchTurn[];
+  generation_mode: GenerationMode;
+  recommended_action: RecommendedAction;
+  next_question: string | null;
+  suggested_answers: string[];
+  candidate_questions: string[];
+  messages: ResearchConversationMessage[];
+  last_run_id: string | null;
 }
 
-export interface EvidenceStatement {
-  content: string;
-  classification: EvidenceClassification;
-  source_url: string | null;
-  basis: string;
+export interface ProviderStatusResponse {
+  schema_version: "research-provider.v1";
+  provider: string;
+  model: string | null;
+  configured: boolean;
+  mode: "model" | "rules";
+  configuration_method: "local_file" | "server_environment";
+  configuration_issue: "invalid_api_key" | "missing_model" | null;
 }
 
-export interface AcademicSourceStatus {
-  source: string;
-  status: string;
-  source_url: string | null;
-  accessed_at: string;
-  reason: string | null;
+export interface ProviderConnectionTestResponse {
+  schema_version: "research-provider-test.v1";
+  connected: boolean;
+  provider: string;
+  model: string | null;
+  latency_ms: number;
+  message: string;
+  run_id: string | null;
+  failure_code:
+    | "invalid_credentials"
+    | "model_unavailable"
+    | "timeout"
+    | "network_error"
+    | "invalid_response"
+    | "provider_error"
+    | null;
+}
+
+export interface ConfigureProviderRequest {
+  provider: "deepseek" | "openai";
+  api_key: string;
+  model: string | null;
+  base_url: string | null;
+}
+
+export type AcademicSourceId = "arxiv" | "openalex" | "crossref";
+
+export interface ResearchSearchSource {
+  id: AcademicSourceId;
+  display_name: string;
+  homepage: string;
+  enabled: boolean;
+  scope: string;
+}
+
+export interface ResearchSearchPlan {
+  schema_version: "research-search-plan.v1";
+  conversation_id: string;
+  query: string;
+  alternative_queries: string[];
+  sources: ResearchSearchSource[];
+  evidence_scope: "metadata_and_abstract_only";
+  user_confirmation_required: true;
+  provenance_note: string;
 }
 
 export interface AcademicPaperResult {
@@ -83,27 +130,43 @@ export interface AcademicPaperResult {
   url: string;
   identifier: string | null;
   abstract_excerpt: string | null;
-  accessed_at: string;
   information_scope: "metadata_and_abstract_only";
-  metadata_evidence: EvidenceStatement[];
-  supporting_snippets: EvidenceStatement[];
-  relevance: EvidenceStatement;
-  verification: EvidenceStatement;
   full_text_available: false;
 }
 
-export interface EvidenceBundle {
-  session_id: string;
+export interface AcademicSourceStatus {
+  source: string;
+  status:
+    | "success"
+    | "no_results"
+    | "network_error"
+    | "timeout"
+    | "unavailable"
+    | "disabled"
+    | "not_allowed"
+    | "dependency_missing";
+  source_url: string | null;
+  accessed_at: string;
+  reason: string | null;
+  duration_ms: number;
+}
+
+export interface ConversationEvidenceBundle {
+  schema_version: "academic-evidence.v1";
+  bundle_id: string;
+  conversation_id: string;
   query: string;
+  requested_sources: string[];
   allowed_sources: string[];
   queried_sources: string[];
   source_statuses: AcademicSourceStatus[];
   searched_at: string;
   papers: AcademicPaperResult[];
-  source_links: (string | null)[];
+  source_links: Array<string | null>;
   failure_reasons: string[];
   provenance_note: string;
-  tool_audit: { required_permissions?: string[]; grant_check?: string } | null;
+  tool_audit: Record<string, unknown> | null;
+  cache_hit: boolean;
 }
 
 export class ResearchApiError extends Error {
@@ -116,76 +179,184 @@ export class ResearchApiError extends Error {
   }
 }
 
-const API_BASE =
+const API_BASE = (
   process.env.NEXT_PUBLIC_CODE_NAVI_API_URL ??
   process.env.NEXT_PUBLIC_API_BASE ??
-  "http://localhost:8000";
+  "http://127.0.0.1:8000"
+).replace(/\/$/, "");
 
-export async function createResearchSession(): Promise<ResearchSessionResponse> {
-  return request<ResearchSessionResponse>("/api/v1/research/sessions", {
+const REQUEST_TIMEOUT_MS = 10_000;
+
+export async function createResearchConversation(
+  initialMessage?: string,
+): Promise<ResearchConversationResponse> {
+  const data = await request<unknown>("/api/v1/research/conversations", {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ initial_message: initialMessage || null }),
+  });
+  return validateConversationResponse(data);
+}
+
+export async function getResearchConversation(
+  conversationId: string,
+): Promise<ResearchConversationResponse> {
+  const data = await request<unknown>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}`,
+  );
+  return validateConversationResponse(data);
+}
+
+export async function sendResearchMessage(
+  conversationId: string,
+  message: string,
+): Promise<ResearchConversationResponse> {
+  const data = await request<unknown>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/messages`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
+  return validateConversationResponse(data);
+}
+
+export async function getResearchProviderStatus(): Promise<ProviderStatusResponse> {
+  return request<ProviderStatusResponse>("/api/v1/research/provider/status");
+}
+
+export async function testResearchProvider(): Promise<ProviderConnectionTestResponse> {
+  return request<ProviderConnectionTestResponse>("/api/v1/research/provider/test", {
+    method: "POST",
+  }, 20_000);
+}
+
+export async function configureResearchProvider(
+  configuration: ConfigureProviderRequest,
+): Promise<ProviderStatusResponse> {
+  return request<ProviderStatusResponse>("/api/v1/research/provider/configuration", {
+    method: "PUT",
+    body: JSON.stringify(configuration),
   });
 }
 
-export async function getResearchSession(
-  sessionId: string,
-): Promise<ResearchSessionResponse> {
-  return request<ResearchSessionResponse>(
-    `/api/v1/research/sessions/${encodeURIComponent(sessionId)}`,
+export async function getResearchSearchPlan(
+  conversationId: string,
+): Promise<ResearchSearchPlan> {
+  return request<ResearchSearchPlan>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/search-plan`,
   );
 }
 
-export async function submitResearchTurn(
-  sessionId: string,
-  payload: { answer: string } | { selected_option: string },
-): Promise<ResearchSessionResponse> {
-  return request<ResearchSessionResponse>(
-    `/api/v1/research/sessions/${encodeURIComponent(sessionId)}/turns`,
-    { method: "POST", body: JSON.stringify(payload) },
+export async function searchResearchEvidence(
+  conversationId: string,
+  query: string,
+  sources: AcademicSourceId[],
+): Promise<ConversationEvidenceBundle> {
+  return request<ConversationEvidenceBundle>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles`,
+    {
+      method: "POST",
+      body: JSON.stringify({ query, sources }),
+    },
+    25_000,
   );
 }
 
-export async function createEvidenceBundle(
-  sessionId: string,
-  payload: { query?: string; sources: ["arxiv"] },
-): Promise<EvidenceBundle> {
-  return request<EvidenceBundle>(
-    `/api/v1/research/sessions/${encodeURIComponent(sessionId)}/evidence-bundles`,
-    { method: "POST", body: JSON.stringify(payload) },
+export async function listResearchEvidence(
+  conversationId: string,
+): Promise<ConversationEvidenceBundle[]> {
+  return request<ConversationEvidenceBundle[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles`,
   );
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${API_BASE}${path}`;
+function validateConversationResponse(data: unknown): ResearchConversationResponse {
+  if (!data || typeof data !== "object") {
+    throw new ResearchApiError(502, "科研服务返回了无法识别的数据。请刷新后重试。");
+  }
+  const candidate = data as Record<string, unknown>;
+  if (candidate.schema_version !== RESEARCH_CONVERSATION_SCHEMA) {
+    throw new ResearchApiError(
+      502,
+      `科研服务版本不兼容：需要 ${RESEARCH_CONVERSATION_SCHEMA}。`,
+    );
+  }
+  if (
+    typeof candidate.conversation_id !== "string" ||
+    !candidate.profile ||
+    typeof candidate.profile !== "object" ||
+    !Array.isArray(candidate.messages)
+  ) {
+    throw new ResearchApiError(502, "科研服务响应缺少会话、画像或消息数据。");
+  }
+  return data as ResearchConversationResponse;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
   let response: Response;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetch(url, {
+    response = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...init?.headers,
+      },
     });
   } catch (error) {
-    throw new ResearchApiError(0, `无法连接科研服务：${String(error)}`);
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ResearchApiError(
+        0,
+        `科研服务在 ${timeoutMs / 1000} 秒内没有响应。请确认后端已启动后重试。`,
+      );
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ResearchApiError(
+      0,
+      `无法连接科研服务（${API_BASE}）。请确认后端已启动。${reason ? ` ${reason}` : ""}`,
+    );
+  } finally {
+    window.clearTimeout(timeout);
   }
 
   if (!response.ok) {
     throw new ResearchApiError(
       response.status,
-      (await errorDetail(response)) ?? `科研服务请求失败（${response.status}）`,
+      (await errorDetail(response)) ?? `科研服务请求失败（HTTP ${response.status}）。`,
     );
   }
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new ResearchApiError(502, "科研服务没有返回有效 JSON。");
+  }
 }
 
 async function errorDetail(response: Response): Promise<string | null> {
   try {
     const body: unknown = await response.json();
-    if (body && typeof body === "object" && "detail" in body) {
-      const detail = (body as { detail?: unknown }).detail;
-      return typeof detail === "string" ? detail : null;
+    if (!body || typeof body !== "object" || !("detail" in body)) return null;
+    const detail = (body as { detail?: unknown }).detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      const messages = detail.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const validation = item as { loc?: unknown; msg?: unknown };
+        if (typeof validation.msg !== "string") return [];
+        const location = Array.isArray(validation.loc)
+          ? validation.loc.slice(1).join(" → ")
+          : "请求内容";
+        return [`${location || "请求内容"}：${validation.msg}`];
+      });
+      return messages.length ? messages.join("；") : null;
     }
   } catch {
-    // Keep the status-based fallback when a proxy returns a non-JSON response.
+    // A proxy may return HTML or an empty body. Keep the status fallback.
   }
   return response.statusText || null;
 }

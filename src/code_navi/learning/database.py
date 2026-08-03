@@ -14,9 +14,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from code_navi.paths import application_data_dir, sqlite_file_url
+
 DATABASE_URL: str = os.environ.get(
     "LEARNING_DATABASE_URL",
-    "sqlite:///.code-navi/learning_poc.db",
+    sqlite_file_url(application_data_dir() / "learning_poc.db"),
 )
 
 _engine_kwargs: dict = {}

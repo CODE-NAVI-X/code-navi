@@ -78,7 +78,7 @@ def _question() -> object:
 
 def _configure_deepseek(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-value-123456")
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://deepseek.example/v1")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-test")
 
@@ -119,10 +119,12 @@ def test_deepseek_provider_uses_chat_completions_and_existing_environment_names(
     monkeypatch.setattr("code_navi.research.llm.OpenAI", FakeClient)
 
     provider = DeepSeekGuidanceProvider()
-    provider.complete((Message("user", (ContentBlock("text", {"text": "{}"}),)),))
+    result = provider.complete(
+        (Message("user", (ContentBlock("text", {"text": "{}"}),)),)
+    )
 
     assert calls["client"] == {
-        "api_key": "test-key",
+        "api_key": "test-key-value-123456",
         "base_url": "https://deepseek.example/v1",
         "max_retries": 0,
     }
@@ -130,8 +132,12 @@ def test_deepseek_provider_uses_chat_completions_and_existing_environment_names(
         "model": "deepseek-test",
         "messages": [{"role": "user", "content": "{}"}],
         "temperature": 0.2,
-        "max_tokens": 900,
+        "max_tokens": 1800,
+        "response_format": {"type": "json_object"},
+        "extra_body": {"thinking": {"type": "disabled"}},
     }
+    assert result.metadata == {"provider": "deepseek", "model": "deepseek-test"}
+    assert result.to_json()["message"]["role"] == "assistant"
 
 
 def test_deepseek_defaults_and_cli_provider_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,7 +155,7 @@ def test_deepseek_defaults_and_cli_provider_boundary(monkeypatch: pytest.MonkeyP
             )
 
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-value-123456")
     monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
     monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
     monkeypatch.setattr("code_navi.research.llm.OpenAI", FakeClient)
@@ -158,7 +164,7 @@ def test_deepseek_defaults_and_cli_provider_boundary(monkeypatch: pytest.MonkeyP
     provider.complete((Message("user", (ContentBlock("text", {"text": "{}"}),)),))
 
     assert calls["client"] == {
-        "api_key": "test-key",
+        "api_key": "test-key-value-123456",
         "base_url": DEEPSEEK_DEFAULT_BASE_URL,
         "max_retries": 0,
     }

@@ -12,22 +12,64 @@ Code Navi（智教码航）是面向计算机专业学习与项目实践的通�
 - README、可选 `.code-navi/task.json`、显式文件片段和上一条回答的受限上下文装配；
 - 默认离线 Mock Provider、显式启用的 OpenAI Provider 和 Event JSONL；
 - 原助学、助教、助研 `AgentSpec` 的兼容导出。
-- 规则驱动、可恢复的科研澄清 API：在应用层 SQLite 中收集五个固定字段，并生成研究简报和明确标注建议/待验证项的研究计划；
-- 学生端科研页面：可恢复会话、选择推荐项或自由输入，并展示研究简报与规则研究计划；已配置模型时会明确展示“模型个性化建议”，失败时提示“规则降级”。
+- 对话式科研澄清后端核心：用户可自由表达、修正方向并恢复完整对话；服务维护动态科研画像和可解释成熟度，在线决策统一经 `AgentRuntime`，失败时安全降级；
+- 旧规则五字段科研 API 作为兼容层保留，不再驱动学生端主流程；
+- 对话式学生端科研页面：展示完整消息、动态科研画像、候选问题、可解释成熟度与可折叠处理摘要；支持自由输入、建议选项、会话恢复、移动端布局和明确的请求失败重试。
+- 显式、受限的学术检索：从科研画像生成可复核查询，只检索用户勾选的 OpenAlex、Crossref、arXiv，持久化可追溯 EvidenceBundle，并允许部分来源失败。
 
-科研澄清的字段顺序、状态保存、会话恢复和完成条件始终由规则控制。若已显式配置 OpenAI 或 DeepSeek Provider 的运行环境变量，模型只会生成经过 JSON 校验的简短回复、下一问与三个推荐项；它不能改变字段或跳过流程。没有 Key、调用超时/网络失败或输出不合法时，接口不中断并自动使用固定规则问题和选项。规则研究计划仅根据用户完成的五字段生成，所有内容均标记为“推断建议”或“待验证”，不代表论文事实或已验证结论。完成计划后，用户可主动调用受限学术检索：当前仅允许 arXiv 元数据/摘要，并返回带来源状态、访问时间及事实/推断/待验证标记的 EvidenceBundle；不会默认全网搜索、下载正文或生成论文证据卡。该 API 不会自动调用现有 `research_coach_agent`。
+新的 `/api/v1/research/conversations` 已成为学生端主流程。它没有固定问题顺序：模型可以在一轮中提取多个用户明确表达的信息、给出候选科研问题并修正已有画像，但只能提交经过 Pydantic 校验的结构化决策，不能把猜测写成事实，也不能自动搜索。无 Key、调用超时、网络失败或输出不合法时，对话会使用确定性规则继续，不返回 500。旧的 `/api/v1/research/sessions` 五字段流程只作为 API 兼容层保留，不再由科研页面调用；弃用和数据清理另行安排。
+
+科研澄清和学术检索是两个独立 Skill。准备检索计划不会联网；只有用户在页面确认查询词和来源后，系统才通过具有 `READ + NETWORK` 权限的 `academic_search` Tool 并行访问允许来源。结果只包含元数据和来源提供的摘要，按会话写入 SQLite；相同会话、规范化查询词和相同来源组合在默认一小时内复用缓存。不会默认全网搜索、下载正文或声称已阅读全文。
 
 ## 快速开始
 
-前置条件：Python 3.11+。
+前置条件：Python 3.11+、Node.js 20.9+ 与 npm。仓库可以放在任意磁盘和目录，不要求固定盘符。
+
+Windows PowerShell：
+
+```powershell
+python -m venv .venv
+\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev,server]"
+Set-Location frontend
+npm ci
+Set-Location ..
+python scripts/dev.py
+```
+
+macOS / Linux：
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -e ".[dev,server]"
-pytest
-ruff check .
+cd frontend
+npm ci
+cd ..
+python scripts/dev.py
+```
 
+Windows 也可以双击 `dev-start.cmd`；脚本始终以自身所在目录作为项目目录，不依赖终端当前路径。启动后访问 `http://127.0.0.1:3000/research`。`Ctrl+C` 可停止跨平台启动器中的两个服务，Windows 双窗口启动方式可使用 `dev-stop.cmd`。
+
+提交前质量检查：
+
+```bash
+ruff check .
+pytest --basetemp .quality-tmp
+python -m build
+cd frontend
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+SQLite、会话和本地 Provider 配置默认写入当前项目的 `.code-navi/`。代码会在运行时把它解析为当前电脑上的绝对路径；也可以设置 `CODE_NAVI_DATA_DIR` 指向独立数据目录，或设置 `CODE_NAVI_PROJECT_ROOT` 指定项目根目录。前端访问其他地址的后端时，在 `frontend/.env.local` 配置 `NEXT_PUBLIC_CODE_NAVI_API_URL`；后端跨域来源用 `CODE_NAVI_CORS_ORIGINS` 配置。
+
+CLI 可单独使用：
+
+```bash
 # 离线验证上下文与运行链路
 code-navi ask "这个项目的目标是什么？"
 
@@ -35,9 +77,25 @@ code-navi ask "这个项目的目标是什么？"
 code-navi
 ```
 
-Linux/macOS 请使用 `source .venv/bin/activate` 激活虚拟环境。
+## 对话式科研澄清 API（新主流程）
 
-## 科研澄清 API（规则控流程 + 可选模型文案）
+启动服务后，可直接用一句自然语言创建会话；没有模型或 API Key 时会自动使用离线规则：
+
+```bash
+uvicorn code_navi.server:app --reload
+
+curl -X POST http://127.0.0.1:8000/api/v1/research/conversations \
+  -H "Content-Type: application/json" \
+  -d '{"initial_message":"我想研究演化博弈法，数据来源不太清楚"}'
+```
+
+后续向 `/api/v1/research/conversations/{conversation_id}/messages` 提交 `{"message":"..."}`，或用 GET 请求同一 `conversation_id` 恢复对话。响应包含动态 `profile`、可解释 `readiness`、候选问题、下一问、建议答案、完整消息以及 Kernel `last_run_id`。具体契约、降级边界和验收方法见 [科研澄清 Skill](docs/skills/research-clarification/SKILL.md)。
+
+学生端启动后访问 `/research`。页面只在浏览器 `localStorage` 保存 `conversation_id`，刷新时通过 GET 恢复服务端消息和最近一次 EvidenceBundle；模型回复使用不执行 HTML 的安全 Markdown 子集展示。“本轮处理过程”只展示生成方式、意图、事件数量和 Run ID 等审计摘要，不暴露或伪造内部思维链。页面不会在刷新或澄清对话时自动联网。
+
+科研页面由 `research-clarification` Skill 驱动而不是固定问卷。用户选择建议答案后必须推进到新的澄清维度；画像具备最低检索条件且用户明确选择“准备探索性检索”时，对话停止追问并返回 `next_skill=academic-search`。随后页面展示由画像生成的查询词和来源选项，仍需用户再次点击执行。
+
+## 兼容科研澄清 API（旧五字段流程）
 
 启动服务后可创建会话；无模型或 API Key 也可使用：
 
@@ -51,9 +109,24 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/sessions \
 
 客户端可在每轮提交 `selected_option` 或 `answer` 之一，并使用同一个 `session_id` 恢复会话。响应中的 `generation_mode` 为 `llm`、`rules` 或 `rules_fallback`，并配有 `reply`；下一题仍由规则确定字段，模型只可更换已校验的文案和固定三个选项。用户输入“我不知道，有什么推荐吗”时，只有模型返回通过校验的 `suggested_value` 才会填入当前字段；无模型或无有效建议时该字段保持待填写，绝不会把“不知道”写入研究数据。五个字段齐全后，响应中的 `research_brief` 和 `research_plan` 才会出现；`research_plan` 不访问外部资料，每个条目都带有 `inference` 或 `to_verify` 标记。学生端页面读取 `NEXT_PUBLIC_CODE_NAVI_API_URL`（或 `NEXT_PUBLIC_API_BASE`）连接后端，并仅在浏览器 `localStorage` 保存科研会话 ID，不保存密钥。具体契约见 [科研澄清 Skill](docs/skills/research-clarification/SKILL.md)。
 
-### DeepSeek 个性化科研追问（可选）
+### DeepSeek 对话决策（可选）
 
-DeepSeek 仅用于科研澄清的个性化回复、下一问文案和三个推荐项；五字段、字段顺序、会话恢复和完成判定仍由规则控制。使用其 OpenAI-compatible `chat/completions` 接口前，在**运行服务的环境**中设置：
+新对话流程使用 DeepSeek 生成经过严格 JSON 校验的画像 patch、自然回复、候选问题和下一问；画像写入、成熟度、会话恢复与搜索权限仍由应用规则控制。使用其 OpenAI-compatible `chat/completions` 接口前，在**运行服务的环境**中设置：
+
+本地演示推荐在 `/research` 页面顶部打开“科研模型连接”，点击“输入 API Key”，填写 Provider、Key、模型和 Base URL 后选择“保存并测试连接”。该入口只接受来自本机回环地址的请求；Key 只随本机请求发送一次，服务端原子写入当前项目 Git 已忽略的 `.code-navi/provider.env`，随后立即在当前进程生效。响应不会回显 Key，页面不会写入 `localStorage`，保存成功后密码框立即清空。
+
+不希望 Key 经过浏览器时，仍可使用隐藏输入命令：
+
+```powershell
+Set-Location <你的-code-navi-目录>
+.\.venv\Scripts\code-navi.exe configure-provider --provider deepseek
+```
+
+DeepSeek 默认模型为 `deepseek-v4-flash`。网页配置调用 `PUT /api/v1/research/provider/configuration`，保存后会立即激活并自动测试；也可以分别调用 `GET /api/v1/research/provider/status` 和 `POST /api/v1/research/provider/test`。所有响应都不返回 Key。CLI 修改配置后，已运行服务仍建议重启。
+
+网页和 CLI 都会拒绝明显截断、包含空白的 Key 或非 HTTPS Base URL。页面区分“已配置（待验证）”“连接正常”“密钥被拒绝”“模型不可用”“网络超时”和“响应结构无效”，不能仅凭配置文件存在就宣称模型可用。
+
+部署环境仍可直接使用环境变量：
 
 ```bash
 export CODE_NAVI_PROVIDER=deepseek
@@ -63,11 +136,25 @@ export DEEPSEEK_MODEL=deepseek-v4-flash               # 可省略
 uvicorn code_navi.server:app --reload
 ```
 
-Windows PowerShell 可用 `$env:CODE_NAVI_PROVIDER = "deepseek"` 等对应语法。该设置使科研澄清使用 DeepSeek 个性化文案；未显式选择 CLI Provider 的通用 CLI 仍保持离线 Mock。既有学习模块也使用同名 `DEEPSEEK_*` 环境变量，但仅在调用其学习解释入口时生效，本 PR 未改变该既有行为。Key 只能通过运行环境传入，不能写入仓库、`.env`、数据库、浏览器或客户端请求。无 Key、8 秒超时、网络/Provider 失败、非 JSON、字段缺失或不是三个选项时，页面会显示规则生成或规则降级，科研会话不会中断。DeepSeek 不会自动触发受限学术检索；检索仍必须由用户主动点击。
+Windows PowerShell 可用 `$env:CODE_NAVI_PROVIDER = "deepseek"` 等对应语法。未显式选择 Provider 时科研对话保持基础规则模式，通用 CLI 仍保持离线 Mock。Key 只能持久化在服务端环境或项目内 Git 已忽略的 `.code-navi/provider.env`，不能写入仓库、SQLite、localStorage、日志或 Event metadata。本机 UI 配置会把 Key 放入一次 HTTPS/localhost 请求体，因此只用于单机开发；公开部署必须设置 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`，或替换为带身份认证、TLS 和专用密钥管理的管理端。无 Key、10 秒超时、网络/Provider 失败或结构化输出不合法时，页面明确显示基础规则或规则接管，科研会话不会中断。DeepSeek 不会自动触发学术检索。
 
 ### 显式受限学术检索
 
-计划完成后，学生端页面的“查询 arXiv”按钮才会发起网络请求；也可直接调用：
+新对话主流程先用只读接口生成检索计划（不会联网）：
+
+```bash
+curl http://127.0.0.1:8000/api/v1/research/conversations/<conversation_id>/search-plan
+```
+
+用户确认查询词与来源后才执行检索：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/research/conversations/<conversation_id>/evidence-bundles \
+  -H "Content-Type: application/json" \
+  -d '{"sources":["openalex","crossref","arxiv"]}'
+```
+
+已保存结果可通过 GET 同一路径恢复，不会访问外部来源。旧会话兼容接口仍可调用：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/research/sessions/<session_id>/evidence-bundles \
@@ -75,7 +162,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/sessions/<session_id>/evidenc
   -d '{"query":"教育场景 人工智能","sources":["arxiv"]}'
 ```
 
-该接口通过需要 `READ + NETWORK` 的 `academic_search` Tool 执行，返回的 EvidenceBundle 仅限允许来源的元数据和摘要。`fact` 只表示来源直接支持的元数据/摘要，关键词关联一律是 `inference`，实验设置和结论是 `to_verify`。可通过 `CODE_NAVI_ACADEMIC_ARXIV_ENABLED=false` 禁用 arXiv；来源不可用时返回空结果和原因。不会下载论文正文、生成论文证据卡、使用 MCP 或保存密钥。详见 [学术检索 Skill](docs/skills/academic-search/SKILL.md)。
+检索通过需要 `READ + NETWORK` 的 `academic_search` Tool 执行。EvidenceBundle 仅含允许来源的元数据和摘要；`fact` 只表示来源直接支持的内容，关键词关联是 `inference`，实验设置和结论是 `to_verify`。任一来源不可用时会保留其他来源结果，并返回每个来源的状态、耗时和安全失败原因。可用 `CODE_NAVI_ACADEMIC_<SOURCE>_ENABLED=false` 分别禁用来源，用 `CODE_NAVI_ACADEMIC_CACHE_TTL_SECONDS` 调整缓存，并通过标准 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量配置代理。详见 [学术检索 Skill](docs/skills/academic-search/SKILL.md) 和 [.env.example](.env.example)。
 
 ## Docker 部署
 

@@ -152,6 +152,35 @@ def test_unallowed_source_is_never_called() -> None:
     assert source.calls == 0
 
 
+def test_partial_source_failure_keeps_successful_papers() -> None:
+    successful = FakeArxivSource(AcademicSourceResult.success("arxiv", [_paper()]))
+    unavailable = FakeArxivSource(
+        AcademicSourceResult.failure(
+            "openalex", "network_error", "OpenAlex unavailable", queried=True
+        )
+    )
+
+    bundle = AcademicSearchTool(
+        {"arxiv": successful, "openalex": unavailable}
+    ).search("session-1", "feedback", ["openalex", "arxiv"])
+
+    assert [item["status"] for item in bundle["source_statuses"]] == [
+        "network_error",
+        "success",
+    ]
+    assert bundle["papers"][0]["title"] == "A Study of Feedback Systems"
+    assert bundle["queried_sources"] == ["openalex", "arxiv"]
+    assert successful.calls == 1
+    assert unavailable.calls == 1
+
+
+def test_academic_search_spec_exposes_only_the_three_allowed_sources() -> None:
+    source_schema = academic_search_spec().args_schema["properties"]["sources"]
+
+    assert source_schema["maxItems"] == 3
+    assert source_schema["items"]["enum"] == ["openalex", "crossref", "arxiv"]
+
+
 def test_configured_disabled_arxiv_source_makes_no_network_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -204,7 +233,7 @@ def test_api_rejects_unallowed_source_without_calling_a_client(client: TestClien
 
     response = client.post(
         f"/api/v1/research/sessions/{session_id}/evidence-bundles",
-        json={"query": "feedback systems", "sources": ["crossref"]},
+        json={"query": "feedback systems", "sources": ["semantic_scholar"]},
     )
 
     assert response.status_code == 422

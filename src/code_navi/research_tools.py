@@ -64,8 +64,11 @@ def academic_search_spec() -> ToolSpec:
                 "sources": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 1,
-                    "items": {"type": "string", "enum": ["arxiv"]},
+                    "maxItems": 3,
+                    "items": {
+                        "type": "string",
+                        "enum": ["openalex", "crossref", "arxiv"],
+                    },
                 },
             },
             "required": ["query", "sources"],

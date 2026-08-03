@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.quality-tmp/
 .venv/
 venv/
 build/
@@ -13,5 +14,6 @@ dist/
 var/
 .codex/
 .code-navi/*
+.dev-logs/
 prompt/
 VIBECODING_PROMPT.md

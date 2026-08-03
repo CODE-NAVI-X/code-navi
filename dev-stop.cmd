@@ -15,15 +15,6 @@ taskkill /FI "WINDOWTITLE eq Frontend :3000*" /T /F >nul 2>&1
 if %errorlevel%==0 (echo   Frontend stopped.) else (echo   Frontend window not found.)
 
 echo.
-echo Cleaning ports ...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000.*LISTENING" 2^>nul') do (
-    taskkill /PID %%a /F >nul 2>&1 && echo   Released port 8000 (PID %%a)
-)
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000.*LISTENING" 2^>nul') do (
-    taskkill /PID %%a /F >nul 2>&1 && echo   Released port 3000 (PID %%a)
-)
-
-echo.
 echo ============================================
 echo   All services stopped.
 echo ============================================

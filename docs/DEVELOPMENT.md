@@ -2,7 +2,7 @@
 
 ## 1. 环境与安装
 
-- Python 最低版本为 3.11；开发者应使用独立虚拟环境。
+- Python 最低版本为 3.11；前端需要 Node.js 20.9+；开发者应使用独立虚拟环境。
 - Kernel 源码位于 `src/kernel/`，安装和测试不依赖其他私有仓库或 Git 凭据。
 - 依赖只在 `pyproject.toml` 声明，不提交虚拟环境、构建产物或本地密钥。
 
@@ -11,7 +11,12 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev,server]"
+cd frontend
+npm ci
+cd ..
 ```
+
+Windows 使用 `.venv\Scripts\activate`，macOS/Linux 使用 `source .venv/bin/activate`。仓库可以克隆到任意目录；运行 `python scripts/dev.py` 会从脚本位置解析项目根目录并启动前后端。运行数据默认位于项目 `.code-navi/`，可用 `CODE_NAVI_DATA_DIR` 覆盖，禁止在代码或提交中写入开发者机器的盘符和用户目录。
 
 ## 2. 代码与目录
 
@@ -32,6 +37,10 @@ python -m pip install -e ".[dev,server]"
 ruff check .
 pytest
 python -m build
+cd frontend
+npm run lint
+npx tsc --noEmit
+npm run build
 ```
 
 开发依赖已经包含构建工具。文档-only 改动至少检查链接、命令和当前状态是否一致。
