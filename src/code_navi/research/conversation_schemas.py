@@ -311,6 +311,30 @@ class ExperimentDesign(BaseModel):
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
+class ExperimentCodeDraftFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    path: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=10000)
+
+
+class ExperimentCodeDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment-code-draft.v1"] = "experiment-code-draft.v1"
+    title: str = Field(min_length=1, max_length=500)
+    directory_tree: list[str] = Field(min_length=1, max_length=20)
+    dependencies: list[str] = Field(default_factory=list, max_length=10)
+    files: list[ExperimentCodeDraftFile] = Field(min_length=1, max_length=10)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class CreateExperimentCodeDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_confirmed: Literal[True]
+
+
 class AnalyzeConversationPaperRequest(BaseModel):
     """Identify a paper already stored in the current conversation's evidence bundles."""
 

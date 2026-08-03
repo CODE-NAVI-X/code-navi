@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from code_navi.research.conversation_code_draft import build_experiment_code_draft
 from code_navi.research.conversation_difficulty import (
     build_paper_analysis,
     build_topic_difficulty_analysis,
@@ -166,3 +167,17 @@ def test_experiment_design_is_rules_only_and_keeps_unknown_resources_to_verify()
     assert design.hypothesis.classification == "inference"
     assert any(item.classification == "to_verify" for item in design.resources)
     assert "不执行代码" in design.provenance_note
+
+
+def test_experiment_code_draft_is_a_non_executable_synthetic_preview() -> None:
+    draft = build_experiment_code_draft(
+        ResearchProfile(topic="RAG 回答可信度评测"),
+        plan=build_conversation_research_plan(
+            ResearchProfile(topic="RAG 回答可信度评测"), ready_for_plan=True
+        ),
+    )
+
+    assert draft.schema_version == "experiment-code-draft.v1"
+    assert "data/" in draft.directory_tree
+    assert "TODO" in "\n".join(item.content for item in draft.files)
+    assert "不执行" in draft.provenance_note

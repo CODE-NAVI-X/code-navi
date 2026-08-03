@@ -10,11 +10,14 @@ from sqlalchemy.orm import Session
 from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
+from .conversation_code_draft import build_experiment_code_draft
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
+    CreateExperimentCodeDraftRequest,
     CreateResearchConversationRequest,
+    ExperimentCodeDraft,
     PaperAnalysis,
     ResearchConversationResponse,
     ResearchSearchPlan,
@@ -223,6 +226,23 @@ def analyze_conversation_paper(
             status_code=404,
             detail="Paper is not present in this conversation's saved evidence bundles.",
         ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/experiment-code-draft",
+    response_model=ExperimentCodeDraft,
+)
+def create_experiment_code_draft(
+    conversation_id: str,
+    request: CreateExperimentCodeDraftRequest,
+    db: Session = _db_dependency,
+) -> ExperimentCodeDraft:
+    """Return preview code only after the request explicitly confirms intent."""
+    response = _conversation_service.get(conversation_id, db)
+    try:
+        return build_experiment_code_draft(response.profile, plan=response.research_plan)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post(

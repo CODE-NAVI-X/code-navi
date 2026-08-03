@@ -135,6 +135,9 @@ export interface ExperimentDesign {
   provenance_note: string;
 }
 
+export interface ExperimentCodeDraftFile { path: string; content: string; }
+export interface ExperimentCodeDraft { schema_version: "experiment-code-draft.v1"; title: string; directory_tree: string[]; dependencies: string[]; files: ExperimentCodeDraftFile[]; provenance_note: string; }
+
 export interface ResearchConversationMessage {
   message_id: string;
   role: "user" | "assistant";
@@ -382,6 +385,10 @@ export async function analyzeResearchPaper(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-analysis`,
     { method: "POST", body: JSON.stringify({ paper_url: paperUrl }) },
   );
+}
+
+export async function createExperimentCodeDraft(conversationId: string): Promise<ExperimentCodeDraft> {
+  return request<ExperimentCodeDraft>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {
