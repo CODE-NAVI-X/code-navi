@@ -121,6 +121,20 @@ export interface PaperAnalysis {
   provenance_note: string;
 }
 
+export interface ExperimentDesign {
+  schema_version: "experiment-design.v1";
+  hypothesis: ResearchPlanEntry;
+  variables: ResearchPlanEntry[];
+  data_sources: ResearchPlanEntry[];
+  baselines: ResearchPlanEntry[];
+  metrics: ResearchPlanEntry[];
+  steps: ResearchPlanEntry[];
+  resources: ResearchPlanEntry[];
+  risks: ResearchPlanEntry[];
+  advisor_confirmation_items: ResearchPlanEntry[];
+  provenance_note: string;
+}
+
 export interface ResearchConversationMessage {
   message_id: string;
   role: "user" | "assistant";
@@ -148,6 +162,7 @@ export interface ResearchConversationResponse {
   research_plan: ConversationResearchPlan | null;
   research_mindmap: ResearchMindMap;
   topic_difficulty_analysis: TopicDifficultyAnalysis;
+  experiment_design: ExperimentDesign | null;
   reply: string;
   generation_mode: GenerationMode;
   recommended_action: RecommendedAction;

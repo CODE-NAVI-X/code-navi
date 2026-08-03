@@ -8,6 +8,7 @@ from code_navi.research.conversation_difficulty import (
     build_paper_analysis,
     build_topic_difficulty_analysis,
 )
+from code_navi.research.conversation_experiment import build_experiment_design
 from code_navi.research.conversation_mindmap import build_research_mindmap
 from code_navi.research.conversation_plan import build_conversation_research_plan
 from code_navi.research.conversation_schemas import (
@@ -148,3 +149,20 @@ def test_paper_analysis_without_an_abstract_returns_only_verification_gaps() -> 
     assert analysis.abstract_available is False
     assert all(item.classification == "to_verify" for item in analysis.items[1:])
     assert "不下载全文" in analysis.provenance_note
+
+
+def test_experiment_design_is_rules_only_and_keeps_unknown_resources_to_verify() -> None:
+    profile = ResearchProfile(
+        topic="RAG 回答可信度评测",
+        research_questions=["检索质量如何影响回答可信度？"],
+        methods=["离线对照评测"],
+        constraints=["两周内完成"],
+    )
+    plan = build_conversation_research_plan(profile, ready_for_plan=True)
+
+    design = build_experiment_design(profile, plan=plan)
+
+    assert design.schema_version == "experiment-design.v1"
+    assert design.hypothesis.classification == "inference"
+    assert any(item.classification == "to_verify" for item in design.resources)
+    assert "不执行代码" in design.provenance_note

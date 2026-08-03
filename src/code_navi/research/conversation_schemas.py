@@ -293,6 +293,24 @@ class PaperAnalysis(BaseModel):
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
+class ExperimentDesign(BaseModel):
+    """Offline experiment suggestions derived from a rules research plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment-design.v1"] = "experiment-design.v1"
+    hypothesis: ResearchPlanEntry
+    variables: list[ResearchPlanEntry] = Field(min_length=1, max_length=6)
+    data_sources: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    baselines: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    metrics: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    steps: list[ResearchPlanEntry] = Field(min_length=1, max_length=6)
+    resources: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    risks: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    advisor_confirmation_items: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
 class AnalyzeConversationPaperRequest(BaseModel):
     """Identify a paper already stored in the current conversation's evidence bundles."""
 
@@ -346,6 +364,7 @@ class ResearchConversationResponse(BaseModel):
     research_plan: ConversationResearchPlan | None = None
     research_mindmap: ResearchMindMap
     topic_difficulty_analysis: TopicDifficultyAnalysis
+    experiment_design: ExperimentDesign | None = None
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
     recommended_action: Literal[

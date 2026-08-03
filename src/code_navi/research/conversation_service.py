@@ -14,6 +14,7 @@ from .conversation_agent import (
     RuntimeConversationDecisionGenerator,
 )
 from .conversation_difficulty import build_topic_difficulty_analysis
+from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
@@ -245,6 +246,7 @@ class ResearchConversationService:
                 plan=plan,
                 evidence_bundles=bundles,
             ),
+            experiment_design=build_experiment_design(profile, plan=plan),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",
