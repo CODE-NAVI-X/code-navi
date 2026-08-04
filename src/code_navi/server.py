@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 import os
-import traceback
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .learning.database import engine
-from .learning.models import Base
+from .db import DATABASE_URL, Base, engine
+from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
 from .provider_config import load_local_provider_config
+from .research import models as research_models  # noqa: F401  (register tables)
 from .research.router import router as research_router
+
+logger = logging.getLogger(__name__)
 
 
 def _cors_origins() -> list[str]:
@@ -23,6 +27,9 @@ def _cors_origins() -> list[str]:
     if not configured:
         return ["http://127.0.0.1:3000", "http://localhost:3000"]
     return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
+
+
+CORS_ORIGINS = _cors_origins()
 
 # ---------------------------------------------------------------------------
 # Lifespan — ensure database tables exist on startup
@@ -34,7 +41,6 @@ async def lifespan(_app: FastAPI):
     """Create database directory and tables on startup."""
     load_local_provider_config()
     # Ensure parent directory exists for SQLite file-based storage
-    from .learning.database import DATABASE_URL
     if DATABASE_URL.startswith("sqlite:///"):
         db_path = DATABASE_URL.replace("sqlite:///", "", 1)
         if db_path and not db_path.startswith("/"):
@@ -60,13 +66,19 @@ app.include_router(learning_router)
 app.include_router(research_router)
 
 # ---------------------------------------------------------------------------
-# CORS — the browser secret configuration endpoint is restricted to the local UI.
+# CORS — explicit origin allowlist.
+#
+# A wildcard cannot be combined with credentials: browsers reject
+# ``Access-Control-Allow-Origin: *`` on credentialed requests, so the previous
+# wildcard silently broke exactly the requests it claimed to allow.  Set
+# CODE_NAVI_CORS_ORIGINS to a comma-separated list to add deployment origins.
+#
 # Register middleware AFTER mounting routers so it applies to all routes.
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins(),
-    allow_credentials=False,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -79,11 +91,16 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Catch all unhandled exceptions and return JSON with details."""
-    traceback.print_exc()
+    """Return an opaque 500 and keep the diagnosis server-side.
+
+    ``str(exc)`` leaks filesystem paths, SQL fragments and provider messages to
+    the client, so only a correlation id crosses the boundary.
+    """
+    error_id = uuid4().hex
+    logger.exception("Unhandled error %s on %s %s", error_id, request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc)},
+        content={"detail": "Internal server error.", "error_id": error_id},
     )
 
 

@@ -11,6 +11,7 @@ import { DownstreamGoCard } from "@/components/learning/DownstreamGoCard";
 import { type JSX, useState, useEffect } from "react";
 import {
   setLearningSnapshot,
+  useLearningSessionId,
   useLearningStore,
 } from "@/lib/store/learning-store";
 import {
@@ -119,6 +120,9 @@ export default function LearningPage(): JSX.Element {
     (savedSnapshot?.result as ExplainResponse) ?? null,
   );
   const [error, setError] = useState<string | null>(null);
+
+  // Empty during server rendering, real id after hydration.
+  const sessionId = useLearningSessionId();
 
   // Persist snapshot whenever query or result changes
   useEffect(() => {
@@ -265,7 +269,7 @@ export default function LearningPage(): JSX.Element {
       <StructuredNotebook
         open={notebookOpen}
         onDismiss={() => setNotebookOpen(false)}
-        sessionId="sess_demo_123"
+        sessionId={sessionId}
       />
 
       {/* Downstream Flow Go Card */}
@@ -273,7 +277,7 @@ export default function LearningPage(): JSX.Element {
         <DownstreamGoCard
           knowledgePoint={result?.knowledge_point || query || "DHCP 四阶段报文交互"}
           knowledgePointId="kp_dhcp_4stage"
-          sessionId="sess_demo_123"
+          sessionId={sessionId}
           onDismiss={() => setGoCardVisible(false)}
         />
       )}

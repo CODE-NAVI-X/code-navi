@@ -160,7 +160,7 @@ export default function TextSelectionPopover(): JSX.Element | null {
         debounceTimer.current = null;
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── API call ────────────────────────────────────────────────────────────
 

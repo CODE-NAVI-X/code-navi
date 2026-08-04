@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from .database import get_db
+from code_navi.db import get_db
+
 from .models import NotebookItemModel
 from .schemas import ExplainRequest, ExplainResponse
 from .services import QueryOrchestrator
@@ -31,13 +32,20 @@ async def explain_knowledge_point(
 
 @router.get("/notebook", status_code=200)
 async def list_notebook_items(
-    session_id: str = "sess_demo_123",
+    session_id: str = Query(..., min_length=1, max_length=64),
     db: Session = _db_dependency,
 ):
-    """Return notebook entries for a session (ordered by creation time)."""
+    """Return notebook entries for one session (newest first).
+
+    ``session_id`` is required and actually scopes the query — without it a
+    client would read every session's entries.
+    """
     items = (
         db.query(NotebookItemModel)
-        .filter(NotebookItemModel.user_id == "poc-user")
+        .filter(
+            NotebookItemModel.user_id == "poc-user",
+            NotebookItemModel.session_id == session_id,
+        )
         .order_by(NotebookItemModel.created_at.desc())
         .limit(50)
         .all()
@@ -45,7 +53,7 @@ async def list_notebook_items(
     return [
         {
             "id": item.id,
-            "session_id": session_id,
+            "session_id": item.session_id,
             "kind": item.item_type,
             "content": item.content,
             "timestamp": item.created_at.isoformat() if item.created_at else None,

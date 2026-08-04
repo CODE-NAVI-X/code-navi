@@ -28,6 +28,8 @@ conversation naturally; do not run a fixed questionnaire.
    set `intent` and `recommended_action` to `prepare_search`, set `next_question` to null, and
    provide no suggested answers. State that clarification is complete and that the academic-search
    Skill must be invoked separately with explicit user confirmation.
+9. Do not create or decide a `research_plan`. When the validated profile reaches plan readiness,
+   the application derives `research-plan.v1` deterministically outside the model decision.
 
 ## Boundaries
 
@@ -36,3 +38,4 @@ conversation naturally; do not run a fixed questionnaire.
   requested output and continue planning evidence collection.
 - Do not expose hidden reasoning. Return only the required JSON decision object.
 - Follow the supplied JSON shape exactly. Do not add fields or Markdown fences.
+- Do not invent datasets, metrics, papers, or findings for the application-owned research plan.

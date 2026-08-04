@@ -31,6 +31,15 @@ class ExplainRequest(BaseModel):
         max_length=512,
         description="The knowledge-point identifier or free-text query to explain.",
     )
+    session_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Client-owned learning session. Omit to have the server mint one; "
+            "reuse the returned value to keep notebook entries grouped."
+        ),
+    )
     persona: str | None = Field(
         default="academic",
         description="Student persona controlling depth & tone of the explanation.",
@@ -47,9 +56,11 @@ class ExplainResponse(BaseModel):
     knowledge_point: str = Field(
         ..., description="Echoed knowledge-point identifier from the request."
     )
-    summary: str = Field(
-        ..., description="Concise explanation of the knowledge point."
+    session_id: str = Field(
+        ...,
+        description="Effective session identifier; persist it to scope later notebook reads.",
     )
+    summary: str = Field(..., description="Concise explanation of the knowledge point.")
     detail: str | None = Field(
         default=None,
         description="Extended explanation with deeper context.",

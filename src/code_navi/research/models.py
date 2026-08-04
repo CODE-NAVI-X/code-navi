@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, String
 
-from code_navi.learning.models import Base
+from code_navi.db import Base
 
 
 class ResearchSessionModel(Base):
