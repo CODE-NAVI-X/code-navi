@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
-from .conversation_code_draft import build_experiment_code_draft
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ConversationEvidenceBundle,
@@ -238,11 +237,12 @@ def create_experiment_code_draft(
     db: Session = _db_dependency,
 ) -> ExperimentCodeDraft:
     """Return preview code only after the request explicitly confirms intent."""
-    response = _conversation_service.get(conversation_id, db)
     try:
-        return build_experiment_code_draft(response.profile, plan=response.research_plan)
+        return _conversation_service.create_experiment_code_draft(conversation_id, db)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
 
 @router.post(

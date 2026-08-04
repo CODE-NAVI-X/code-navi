@@ -543,6 +543,15 @@ def test_incomplete_conversation_has_no_research_plan(client: TestClient) -> Non
     assert response.json()["research_plan"] is None
 
 
+def test_code_draft_endpoint_requires_explicit_user_confirmation(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/research/conversations/not-used/experiment-code-draft",
+        json={"user_confirmed": False},
+    )
+
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize(
     ("profile_patch", "missing_label"),
     [

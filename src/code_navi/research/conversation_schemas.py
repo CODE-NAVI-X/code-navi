@@ -329,7 +329,11 @@ class ExperimentCodeDraft(BaseModel):
     directory_tree: list[str] = Field(min_length=1, max_length=20)
     dependencies: list[str] = Field(default_factory=list, max_length=10)
     files: list[ExperimentCodeDraftFile] = Field(min_length=1, max_length=10)
+    run_instructions: list[str] = Field(min_length=1, max_length=6)
+    assumptions: list[str] = Field(min_length=1, max_length=8)
+    to_verify_items: list[str] = Field(min_length=1, max_length=8)
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
 
 
 class CreateExperimentCodeDraftRequest(BaseModel):

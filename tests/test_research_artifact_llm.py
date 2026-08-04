@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
+from code_navi.research.conversation_code_draft import build_experiment_code_draft
 from code_navi.research.conversation_difficulty import build_topic_difficulty_analysis
 from code_navi.research.conversation_experiment import build_experiment_design
 from code_navi.research.conversation_plan import build_conversation_research_plan
@@ -188,3 +190,76 @@ def test_failed_experiment_design_model_uses_rules_fallback() -> None:
 
     assert design is not None
     assert design.generation_mode == "rules_fallback"
+
+
+def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
+    profile = _profile()
+    plan = build_conversation_research_plan(profile, ready_for_plan=True)
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(json.dumps({
+            "title": "反馈策略实验草案",
+            "directory_tree": [
+                "README.md",
+                "requirements.txt",
+                "src/data.py",
+                "src/baseline.py",
+                "src/evaluate.py",
+            ],
+            "dependencies": ["Python 3.11+（请手动安装）"],
+            "files": [
+                {"path": "README.md", "content": "# 草案\n仅预览，不自动执行。"},
+                {"path": "requirements.txt", "content": "# 请在确认后手动填写依赖。"},
+                {
+                    "path": "src/data.py",
+                    "content": (
+                        "def load_data():\n"
+                        "    return [{\"input\": \"synthetic\", \"label\": 0}]"
+                    ),
+                },
+                {
+                    "path": "src/baseline.py",
+                    "content": "def predict(rows):\n    return [0 for _ in rows]",
+                },
+                {
+                    "path": "src/evaluate.py",
+                    "content": (
+                        "def evaluate(predictions, labels):\n"
+                        "    return {\"status\": \"to_verify\"}"
+                    ),
+                },
+            ],
+            "run_instructions": ["先人工确认 README 中的数据与指标 TODO；系统不会执行命令。"],
+            "assumptions": ["默认使用合成数据。"],
+            "to_verify_items": ["真实数据许可待确认。"],
+            "provenance_note": "模型仅根据已确认方案生成预览。",
+        }, ensure_ascii=False))
+    )
+
+    draft = build_experiment_code_draft(profile, plan=plan, generator=generator)
+
+    assert draft.generation_mode == "llm"
+    assert generator.calls == ["experiment_code_draft"]
+    assert any(item.path == "requirements.txt" for item in draft.files)
+
+
+def test_unsafe_model_code_preview_falls_back_without_secret_or_execution() -> None:
+    profile = _profile()
+    draft = build_experiment_code_draft(
+        profile,
+        plan=build_conversation_research_plan(profile, ready_for_plan=True),
+        generator=FakeArtifactGenerator(
+            ArtifactLlmOutcome.generated(json.dumps({
+                "title": "unsafe",
+                "directory_tree": ["src/data.py"],
+                "dependencies": [],
+                "files": [{"path": "src/data.py", "content": "api_key = 'secret'"}],
+                "run_instructions": ["run"],
+                "assumptions": ["x"],
+                "to_verify_items": ["x"],
+                "provenance_note": "x",
+            }))
+        ),
+    )
+
+    assert draft.generation_mode == "rules_fallback"
+    assert "api_key" not in "\n".join(item.content.casefold() for item in draft.files)

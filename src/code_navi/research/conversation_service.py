@@ -13,6 +13,7 @@ from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
 )
+from .conversation_code_draft import build_experiment_code_draft
 from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
@@ -118,6 +119,18 @@ class ResearchConversationService:
     def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
         """Restore a conversation without invoking a model or external service."""
         return self._to_response(self._get_model(conversation_id, db), db)
+
+    def create_experiment_code_draft(self, conversation_id: str, db: Session):
+        """Generate only the confirmed preview, without re-running other artefact calls."""
+        conversation = self._get_model(conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        return build_experiment_code_draft(
+            profile, plan=plan, generator=self.artifact_generator
+        )
 
     @staticmethod
     def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:

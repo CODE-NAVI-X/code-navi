@@ -139,7 +139,7 @@ export interface ExperimentDesign {
 }
 
 export interface ExperimentCodeDraftFile { path: string; content: string; }
-export interface ExperimentCodeDraft { schema_version: "experiment-code-draft.v1"; title: string; directory_tree: string[]; dependencies: string[]; files: ExperimentCodeDraftFile[]; provenance_note: string; }
+export interface ExperimentCodeDraft { schema_version: "experiment-code-draft.v1"; title: string; directory_tree: string[]; dependencies: string[]; files: ExperimentCodeDraftFile[]; run_instructions: string[]; assumptions: string[]; to_verify_items: string[]; provenance_note: string; generation_mode: "llm" | "rules" | "rules_fallback"; }
 
 export interface ResearchConversationMessage {
   message_id: string;

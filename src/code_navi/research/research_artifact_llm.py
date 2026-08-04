@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -107,11 +108,30 @@ class DeepSeekResearchArtifactGenerator:
                 "若无法由上下文直接确认，classification 必须为 to_verify。",
                 "模型生成的难点项不得使用 fact；事实由规则层和已保存来源负责。",
             ],
-            "validated_context": context,
+            "validated_context": _redact_local_context(context),
         }
         return Message(
             "user", (ContentBlock("text", {"text": json.dumps(prompt, ensure_ascii=False)}),)
         )
+
+
+def _redact_local_context(value: object) -> object:
+    """Keep local paths and accidental secret-shaped fields out of model prompts."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): "[redacted]"
+            if any(token in str(key).casefold() for token in ("key", "secret", "token", "password"))
+            else _redact_local_context(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_local_context(item) for item in value]
+    if isinstance(value, str) and (
+        "\\" in value
+        or re.search(r"(?:[A-Za-z]:/|/(?:Users|home|private|tmp)/)", value)
+    ):
+        return "[redacted local path]"
+    return value
 
 
 __all__ = [

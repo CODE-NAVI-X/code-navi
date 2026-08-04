@@ -126,3 +126,6 @@ def test_experiment_design_discloses_model_or_rules_generation_mode() -> None:
     assert "模型个性化建议" in experiment_source
     assert "模型失败后的规则降级" in experiment_source
     assert "我确认仅预览代码草案" in experiment_source
+    assert "复制代码" in experiment_source
+    assert "下载草案文本" in experiment_source
+    assert "不写入项目" in experiment_source
