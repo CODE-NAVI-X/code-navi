@@ -32,11 +32,25 @@ if not exist ".code-navi\provider.env" (
     echo.
 )
 
-echo [1/2] Starting backend (port 8000) ...
+echo [1/3] Applying database migrations ...
+".venv\Scripts\python.exe" -m alembic upgrade head
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Database migration failed.
+    echo For a database created before Alembic, run:
+    echo   .venv\Scripts\python.exe -m alembic stamp 0001
+    echo   .venv\Scripts\python.exe -m alembic upgrade head
+    echo.
+    popd
+    pause
+    exit /b 1
+)
+
+echo [2/3] Starting backend (port 8000) ...
 start "Backend :8000" /D "%PROJECT_DIR%" cmd /k ".venv\Scripts\python.exe -m uvicorn code_navi.server:app --app-dir src --reload --host 127.0.0.1 --port 8000"
 timeout /t 2 /nobreak >nul
 
-echo [2/2] Starting frontend (port 3000) ...
+echo [3/3] Starting frontend (port 3000) ...
 start "Frontend :3000" /D "%PROJECT_DIR%frontend" cmd /k "npm.cmd run dev -- --port 3000"
 
 echo.

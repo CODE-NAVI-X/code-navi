@@ -169,8 +169,9 @@ def test_deepseek_defaults_and_cli_provider_boundary(monkeypatch: pytest.MonkeyP
         "max_retries": 0,
     }
     assert provider.model == DEEPSEEK_DEFAULT_MODEL
-    with pytest.raises(ProviderConfigurationError, match="unsupported provider"):
-        create_provider(ProviderSettings.resolve())
+    monkeypatch.setenv("CODE_NAVI_MODEL", DEEPSEEK_DEFAULT_MODEL)
+    cli_provider = create_provider(ProviderSettings.resolve())
+    assert cli_provider.provider_name == "deepseek"
 
 
 def test_deepseek_guidance_generates_validated_response(monkeypatch: pytest.MonkeyPatch) -> None:

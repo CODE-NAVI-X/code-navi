@@ -124,17 +124,22 @@ knowledge_explainer_agent = build_knowledge_explainer_agent()
 # ---------------------------------------------------------------------------
 
 
-def _offline_payload(user_message: str) -> str:
-    """Return the documented offline response shape without a network call."""
+def _offline_payload(knowledge_point: str) -> str:
+    """Return a presenter-friendly offline response without exposing prompts."""
     return json.dumps(
         {
-            "summary": user_message,
-            "detail": "离线 PoC 回退响应；未调用外部模型。",
+            "summary": (
+                f"已完成“{knowledge_point}”的离线结构化解析，并通过 Kernel 运行时记录本次会话。"
+            ),
+            "detail": (
+                "当前使用确定性的 Mock Provider，用于验证请求编排、事件审计、"
+                "会话隔离和笔记归档链路；配置在线 Provider 后会返回完整知识解释。"
+            ),
             "citations": [
                 {
-                    "source_title": "PoC stub citation",
+                    "source_title": "Code Navi 离线演示说明",
                     "uri": None,
-                    "snippet": "Deterministic offline learning-module fallback.",
+                    "snippet": "本次响应由本地 Mock Provider 生成，未调用外部知识源。",
                 }
             ],
         }
@@ -179,7 +184,7 @@ class QueryOrchestrator:
             timeout=_DEFAULT_TIMEOUT,
         )
 
-    def _parse_response(self, raw: str, knowledge_point: str) -> ExplainResponse:
+    def _parse_response(self, raw: str, knowledge_point: str, session_id: str) -> ExplainResponse:
         """Extract JSON from the LLM output, falling back gracefully."""
         # Strip markdown code fences if present
         cleaned = raw.strip()
@@ -194,6 +199,7 @@ class QueryOrchestrator:
             logger.warning("Failed to parse LLM JSON; using raw text as summary.")
             return ExplainResponse(
                 knowledge_point=knowledge_point,
+                session_id=session_id,
                 summary=raw[:500],
                 detail=None,
                 citations=[],
@@ -209,6 +215,7 @@ class QueryOrchestrator:
             )
         return ExplainResponse(
             knowledge_point=knowledge_point,
+            session_id=session_id,
             summary=data.get("summary", raw[:500]),
             detail=data.get("detail"),
             citations=citations,
@@ -218,6 +225,7 @@ class QueryOrchestrator:
         """Run the full explain pipeline and persist the result."""
 
         # 1. Compose the user turn (decontamination guard baked into the prompt)
+        session_id = request.session_id or f"sess-{uuid4().hex[:16]}"
         persona = request.persona or "academic"
         user_message = _USER_TEMPLATE.format(
             knowledge_point=self.decontamination_engine.decontaminate(request.knowledge_point),
@@ -226,20 +234,22 @@ class QueryOrchestrator:
 
         # 2. One audited kernel run — no tools granted, Events persisted to disk.
         agent = build_knowledge_explainer_agent(self.decontamination_engine.passphrase)
-        provider = create_provider(self._provider_settings(_offline_payload(user_message)))
+        provider = create_provider(
+            self._provider_settings(_offline_payload(request.knowledge_point))
+        )
         runtime = AgentRuntime(provider, session_dir=_events_dir())
         result = runtime.run(
             agent,
             RuntimeRequest(
                 user_message,
-                session_id=f"learning-{uuid4()}",
-                metadata={"interface": "api", "persona": persona},
+                session_id=f"learning-{session_id}",
+                metadata={"interface": "api", "persona": persona, "session_id": session_id},
             ),
         )
         raw = result.output_text or ""
 
         # 3. Parse structured response
-        response = self._parse_response(raw, request.knowledge_point)
+        response = self._parse_response(raw, request.knowledge_point, session_id)
 
         # 4. Optionally drop citations if the client doesn't want them
         if not request.include_citations:
@@ -248,6 +258,7 @@ class QueryOrchestrator:
         # 5. Archive to notebook
         notebook_entry = NotebookItemModel(
             user_id="poc-user",  # TODO: replace with real auth user id
+            session_id=session_id,
             knowledge_id=request.knowledge_point,
             item_type="summary",
             content=response.summary,

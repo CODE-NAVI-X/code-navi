@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { setFlowPayload } from "@/lib/store/flow-store";
+import { getLearningSessionId } from "@/lib/api/learning";
 import { Target, Terminal, GraduationCap, X } from "lucide-react";
 
 interface DownstreamGoCardProps {
@@ -15,14 +16,16 @@ interface DownstreamGoCardProps {
 export function DownstreamGoCard({
   knowledgePoint,
   knowledgePointId = "kp_dhcp_4stage",
-  sessionId = "sess_demo_123",
+  sessionId = "",
   onDismiss,
 }: DownstreamGoCardProps) {
   const router = useRouter();
 
   const handleGoToPractice = useCallback(() => {
+    // Resolved on click, so an unmounted-yet parent never forwards an empty id.
+    const effectiveSessionId = sessionId || getLearningSessionId();
     setFlowPayload({
-      sessionId,
+      sessionId: effectiveSessionId,
       masteredKnowledgePoint: {
         id: knowledgePointId,
         name: knowledgePoint,
@@ -34,13 +37,14 @@ export function DownstreamGoCard({
       },
     });
     router.push(
-      `/student/practice?knowledge_id=${encodeURIComponent(knowledgePointId)}&session_id=${encodeURIComponent(sessionId)}`
+      `/student/practice?knowledge_id=${encodeURIComponent(knowledgePointId)}&session_id=${encodeURIComponent(effectiveSessionId)}`
     );
   }, [knowledgePoint, knowledgePointId, sessionId, router]);
 
   const handleGoToResearch = useCallback(() => {
+    const effectiveSessionId = sessionId || getLearningSessionId();
     setFlowPayload({
-      sessionId,
+      sessionId: effectiveSessionId,
       masteredKnowledgePoint: {
         id: knowledgePointId,
         name: knowledgePoint,
@@ -52,7 +56,7 @@ export function DownstreamGoCard({
       },
     });
     router.push(
-      `/student/research?knowledge_id=${encodeURIComponent(knowledgePointId)}&session_id=${encodeURIComponent(sessionId)}`
+      `/student/research?knowledge_id=${encodeURIComponent(knowledgePointId)}&session_id=${encodeURIComponent(effectiveSessionId)}`
     );
   }, [knowledgePoint, knowledgePointId, sessionId, router]);
 
