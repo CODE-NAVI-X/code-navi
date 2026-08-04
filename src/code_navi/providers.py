@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from kernel.core import ContentBlock, Message, ProviderResult
 from kernel.core.provider import ProviderTool
@@ -24,6 +25,7 @@ class ProviderSettings:
     max_tokens: int | None = None
     temperature: float | None = None
     timeout: float | None = None
+    thinking: Literal["enabled", "disabled"] | None = None
 
     @classmethod
     def resolve(
@@ -134,6 +136,7 @@ def _create_deepseek_provider(settings: ProviderSettings) -> object:
         max_tokens=settings.max_tokens,
         temperature=settings.temperature,
         timeout=settings.timeout,
+        thinking=settings.thinking,
     )
 
 

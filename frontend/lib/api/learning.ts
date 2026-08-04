@@ -174,15 +174,224 @@ function validateExplainResponse(raw: unknown): ExplainResponse {
   };
 }
 
+// ── Presentation (knowledge PPT) types & SSE client ────────────────────────────
+// Mirrors the backend Pydantic models in
+// ``src/code_navi/learning/presentation/schemas.py``.
+
+export interface SlideBackground {
+  type: "solid";
+  color: string;
+}
+
+export type SlideElementType = "text" | "shape" | "latex" | "image" | "line";
+
+export interface SlideElementBase {
+  type: SlideElementType;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  rotate?: number;
+}
+
+export interface TextElement extends SlideElementBase {
+  type: "text";
+  content: string;
+  defaultColor?: string;
+  defaultFontName?: string;
+  lineHeight?: number;
+  fill?: string | null;
+  textAlign?: "left" | "center" | "right";
+}
+
+export interface ShapeElement extends SlideElementBase {
+  type: "shape";
+  shapeType: "rect" | "roundRect" | "circle" | "triangle" | "diamond" | "message";
+  fill: string;
+  strokeColor?: string | null;
+  strokeWidth?: number;
+}
+
+export interface LatexElement extends SlideElementBase {
+  type: "latex";
+  latex: string;
+}
+
+export interface ImageElement extends SlideElementBase {
+  type: "image";
+  src: string;
+  borderRadius?: number;
+}
+
+export interface LineElement extends SlideElementBase {
+  type: "line";
+  strokeColor?: string;
+  strokeWidth?: number;
+}
+
+export type SlideElement =
+  | TextElement
+  | ShapeElement
+  | LatexElement
+  | ImageElement
+  | LineElement;
+
+export interface Slide {
+  background: SlideBackground;
+  elements: SlideElement[];
+}
+
+export interface SceneOutline {
+  id: string;
+  title: string;
+  description: string;
+  key_points: string[];
+  order: number;
+}
+
+export interface Presentation {
+  id: string;
+  knowledge_point: string;
+  session_id: string;
+  style: string;
+  slides: Slide[];
+  created_at?: string | null;
+}
+
+export type PresentationStreamEvent =
+  | { type: "outlines"; data: SceneOutline[] }
+  | { type: "slide"; index: number; total: number; data: Slide }
+  | { type: "done"; presentation: Presentation }
+  | { type: "error"; error: string };
+
+/**
+ * POST /api/v1/learning/presentations/generate and yield one event per SSE
+ * message. The backend drives the loop (page-level stream): outlines first,
+ * then one slide event per finished page, then done/error.
+ *
+ * Throws LearningApiError on network failure or non-SSE HTTP status.
+ */
+export async function* streamPresentation(
+  request: {
+    knowledge_point: string;
+    session_id?: string;
+    style?: string;
+    context?: string | null;
+  },
+  signal?: AbortSignal,
+): AsyncGenerator<PresentationStreamEvent, void, void> {
+  const url = `${API_BASE}/api/v1/learning/presentations/generate`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        knowledge_point: request.knowledge_point,
+        session_id: request.session_id ?? getLearningSessionId(),
+        style: request.style ?? "professional",
+        context: request.context ?? null,
+      }),
+      signal,
+    });
+  } catch (networkError) {
+    throw new LearningApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new LearningApiError(
+      response.status,
+      detail ?? `Request failed with status ${response.status}`,
+    );
+  }
+  if (!response.body) {
+    throw new LearningApiError(502, "Response has no readable body stream.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE events are separated by a blank line.
+      let sep = buffer.indexOf("\n\n");
+      while (sep !== -1) {
+        const chunk = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLine = chunk
+          .split("\n")
+          .find((line) => line.startsWith("data: "));
+        if (dataLine) {
+          try {
+            const event = JSON.parse(dataLine.slice(6)) as PresentationStreamEvent;
+            yield event;
+          } catch {
+            // Ignore a malformed event; keep consuming the stream.
+          }
+        }
+        sep = buffer.indexOf("\n\n");
+      }
+    }
+    // Flush any trailing data line without a blank line.
+    const dataLine = buffer
+      .split("\n")
+      .find((line) => line.startsWith("data: "));
+    if (dataLine) {
+      try {
+        yield JSON.parse(dataLine.slice(6)) as PresentationStreamEvent;
+      } catch {
+        // ignore
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// ── Presentation fetch (notebook review) ───────────────────────────────────────
+
+export interface PresentationDetail {
+  id: string;
+  knowledge_point: string;
+  session_id: string;
+  style: string;
+  slides: Slide[];
+  outlines: SceneOutline[];
+  created_at?: string | null;
+}
+
+export async function fetchPresentation(
+  presentationId: string,
+): Promise<PresentationDetail> {
+  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    throw new LearningApiError(
+      res.status,
+      `Failed to load presentation (${res.status})`,
+    );
+  }
+  return (await res.json()) as PresentationDetail;
+}
+
 // ── Notebook items API helper ──────────────────────────────────────────────────
 
 export interface NotebookItem {
   id: string;
   session_id: string;
-  kind: "summary" | "note" | "wrong_answer";
+  kind: "summary" | "note" | "wrong_answer" | "presentation";
   content: string;
   timestamp?: string | null;
   source_url?: string | null;
+  presentation_id?: string | null;
 }
 
 export async function fetchNotebookItems(

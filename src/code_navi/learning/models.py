@@ -35,7 +35,7 @@ class NotebookItemModel(Base):
     item_type = Column(
         String(32),
         nullable=False,
-        comment="One of: summary, note, wrong_answer",
+        comment="One of: summary, note, wrong_answer, presentation",
     )
     content = Column(Text, nullable=False)
     extra_data = Column(

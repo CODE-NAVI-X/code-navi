@@ -181,3 +181,36 @@ def test_chat_invalid_tool_arguments_are_fatal() -> None:
 
     with pytest.raises(FatalProviderError, match="not valid JSON"):
         adapter.complete([text_message("bad call")])
+
+
+def test_chat_thinking_disabled_sets_extra_body() -> None:
+    client = FakeClient([native_text("done")])
+    adapter = OpenAIChatCompletionsAdapter(
+        "deepseek-v4-flash",
+        client=client,
+        thinking="disabled",
+    )
+
+    adapter.complete([text_message("gen")])
+
+    assert client.chat.completions.requests[0]["extra_body"] == {
+        "thinking": {"type": "disabled"}
+    }
+
+
+def test_chat_thinking_unset_leaves_request_unchanged() -> None:
+    client = FakeClient([native_text("done")])
+    adapter = OpenAIChatCompletionsAdapter("deepseek-v4-flash", client=client)
+
+    adapter.complete([text_message("gen")])
+
+    assert "extra_body" not in client.chat.completions.requests[0]
+
+
+def test_chat_rejects_invalid_thinking_value() -> None:
+    with pytest.raises(ValueError, match="thinking"):
+        OpenAIChatCompletionsAdapter(
+            "deepseek-v4-flash",
+            client=FakeClient([]),
+            thinking="sometimes",
+        )

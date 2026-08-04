@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from code_navi.db import get_db
 
 from .models import NotebookItemModel
+from .presentation.schemas import PresentationGenerateRequest
+from .presentation.services import PresentationGenerator
 from .schemas import ExplainRequest, ExplainResponse
 from .services import QueryOrchestrator
 
 router = APIRouter(prefix="/api/v1/learning", tags=["Learning"])
 
 _orchestrator = QueryOrchestrator()
+_presentation_generator = PresentationGenerator()
 _db_dependency = Depends(get_db)
 
 
@@ -58,6 +64,77 @@ async def list_notebook_items(
             "content": item.content,
             "timestamp": item.created_at.isoformat() if item.created_at else None,
             "source_url": None,
+            # Presentation items carry their deck id so the client can re-fetch
+            # the full slides for review without pulling every deck in the list.
+            "presentation_id": (
+                (item.extra_data or {}).get("presentation_id")
+                if item.item_type == "presentation"
+                else None
+            ),
         }
         for item in items
     ]
+
+
+@router.get("/presentations/{presentation_id}")
+async def get_presentation(
+    presentation_id: str,
+    db: Session = _db_dependency,
+) -> dict:
+    """Return a previously archived presentation (slides + outlines) for review."""
+    from fastapi import HTTPException
+
+    items = (
+        db.query(NotebookItemModel)
+        .filter(NotebookItemModel.item_type == "presentation")
+        .all()
+    )
+    item = next(
+        (
+            i
+            for i in items
+            if (i.extra_data or {}).get("presentation_id") == presentation_id
+        ),
+        None,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Presentation not found")
+
+    extra = item.extra_data or {}
+    return {
+        "id": presentation_id,
+        "knowledge_point": item.knowledge_id,
+        "session_id": item.session_id,
+        "style": extra.get("style", "professional"),
+        "slides": extra.get("slides", []),
+        "outlines": extra.get("outlines", []),
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+@router.post("/presentations/generate")
+async def generate_presentation(
+    request: PresentationGenerateRequest,
+    db: Session = _db_dependency,
+) -> StreamingResponse:
+    """Backend-driven, page-level SSE stream for knowledge-PPT generation.
+
+    Emits events as pages finish (``outlines`` → ``slide`` × N → ``done``), so
+    the client can render page N while page N+1 is still being generated.  The
+    generator is synchronous and runs in FastAPI's thread pool; each page costs
+    one audited kernel run, matching the learning module's Event/audit contract.
+    """
+
+    def event_source():
+        for event in _presentation_generator.stream_presentation(request, db):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
