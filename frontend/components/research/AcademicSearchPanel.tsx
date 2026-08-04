@@ -212,7 +212,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
             {paperAnalysis && (
               <article className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 text-xs leading-5 dark:border-orange-900/60 dark:bg-orange-950/20">
                 <p className="font-bold text-orange-900 dark:text-orange-200">论文/方向难点分析：{paperAnalysis.title}</p>
-                <p className="mt-1 text-[11px] text-orange-800 dark:text-orange-300">仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
+                <p className="mt-1 text-[11px] text-orange-800 dark:text-orange-300">{paperAnalysis.generation_mode === "llm" ? "模型个性化建议" : paperAnalysis.generation_mode === "rules_fallback" ? "模型失败后的规则降级" : "基础规则"}；仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
                 <ul className="mt-2 space-y-2">{paperAnalysis.items.map((item) => <li key={item.area}><span className="font-semibold">{item.area}：</span>{item.content}</li>)}</ul>
               </article>
             )}

@@ -29,6 +29,10 @@ from .conversation_schemas import (
 )
 from .conversation_service import ConversationNotFoundError, assess_readiness
 from .models import ResearchConversationModel, ResearchEvidenceBundleModel
+from .research_artifact_llm import (
+    DeepSeekResearchArtifactGenerator,
+    ResearchArtifactGenerator,
+)
 
 
 class ConversationSearchNotReadyError(ValueError):
@@ -42,8 +46,13 @@ class ConversationPaperNotFoundError(LookupError):
 class ResearchConversationSearchService:
     """Prepare a query without a model and dispatch only after explicit confirmation."""
 
-    def __init__(self, search_tool: AcademicSearchTool | None = None) -> None:
+    def __init__(
+        self,
+        search_tool: AcademicSearchTool | None = None,
+        artifact_generator: ResearchArtifactGenerator | None = None,
+    ) -> None:
         self.search_tool = search_tool or AcademicSearchTool()
+        self.artifact_generator = artifact_generator or DeepSeekResearchArtifactGenerator()
 
     def plan(self, conversation_id: str, db: Session) -> ResearchSearchPlan:
         """Return a reviewable plan without accessing any network source."""
@@ -148,7 +157,7 @@ class ResearchConversationSearchService:
         for bundle in self.list_bundles(conversation_id, db):
             for paper in bundle.papers:
                 if paper.url == request.paper_url:
-                    return build_paper_analysis(paper)
+                    return build_paper_analysis(paper, generator=self.artifact_generator)
         raise ConversationPaperNotFoundError(request.paper_url)
 
     def _cached_bundle(

@@ -29,6 +29,10 @@ from .conversation_schemas import (
     SendResearchMessageRequest,
 )
 from .models import ResearchConversationModel, ResearchEvidenceBundleModel
+from .research_artifact_llm import (
+    DeepSeekResearchArtifactGenerator,
+    ResearchArtifactGenerator,
+)
 
 
 class ConversationNotFoundError(LookupError):
@@ -54,8 +58,10 @@ class ResearchConversationService:
     def __init__(
         self,
         decision_generator: ConversationDecisionGenerator | None = None,
+        artifact_generator: ResearchArtifactGenerator | None = None,
     ) -> None:
         self.decision_generator = decision_generator or RuntimeConversationDecisionGenerator()
+        self.artifact_generator = artifact_generator or DeepSeekResearchArtifactGenerator()
 
     def create(
         self,
@@ -199,8 +205,8 @@ class ResearchConversationService:
             message.model_dump(mode="json"),
         ]
 
-    @staticmethod
     def _to_response(
+        self,
         conversation: ResearchConversationModel,
         db: Session,
     ) -> ResearchConversationResponse:
@@ -245,6 +251,7 @@ class ResearchConversationService:
                 profile,
                 plan=plan,
                 evidence_bundles=bundles,
+                generator=self.artifact_generator,
             ),
             experiment_design=build_experiment_design(profile, plan=plan),
             reply=assistant.content,

@@ -114,4 +114,6 @@ def test_research_workspace_labels_direction_analysis_as_a_non_paper_fact() -> N
     assert "ResearchDifficultyPanel" in workspace_source
     assert "topic_difficulty_analysis" in workspace_source
     assert "不是论文精读或实验结论" in difficulty_source
+    assert "模型个性化建议" in difficulty_source
+    assert "模型失败后的规则降级" in difficulty_source
     assert "分析元数据/摘要难点" in search_source

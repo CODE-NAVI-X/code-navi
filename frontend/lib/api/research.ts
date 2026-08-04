@@ -109,6 +109,7 @@ export interface TopicDifficultyAnalysis {
   information_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
   items: ResearchAnalysisItem[];
   provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
 }
 
 export interface PaperAnalysis {
@@ -119,6 +120,7 @@ export interface PaperAnalysis {
   abstract_available: boolean;
   items: ResearchAnalysisItem[];
   provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
 }
 
 export interface ExperimentDesign {

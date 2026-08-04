@@ -277,6 +277,7 @@ class TopicDifficultyAnalysis(BaseModel):
     information_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
 
 
 class PaperAnalysis(BaseModel):
@@ -291,6 +292,7 @@ class PaperAnalysis(BaseModel):
     abstract_available: bool
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
 
 
 class ExperimentDesign(BaseModel):

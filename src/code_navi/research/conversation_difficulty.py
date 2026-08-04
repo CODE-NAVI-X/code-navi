@@ -10,6 +10,7 @@ from .conversation_schemas import (
     ResearchProfile,
     TopicDifficultyAnalysis,
 )
+from .research_artifact_llm import ResearchArtifactGenerator
 from .schemas import AcademicPaperResult
 
 
@@ -18,6 +19,7 @@ def build_topic_difficulty_analysis(
     *,
     plan: ConversationResearchPlan | None,
     evidence_bundles: list[ConversationEvidenceBundle],
+    generator: ResearchArtifactGenerator | None = None,
 ) -> TopicDifficultyAnalysis:
     """List research-design gaps without asserting external facts or paper results."""
     scope = (
@@ -77,15 +79,41 @@ def build_topic_difficulty_analysis(
                 "profile_and_plan_only",
             )
         )
-    return TopicDifficultyAnalysis(
+    rules = TopicDifficultyAnalysis(
         title=f"{profile.topic or '研究方向'}的难点分析",
         information_scope=scope,
         items=items,
         provenance_note="本分析只根据科研画像、规则研究计划和已保存证据的可用范围生成；不读取论文全文，不把方向建议写成论文结论。",
     )
+    return _enhance_topic_analysis(
+        rules,
+        generator=generator,
+        context={
+            "profile": profile.model_dump(mode="json"),
+            "research_plan": plan.model_dump(mode="json") if plan else None,
+            "evidence_scope": scope,
+            "saved_papers": _paper_context(evidence_bundles),
+            "required_json_shape": {
+                "title": "string",
+                "information_scope": scope,
+                "items": [
+                    {
+                        "area": "string",
+                        "content": "string",
+                        "classification": "inference|to_verify",
+                        "basis": "string",
+                        "source_scope": "profile_and_plan_only|metadata_and_abstract_only",
+                    }
+                ],
+                "provenance_note": "string",
+            },
+        },
+    )
 
 
-def build_paper_analysis(paper: AcademicPaperResult) -> PaperAnalysis:
+def build_paper_analysis(
+    paper: AcademicPaperResult, *, generator: ResearchArtifactGenerator | None = None
+) -> PaperAnalysis:
     """Analyze only an explicitly selected saved paper's metadata and abstract."""
     abstract = paper.abstract_excerpt
     items = [
@@ -119,13 +147,90 @@ def build_paper_analysis(paper: AcademicPaperResult) -> PaperAnalysis:
             "metadata_and_abstract_only",
         ),
     ]
-    return PaperAnalysis(
+    rules = PaperAnalysis(
         title=paper.title,
         paper_url=paper.url,
         abstract_available=bool(abstract),
         items=items,
         provenance_note="仅基于用户选中的已保存论文元数据和来源摘要；不下载全文、不生成论文精读卡，也不把待核验项当作事实。",
     )
+    if generator is None:
+        return rules
+    outcome = generator.generate(
+        kind="paper_analysis",
+        context={
+            "paper": paper.model_dump(mode="json"),
+            "information_scope": "metadata_and_abstract_only",
+            "required_json_shape": {
+                "title": "string",
+                "paper_url": "string",
+                "abstract_available": "boolean",
+                "items": [
+                    {
+                        "area": "string",
+                        "content": "string",
+                        "classification": "inference|to_verify",
+                        "basis": "string",
+                        "source_scope": "metadata_and_abstract_only",
+                    }
+                ],
+                "provenance_note": "string",
+            },
+        },
+    )
+    if outcome.status == "unavailable":
+        return rules
+    if outcome.status != "generated" or outcome.text is None:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+    try:
+        enhanced = PaperAnalysis.model_validate_json(outcome.text)
+        _assert_model_analysis_boundary(enhanced.items)
+        if enhanced.paper_url != paper.url or enhanced.abstract_available != bool(abstract):
+            raise ValueError("model changed selected paper identity or source scope")
+        return enhanced.model_copy(update={"generation_mode": "llm"})
+    except ValueError:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+
+
+def _enhance_topic_analysis(
+    rules: TopicDifficultyAnalysis,
+    *,
+    generator: ResearchArtifactGenerator | None,
+    context: dict[str, object],
+) -> TopicDifficultyAnalysis:
+    if generator is None:
+        return rules
+    outcome = generator.generate(kind="topic_difficulty_analysis", context=context)
+    if outcome.status == "unavailable":
+        return rules
+    if outcome.status != "generated" or outcome.text is None:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+    try:
+        enhanced = TopicDifficultyAnalysis.model_validate_json(outcome.text)
+        _assert_model_analysis_boundary(enhanced.items)
+        if enhanced.information_scope != rules.information_scope:
+            raise ValueError("model changed information scope")
+        return enhanced.model_copy(update={"generation_mode": "llm"})
+    except ValueError:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+
+
+def _assert_model_analysis_boundary(items: list[ResearchAnalysisItem]) -> None:
+    if any(item.classification == "fact" for item in items):
+        raise ValueError("model cannot introduce fact-classified analysis")
+
+
+def _paper_context(bundles: list[ConversationEvidenceBundle]) -> list[dict[str, object]]:
+    return [
+        {
+            "title": paper.title,
+            "url": paper.url,
+            "source": paper.source_name,
+            "abstract_excerpt": paper.abstract_excerpt,
+        }
+        for bundle in bundles
+        for paper in bundle.papers
+    ][:8]
 
 
 def _item(
