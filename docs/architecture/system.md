@@ -41,8 +41,8 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `POST /api/v1/learning/explain` | `ExplainRequest` | `ExplainResponse`、Runtime Event，并写入 `notebook_items` |
 | `GET /api/v1/learning/notebook?session_id=...` | 学习 `session_id` | 该学习会话的 `NotebookItem` 列表 |
 | `POST /api/v1/research/conversations` | `CreateResearchConversationRequest` | 新的 `ResearchConversationResponse` |
-| `POST /api/v1/research/conversations/{conversation_id}/messages` | 自由文本 | 更新画像、消息与下一步的 `ResearchConversationResponse` |
-| `GET /api/v1/research/conversations/{conversation_id}` | `conversation_id` | 已持久化的动态对话 |
+| `POST /api/v1/research/conversations/{conversation_id}/messages` | 自由文本 | 更新画像、消息与下一步；达到准备度时附带规则生成的 `research_plan` |
+| `GET /api/v1/research/conversations/{conversation_id}` | `conversation_id` | 已持久化的动态对话，并按当前画像恢复相同规则研究计划 |
 | `GET /api/v1/research/conversations/{conversation_id}/search-plan` | `conversation_id` | 不联网的 `ResearchSearchPlan` |
 | `POST /api/v1/research/conversations/{conversation_id}/evidence-bundles` | 用户确认、查询和允许来源 | OpenAlex、Crossref、arXiv 元数据与摘要组成的 `ConversationEvidenceBundle` |
 | `GET /api/v1/research/conversations/{conversation_id}/evidence-bundles` | `conversation_id` | 已保存的 evidence bundle 列表，不触发联网 |
@@ -53,7 +53,7 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 
 请求 schema 不合法返回 422；科研对话或兼容会话不存在返回 404；画像尚未达到检索条件时返回 409；未处理异常返回不暴露内部细节的 500 和 `error_id`。调用方不得把这些状态映射为成功或空结果。
 
-动态研究画像维护主题、动机、问题、上下文、方法、数据需求、证据偏好、时间范围、限制、预期产出、假设和不确定性，并以 `research-conversation.v1` 返回；检索计划和证据分别使用 `research-search-plan.v1`、`academic-evidence.v1`。原五字段规则只属于兼容流程；这些业务状态都不进入 Kernel 契约。
+动态研究画像维护主题、动机、问题、上下文、方法、数据需求、证据偏好、时间范围、限制、预期产出、假设和不确定性，并以 `research-conversation.v1` 返回。画像达到计划准备度后，纯规则生成器派生 `research-plan.v1`；它不调用模型或网络，只使用已校验画像，结构化条目只允许 `inference` 或 `to_verify`。检索计划和证据分别使用 `research-search-plan.v1`、`academic-evidence.v1`。原五字段规则只属于兼容流程；这些业务状态都不进入 Kernel 契约。
 
 ## 4. Runtime、Provider 与工具接口
 
@@ -67,7 +67,7 @@ AgentSpec + RuntimeRequest
 RuntimeResult + Event JSONL
 ```
 
-动态科研对话和 Provider 连接测试已经使用该接口，均不授予工具权限；模型不可用或结构无效时回退到规则。兼容流程的 `ProviderGuidanceGenerator` 是唯一已知例外：它通过统一 Provider 契约直接调用 `complete()`，无工具、经过 Schema 校验且可回退，但没有 Runtime Event。不得扩展该例外；生产化前迁入 Runtime，或用 ADR 接受其审计边界。
+动态科研对话和 Provider 连接测试已经使用该接口，均不授予工具权限；模型不可用或结构无效时回退到规则。对话 reducer 完成画像校验后，`research-plan.v1` 由应用规则派生，不产生新的 Agent run，也不访问 Provider 或网络。兼容流程的 `ProviderGuidanceGenerator` 是唯一已知例外：它通过统一 Provider 契约直接调用 `complete()`，无工具、经过 Schema 校验且可回退，但没有 Runtime Event。不得扩展该例外；生产化前迁入 Runtime，或用 ADR 接受其审计边界。
 
 ### Provider
 

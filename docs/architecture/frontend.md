@@ -7,7 +7,7 @@
 | 页面 | 当前能力 |
 | --- | --- |
 | `/learning` | 调用学习 explain API，展示讲解与引文，并读取当前学习会话笔记 |
-| `/research` | 创建或恢复动态科研对话，展示画像、Provider 状态和检索计划，并显式触发与恢复 evidence bundle |
+| `/research` | 创建或恢复动态科研对话，展示画像、离线规则研究计划、Provider 状态和检索计划，并显式触发与恢复 evidence bundle |
 | `/practice` | 展示接收到的原型上下文；按钮仅提示功能未上线 |
 
 `/student/learning`、`/student/practice` 和 `/student/research` 通过 Next rewrite 映射到上述页面。Web 是当前本地产品宿主；CLI 仍用于独立验证 Runtime 路径。

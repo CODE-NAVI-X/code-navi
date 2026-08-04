@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Kernel 与 CLI | 本地可运行 | `code-navi ask`、`code-navi shell` 经 `AgentRuntime` 使用 Mock、OpenAI 或 DeepSeek Provider，并保存 Event JSONL |
 | 知识点学习 | 本地闭环已实现 | FastAPI 与 Next 页面可提交知识点；模型调用经 Runtime；结果写入按学习会话隔离的 SQLite 笔记 |
-| 科研助手 | 本地闭环已实现 | 动态研究对话、画像与消息恢复、检索计划，以及用户确认后的 OpenAlex、Crossref、arXiv 元数据与摘要检索；模型不可用时回退到规则 |
+| 科研助手 | 本地闭环已实现 | 动态研究对话、画像与消息恢复、离线规则研究计划、检索计划，以及用户确认后的 OpenAlex、Crossref、arXiv 元数据与摘要检索；模型不可用时回退到规则 |
 | 代码测试练习 | 页面占位 | 页面可接收原型上下文；没有后端任务、执行器或测试反馈闭环 |
 | 跨模块上下文 | 浏览器原型 | `FlowPayload` 仅在当前前端进程内接力；刷新后丢失，用户查看、修改、清除和服务端持久化未完成 |
 | Web/API 宿主 | 本地开发可用 | Next 前端、FastAPI、`/health`、显式 CORS allowlist 和本地启动脚本已存在 |

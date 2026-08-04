@@ -167,6 +167,45 @@ class ResearchReadiness(BaseModel):
     reasons: list[str]
 
 
+PlanClassification = Literal["inference", "to_verify"]
+
+
+class ResearchPlanEntry(BaseModel):
+    """One bounded, non-factual recommendation in a conversation research plan."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=1000)
+    classification: PlanClassification
+    basis: str = Field(min_length=1, max_length=1000)
+
+
+class ResearchPlanRisk(BaseModel):
+    """A risk and its proposed mitigation, both clearly labelled as suggestions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk: ResearchPlanEntry
+    mitigation: ResearchPlanEntry
+
+
+class ConversationResearchPlan(BaseModel):
+    """Offline, restorable plan derived only from an already validated profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["research-plan.v1"] = "research-plan.v1"
+    research_title: ResearchPlanEntry
+    research_goal: ResearchPlanEntry
+    candidate_methods_or_baselines: list[ResearchPlanEntry] = Field(min_length=1)
+    suggested_datasets_or_metrics: list[ResearchPlanEntry] = Field(min_length=1)
+    two_week_mvp_plan: list[ResearchPlanEntry] = Field(min_length=1)
+    risks_and_mitigations: list[ResearchPlanRisk] = Field(min_length=1)
+    suggested_search_keywords: list[str] = Field(min_length=1, max_length=8)
+    pending_items: list[ResearchPlanEntry] = Field(default_factory=list)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
 class CreateResearchConversationRequest(BaseModel):
     """Create a conversation, optionally processing the first user message."""
 
@@ -209,6 +248,7 @@ class ResearchConversationResponse(BaseModel):
     readiness: ResearchReadiness
     stage: Literal["exploring", "focusing", "ready_for_plan"]
     ready_for_plan: bool
+    research_plan: ConversationResearchPlan | None = None
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
     recommended_action: Literal[

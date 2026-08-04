@@ -16,7 +16,7 @@
 | CLI、上下文或公共 Provider 选择 | `tests/test_cli.py`、`test_context.py`、`test_providers.py` |
 | 知识点学习 | `tests/test_learning_module.py` 与相关 server/provider 测试 |
 | 科研兼容规则、API 或措辞 | `tests/test_research_api.py`、`test_research_llm.py` |
-| 动态科研对话与 Provider | `tests/test_research_conversation.py`、`test_research_deepseek.py`、`test_provider_configuration.py` |
+| 动态科研对话、规则研究计划与 Provider | `tests/test_research_conversation.py`、`test_research_frontend_copy.py`、`test_research_deepseek.py`、`test_provider_configuration.py` |
 | 学术检索与对话检索 | `tests/test_research_tools.py`、`test_academic_evidence.py`、`test_conversation_search.py` |
 | ORM 或 Alembic | `tests/test_migrations.py` 和受影响模块测试 |
 | FastAPI 边界 | `tests/test_server_gateway.py` 与目标 router 测试 |

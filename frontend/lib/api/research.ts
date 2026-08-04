@@ -32,6 +32,32 @@ export interface ResearchReadiness {
   reasons: string[];
 }
 
+export type ResearchPlanClassification = "inference" | "to_verify";
+
+export interface ResearchPlanEntry {
+  content: string;
+  classification: ResearchPlanClassification;
+  basis: string;
+}
+
+export interface ResearchPlanRisk {
+  risk: ResearchPlanEntry;
+  mitigation: ResearchPlanEntry;
+}
+
+export interface ConversationResearchPlan {
+  schema_version: "research-plan.v1";
+  research_title: ResearchPlanEntry;
+  research_goal: ResearchPlanEntry;
+  candidate_methods_or_baselines: ResearchPlanEntry[];
+  suggested_datasets_or_metrics: ResearchPlanEntry[];
+  two_week_mvp_plan: ResearchPlanEntry[];
+  risks_and_mitigations: ResearchPlanRisk[];
+  suggested_search_keywords: string[];
+  pending_items: ResearchPlanEntry[];
+  provenance_note: string;
+}
+
 export interface ResearchConversationMessage {
   message_id: string;
   role: "user" | "assistant";
@@ -56,6 +82,7 @@ export interface ResearchConversationResponse {
   readiness: ResearchReadiness;
   stage: ResearchStage;
   ready_for_plan: boolean;
+  research_plan: ConversationResearchPlan | null;
   reply: string;
   generation_mode: GenerationMode;
   recommended_action: RecommendedAction;
