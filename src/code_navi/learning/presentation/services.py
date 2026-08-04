@@ -68,8 +68,11 @@ _DEFAULT_TIMEOUT = 60.0  # seconds — slide generation can take a while
 _DEFAULT_MAX_TOKENS = 8192
 _DEFAULT_TEMPERATURE = 0.3
 
-_OUTLINE_COUNT_MIN = 3
-_OUTLINE_COUNT_MAX = 6
+_OUTLINE_COUNT_MIN = 4
+_OUTLINE_COUNT_MAX = 10
+# Per-page element cap: the prompt asks for ≤ 24, and this is a safety net so a
+# model overshoot still produces an exportable, readable slide.
+_SLIDE_MAX_ELEMENTS = 28
 
 # ---------------------------------------------------------------------------
 # Rule-based fallbacks (offline / unparseable)
@@ -368,7 +371,7 @@ class PresentationGenerator:
             )
             return offline
         try:
-            return Slide.model_validate(data)
+            slide = Slide.model_validate(data)
         except Exception as exc:  # noqa: BLE001 — validation errors fall back gracefully
             logger.warning(
                 "Slide validation failed for '%s' (%s); using rule fallback.",
@@ -376,6 +379,10 @@ class PresentationGenerator:
                 exc,
             )
             return offline
+        if len(slide.elements) > _SLIDE_MAX_ELEMENTS:
+            # Keep the deck exportable/readable even if the model overshoots.
+            slide.elements = slide.elements[: _SLIDE_MAX_ELEMENTS]
+        return slide
 
     # -- SSE event stream ---------------------------------------------------
 

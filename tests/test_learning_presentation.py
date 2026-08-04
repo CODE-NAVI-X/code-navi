@@ -133,10 +133,10 @@ class TestSchemas:
 
 
 class TestOfflineFallbacks:
-    def test_mock_outlines_are_3_to_6_pages(self) -> None:
+    def test_mock_outlines_are_4_to_10_pages(self) -> None:
         req = PresentationGenerateRequest(knowledge_point="DHCP 四阶段")
         outlines = pres_services._mock_outlines(req.knowledge_point, req.style)
-        assert 3 <= len(outlines) <= 6
+        assert 4 <= len(outlines) <= 10
         titles = [o.title for o in outlines]
         assert any("核心概念" in t for t in titles)
         assert any("总结" in t for t in titles)
@@ -161,7 +161,7 @@ class TestOfflineFallbacks:
         gen = pres_services.PresentationGenerator()
         req = PresentationGenerateRequest(knowledge_point="B树")
         outlines = gen.generate_outlines(req.knowledge_point, req.style, "sess-t")
-        assert 3 <= len(outlines) <= 6
+        assert 4 <= len(outlines) <= 10
         assert all(isinstance(o, SceneOutline) for o in outlines)
 
     def test_generate_slide_mock_returns_valid_slide(self) -> None:
@@ -189,7 +189,7 @@ class TestEventStream:
         assert events[0]["type"] == "outlines"
         outline_data = events[0]["data"]
         assert isinstance(outline_data, list)
-        assert 3 <= len(outline_data) <= 6
+        assert 4 <= len(outline_data) <= 10
 
         slide_events = [e for e in events if e["type"] == "slide"]
         assert len(slide_events) == len(outline_data)

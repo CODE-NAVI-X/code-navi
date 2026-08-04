@@ -156,14 +156,18 @@ export default function LearningPage(): JSX.Element {
     (savedSnapshot?.result as ExplainResponse) ?? null,
   );
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<ResultView>("text");
+  const [view, setView] = useState<ResultView>(savedSnapshot?.view ?? "text");
 
-  // PPT state
-  const [outlines, setOutlines] = useState<SceneOutline[]>([]);
-  const [slides, setSlides] = useState<Slide[]>([]);
+  // PPT state — restored from the snapshot so the deck survives a route switch.
+  const [outlines, setOutlines] = useState<SceneOutline[]>(
+    savedSnapshot?.outlines ?? [],
+  );
+  const [slides, setSlides] = useState<Slide[]>(savedSnapshot?.slides ?? []);
   const [pptGenerating, setPptGenerating] = useState(false);
   const [pptError, setPptError] = useState<string | null>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(
+    savedSnapshot?.currentIndex ?? 0,
+  );
   const [exporting, setExporting] = useState(false);
 
   // Track whether the user is "following" the newest generated page so new
@@ -177,12 +181,20 @@ export default function LearningPage(): JSX.Element {
   // Empty during server rendering, real id after hydration.
   const sessionId = useLearningSessionId();
 
-  // Persist snapshot whenever query or result changes
+  // Persist the full learning state (explain result + PPT deck + active view)
+  // so a route switch away and back restores everything, not just the text.
   useEffect(() => {
-    if (result || query) {
-      setLearningSnapshot({ query, result });
+    if (result || query || slides.length > 0 || outlines.length > 0) {
+      setLearningSnapshot({
+        query,
+        result,
+        view,
+        outlines,
+        slides,
+        currentIndex,
+      });
     }
-  }, [query, result]);
+  }, [query, result, view, outlines, slides, currentIndex]);
 
   const [notebookOpen, setNotebookOpen] = useState(false);
   const [goCardVisible, setGoCardVisible] = useState(true);
@@ -273,7 +285,7 @@ export default function LearningPage(): JSX.Element {
   const hasPptContent = slides.length > 0 || pptGenerating;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:py-12">
+    <div className="mx-auto max-w-[1920px] px-4 py-8 sm:py-12">
       {/* Top Floating Control Bar - Swiss Light Gray Minimalist */}
       <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-slate-100/70 p-3 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-900/70">
         <div className="flex items-center gap-2">
