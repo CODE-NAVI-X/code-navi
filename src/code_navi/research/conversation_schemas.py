@@ -311,6 +311,7 @@ class ExperimentDesign(BaseModel):
     risks: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
     advisor_confirmation_items: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
 
 
 class ExperimentCodeDraftFile(BaseModel):

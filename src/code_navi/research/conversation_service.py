@@ -253,7 +253,9 @@ class ResearchConversationService:
                 evidence_bundles=bundles,
                 generator=self.artifact_generator,
             ),
-            experiment_design=build_experiment_design(profile, plan=plan),
+            experiment_design=build_experiment_design(
+                profile, plan=plan, generator=self.artifact_generator
+            ),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",

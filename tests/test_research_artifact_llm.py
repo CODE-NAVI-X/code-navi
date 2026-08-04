@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from code_navi.research.conversation_difficulty import build_topic_difficulty_analysis
+from code_navi.research.conversation_experiment import build_experiment_design
 from code_navi.research.conversation_plan import build_conversation_research_plan
 from code_navi.research.conversation_schemas import ResearchProfile
 from code_navi.research.research_artifact_llm import (
@@ -145,3 +146,45 @@ def test_deepseek_artifact_generator_turns_provider_failures_into_fallback_statu
     assert DeepSeekResearchArtifactGenerator().generate(
         kind="topic_difficulty_analysis", context={}
     ).status == "failed"
+
+
+def test_experiment_design_uses_validated_model_suggestions_after_plan_exists() -> None:
+    profile = _profile()
+    plan = build_conversation_research_plan(profile, ready_for_plan=True)
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            '{"hypothesis":{"content":"建议检验即时反馈与延迟反馈的差异。",'
+            '"classification":"inference","basis":"已确认研究问题。"},'
+            '"variables":[{"content":"反馈时机需要预先固定。","classification":"inference","basis":"比较实验方法。"}],'
+            '"data_sources":[{"content":"匿名课程作业记录的许可和字段待确认。","classification":"to_verify","basis":"数据条件尚未验证。"}],'
+            '"baselines":[{"content":"以延迟反馈作为候选对照。","classification":"inference","basis":"已确认比较方向。"}],'
+            '"metrics":[{"content":"主指标与阈值需导师确认。","classification":"to_verify","basis":"当前没有已验证指标。"}],'
+            '"steps":[{"content":"第一周完成最小数据检查。","classification":"inference","basis":"两周约束。"}],'
+            '"resources":[{"content":"样本量与伦理条件待确认。","classification":"to_verify","basis":"当前约束范围。"}],'
+            '"risks":[{"content":"样本不足风险需记录。","classification":"to_verify","basis":"没有样本量事实。"}],'
+            '"advisor_confirmation_items":[{"content":"确认数据许可。","classification":"to_verify","basis":"需要导师确认。"}],'
+            '"provenance_note":"模型基于已确认上下文生成建议，未验证资源可用性。"}'
+        )
+    )
+
+    design = build_experiment_design(profile, plan=plan, generator=generator)
+
+    assert design is not None
+    assert generator.calls == ["experiment_design"]
+    assert design.generation_mode == "llm"
+    assert all(
+        item.classification in {"inference", "to_verify"}
+        for item in [design.hypothesis, *design.resources]
+    )
+
+
+def test_failed_experiment_design_model_uses_rules_fallback() -> None:
+    profile = _profile()
+    design = build_experiment_design(
+        profile,
+        plan=build_conversation_research_plan(profile, ready_for_plan=True),
+        generator=FakeArtifactGenerator(ArtifactLlmOutcome.generated("not-json")),
+    )
+
+    assert design is not None
+    assert design.generation_mode == "rules_fallback"

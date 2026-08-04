@@ -135,6 +135,7 @@ export interface ExperimentDesign {
   risks: ResearchPlanEntry[];
   advisor_confirmation_items: ResearchPlanEntry[];
   provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
 }
 
 export interface ExperimentCodeDraftFile { path: string; content: string; }

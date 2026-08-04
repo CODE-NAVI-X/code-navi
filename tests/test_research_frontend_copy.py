@@ -9,6 +9,7 @@ PROVIDER = Path("frontend/components/research/ProviderStatusCard.tsx")
 PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
 MINDMAP = Path("frontend/components/research/ResearchMindMapPanel.tsx")
 DIFFICULTY = Path("frontend/components/research/ResearchDifficultyPanel.tsx")
+EXPERIMENT = Path("frontend/components/research/ExperimentDesignPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -117,3 +118,11 @@ def test_research_workspace_labels_direction_analysis_as_a_non_paper_fact() -> N
     assert "模型个性化建议" in difficulty_source
     assert "模型失败后的规则降级" in difficulty_source
     assert "分析元数据/摘要难点" in search_source
+
+
+def test_experiment_design_discloses_model_or_rules_generation_mode() -> None:
+    experiment_source = EXPERIMENT.read_text(encoding="utf-8")
+
+    assert "模型个性化建议" in experiment_source
+    assert "模型失败后的规则降级" in experiment_source
+    assert "我确认仅预览代码草案" in experiment_source

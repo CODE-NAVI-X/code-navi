@@ -8,10 +8,14 @@ from .conversation_schemas import (
     ResearchPlanEntry,
     ResearchProfile,
 )
+from .research_artifact_llm import ResearchArtifactGenerator
 
 
 def build_experiment_design(
-    profile: ResearchProfile, *, plan: ConversationResearchPlan | None
+    profile: ResearchProfile,
+    *,
+    plan: ConversationResearchPlan | None,
+    generator: ResearchArtifactGenerator | None = None,
 ) -> ExperimentDesign | None:
     """Return no design before a plan; never claim unprovided resources are available."""
     if plan is None:
@@ -22,7 +26,7 @@ def build_experiment_design(
     )
     infer = _entry("inference")
     verify = _entry("to_verify")
-    return ExperimentDesign(
+    rules = ExperimentDesign(
         hypothesis=infer(
             f"建议检验：在定义的对照条件下，“{question}”可观察到差异。", f"研究问题：{question}"
         ),
@@ -60,6 +64,53 @@ def build_experiment_design(
         ],
         provenance_note="实验方案只由已校验科研画像和规则研究计划离线生成；所有内容是建议或待验证项，不写文件、不安装依赖、不执行代码或实验。",
     )
+    if generator is None:
+        return rules
+    outcome = generator.generate(
+        kind="experiment_design",
+        context={
+            "profile": profile.model_dump(mode="json"),
+            "research_plan": plan.model_dump(mode="json"),
+            "hard_limits": {
+                "variables": 6,
+                "data_sources": 4,
+                "baselines": 4,
+                "metrics": 4,
+                "steps": 6,
+                "resources": 4,
+                "risks": 4,
+                "advisor_confirmation_items": 4,
+                "classification": "inference|to_verify",
+            },
+            "required_json_shape": {
+                "research_hypothesis": "use hypothesis",
+                "variables_and_controls": "use variables",
+                "data_sources": "ResearchPlanEntry[]",
+                "candidate_baselines": "use baselines",
+                "metrics": "ResearchPlanEntry[]",
+                "experiment_steps": "use steps",
+                "two_week_mvp": "include within steps",
+                "required_resources": "use resources",
+                "risks_and_mitigations": "use risks",
+                "advisor_confirmation_items": "ResearchPlanEntry[]",
+                "provenance_note": "string",
+                "actual_response_keys": [
+                    "hypothesis", "variables", "data_sources", "baselines", "metrics",
+                    "steps", "resources", "risks", "advisor_confirmation_items", "provenance_note",
+                ],
+            },
+        },
+    )
+    if outcome.status == "unavailable":
+        return rules
+    if outcome.status != "generated" or outcome.text is None:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+    try:
+        return ExperimentDesign.model_validate_json(outcome.text).model_copy(
+            update={"generation_mode": "llm"}
+        )
+    except ValueError:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
 
 
 def _entry(classification: str):
