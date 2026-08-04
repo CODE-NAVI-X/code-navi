@@ -73,6 +73,16 @@ def test_research_api_has_a_bounded_request_timeout() -> None:
     assert "25_000" in api_source
 
 
+def test_model_backed_conversation_turn_allows_more_time_than_restore() -> None:
+    api_source = API.read_text(encoding="utf-8")
+    send_region = api_source.split(
+        "export async function sendResearchMessage", 1
+    )[1].split("export async function getResearchProviderStatus", 1)[0]
+
+    assert "const MODEL_TURN_TIMEOUT_MS = 25_000" in api_source
+    assert "MODEL_TURN_TIMEOUT_MS" in send_region
+
+
 def test_next_development_server_allows_documented_loopback_host() -> None:
     config_source = NEXT_CONFIG.read_text(encoding="utf-8")
 

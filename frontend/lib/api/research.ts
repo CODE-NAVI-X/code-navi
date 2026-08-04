@@ -299,6 +299,7 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const MODEL_TURN_TIMEOUT_MS = 25_000;
 
 export async function createResearchConversation(
   initialMessage?: string,
@@ -326,6 +327,7 @@ export async function sendResearchMessage(
   const data = await request<unknown>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/messages`,
     { method: "POST", body: JSON.stringify({ message }) },
+    MODEL_TURN_TIMEOUT_MS,
   );
   return validateConversationResponse(data);
 }

@@ -62,6 +62,13 @@ class FakeDecisionGenerator:
         return self.outcomes.pop(0)
 
 
+class FailingArtifactGenerator:
+    """Prove that restoring a conversation must not wait for an LLM artefact call."""
+
+    def generate(self, **kwargs: object) -> object:
+        raise AssertionError("conversation restore must not generate LLM artefacts")
+
+
 def _decision(**overrides: object) -> ResearchConversationDecision:
     values: dict[str, object] = {
         "reply": "我理解了你的初步想法，接下来优先确认研究目标。",
@@ -173,6 +180,24 @@ def test_follow_up_can_correct_existing_profile_and_restore_without_model_call(
     assert restored.json()["profile"] == progressed.json()["profile"]
     assert len(restored.json()["messages"]) == 4
     assert len(fake.calls) == 2
+
+
+def test_restore_does_not_generate_llm_artifacts(client: TestClient) -> None:
+    """Restoring saved state must remain fast even when DeepSeek is configured."""
+    original = _conversation_service.artifact_generator
+    try:
+        _conversation_service.artifact_generator = None
+        created = client.post("/api/v1/research/conversations", json={}).json()
+        _conversation_service.artifact_generator = FailingArtifactGenerator()
+
+        restored = client.get(
+            f"/api/v1/research/conversations/{created['conversation_id']}"
+        )
+
+        assert restored.status_code == 200
+        assert restored.json()["conversation_id"] == created["conversation_id"]
+    finally:
+        _conversation_service.artifact_generator = original
 
 
 def test_follow_up_can_explicitly_clear_rejected_candidate_questions(

@@ -118,7 +118,9 @@ class ResearchConversationService:
 
     def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
         """Restore a conversation without invoking a model or external service."""
-        return self._to_response(self._get_model(conversation_id, db), db)
+        return self._to_response(
+            self._get_model(conversation_id, db), db, include_llm_artifacts=False
+        )
 
     def create_experiment_code_draft(self, conversation_id: str, db: Session):
         """Generate only the confirmed preview, without re-running other artefact calls."""
@@ -222,6 +224,8 @@ class ResearchConversationService:
         self,
         conversation: ResearchConversationModel,
         db: Session,
+        *,
+        include_llm_artifacts: bool = True,
     ) -> ResearchConversationResponse:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         messages = _messages(conversation)
@@ -245,6 +249,9 @@ class ResearchConversationService:
                 .all()
             )
         ]
+        artifact_generator = (
+            self.artifact_generator if include_llm_artifacts else None
+        )
         return ResearchConversationResponse(
             conversation_id=conversation.id,
             next_skill=(
@@ -264,10 +271,10 @@ class ResearchConversationService:
                 profile,
                 plan=plan,
                 evidence_bundles=bundles,
-                generator=self.artifact_generator,
+                generator=artifact_generator,
             ),
             experiment_design=build_experiment_design(
-                profile, plan=plan, generator=self.artifact_generator
+                profile, plan=plan, generator=artifact_generator
             ),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
