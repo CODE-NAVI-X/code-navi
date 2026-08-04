@@ -91,7 +91,7 @@ export function StructuredNotebook({
                 结构化学术笔记
               </h3>
               <p className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
-                {sessionId ? `会话编号：${sessionId}` : "全量学术轨迹汇总"}
+                {sessionId ? `会话编号：${sessionId}` : "正在初始化学习会话"}
               </p>
             </div>
           </div>

@@ -11,6 +11,7 @@
 
 export interface ExplainRequest {
   knowledge_point: string;
+  session_id?: string;
   persona?: string | null;
   include_citations?: boolean;
 }
@@ -23,9 +24,30 @@ export interface CitationItem {
 
 export interface ExplainResponse {
   knowledge_point: string;
+  session_id: string;
   summary: string;
   detail?: string | null;
   citations: CitationItem[];
+}
+
+// ── Learning session id ────────────────────────────────────────────────────────
+
+const SESSION_STORAGE_KEY = "code-navi:learning-session-id";
+
+/**
+ * Return this browser's learning session id, minting one on first use.
+ *
+ * Notebook entries are scoped by this value server-side, so it must stay
+ * stable across reloads.  Only the opaque id is stored — never any credential.
+ */
+export function getLearningSessionId(): string {
+  if (typeof window === "undefined") return "";
+  let sessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!sessionId) {
+    sessionId = `sess-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  }
+  return sessionId;
 }
 
 // ── API base URL ───────────────────────────────────────────────────────────────
@@ -67,6 +89,7 @@ export async function explainKnowledgePoint(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         knowledge_point: request.knowledge_point,
+        session_id: request.session_id ?? getLearningSessionId(),
         persona: request.persona ?? "academic",
         include_citations: request.include_citations ?? true,
       }),
@@ -122,6 +145,9 @@ function validateExplainResponse(raw: unknown): ExplainResponse {
   if (typeof obj.summary !== "string") {
     throw new LearningApiError(502, "Response missing 'summary' field.");
   }
+  if (typeof obj.session_id !== "string") {
+    throw new LearningApiError(502, "Response missing 'session_id' field.");
+  }
 
   const citations: CitationItem[] = [];
   if (Array.isArray(obj.citations)) {
@@ -140,6 +166,7 @@ function validateExplainResponse(raw: unknown): ExplainResponse {
 
   return {
     knowledge_point: obj.knowledge_point as string,
+    session_id: obj.session_id as string,
     summary: obj.summary as string,
     detail:
       typeof obj.detail === "string" ? (obj.detail as string) : undefined,

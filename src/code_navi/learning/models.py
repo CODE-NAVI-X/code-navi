@@ -12,9 +12,8 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, String, Text
-from sqlalchemy.orm import declarative_base
 
-Base = declarative_base()
+from code_navi.db import Base
 
 
 class NotebookItemModel(Base):
@@ -26,6 +25,12 @@ class NotebookItemModel(Base):
         default=lambda: str(uuid.uuid4()),
     )
     user_id = Column(String(64), nullable=False)
+    session_id = Column(
+        String(64),
+        nullable=False,
+        index=True,
+        comment="Client-owned learning session; scopes notebook reads",
+    )
     knowledge_id = Column(String(64), nullable=False)
     item_type = Column(
         String(32),
