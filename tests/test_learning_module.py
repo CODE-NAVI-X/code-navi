@@ -40,6 +40,12 @@ def _isolated_event_logs(
 
 
 @pytest.fixture(autouse=True)
+def _force_mock_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep default learning tests offline even when a local .env has a key."""
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
+
+
+@pytest.fixture(autouse=True)
 def _fresh_tables() -> Generator[None, None, None]:
     """Recreate all tables before each test so tests are fully isolated."""
     Base.metadata.create_all(bind=engine)
