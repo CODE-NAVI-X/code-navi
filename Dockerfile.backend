@@ -1,0 +1,36 @@
+# Code Navi — FastAPI backend image.
+#
+# Build via compose.web.yaml:
+#   docker compose -f compose.web.yaml build backend
+
+FROM python:3.11-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install dependencies first so source rebuilds reuse the layer cache.
+COPY pyproject.toml README.md ./
+COPY src/ src/
+COPY migrations/ migrations/
+COPY alembic.ini ./
+
+RUN pip install --no-compile ".[server]"
+
+# Non-root runtime user. /data is the mounted persistence volume (SQLite DB,
+# provider config, event logs) — everything writable lives there.
+RUN groupadd --system --gid 10001 code-navi \
+    && useradd --system --uid 10001 --gid code-navi --no-create-home code-navi \
+    && mkdir -p /data/runs \
+    && chown -R code-navi:code-navi /app /data
+
+USER code-navi
+
+EXPOSE 8000
+
+# Migrate first, then serve. CODE_NAVI_DATABASE_URL / CODE_NAVI_DATA_DIR /
+# CODE_NAVI_EVENTS_DIR are injected by compose, all pointing into /data.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn code_navi.server:app --app-dir src --host 0.0.0.0 --port 8000"]

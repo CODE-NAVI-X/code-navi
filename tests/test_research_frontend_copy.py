@@ -74,7 +74,12 @@ def test_research_api_has_a_bounded_request_timeout() -> None:
 def test_next_development_server_allows_documented_loopback_host() -> None:
     config_source = NEXT_CONFIG.read_text(encoding="utf-8")
 
-    assert 'allowedDevOrigins: ["127.0.0.1", "localhost"]' in config_source
+    assert "allowedDevOrigins" in config_source
+    # Loopback hosts are required for the documented local launcher. The LAN
+    # IP is added when the dev server is exposed to other devices on the
+    # network; keep both documented loopback hosts present.
+    assert '"127.0.0.1"' in config_source
+    assert '"localhost"' in config_source
 
 
 def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:

@@ -1,0 +1,31 @@
+# Code Navi — Caddy reverse proxy (TLS + Basic Auth)
+#
+# Public HTTPS entry point: https://91666.icu:25000
+#   - Uses the pre-existing certificate mounted from the NAS host:
+#     /vol4/docker/xray/certs/91666.icu.pem  (cert, PEM format)
+#     /vol4/docker/xray/certs/91666.icu.key  (private key)
+#   - The host cert file is 91666.icu.pem, not .crt — Caddy accepts PEM.
+#
+# HTTP Basic Auth gate (anti-abuse before any public exposure):
+#   credentials are injected at runtime from compose env — BASIC_AUTH_USER /
+#   BASIC_AUTH_HASH (bcrypt hash) — sourced from the deployment .env and never
+#   committed to the repo.
+#
+# Routing (same-origin, no CORS):
+#   everything except /api/*, /docs*, /openapi.json, /health is served by the
+#   Next.js frontend; the rest is proxied to the FastAPI backend. The frontend
+#   bundle is host-agnostic, so this works unchanged for LAN IP or public domain.
+
+91666.icu:25000 {
+    tls /certs/91666.icu.pem /certs/91666.icu.key
+
+    @api {
+        path /api/* /docs* /openapi.json /health
+    }
+    reverse_proxy @api backend:8000
+    reverse_proxy frontend:3000
+
+    basic_auth {
+        {$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+    }
+}

@@ -1,0 +1,82 @@
+name: code-navi-web
+
+# Code Navi — web stack base for NAS / LAN deployment.
+#
+#   docker compose -f compose.web.yaml up -d --build
+#
+# LAN:  http://<nas-ip>:25000
+# Public (later): point a DDNS domain at this host, uncomment the public block
+# in Caddyfile, and map ports 80/443 — Caddy issues a Let's Encrypt cert.
+#
+# Data layout — one named volume keeps the app usable across rebuilds:
+#   /data/code-navi.db   SQLite database      (CODE_NAVI_DATABASE_URL)
+#   /data/provider.env   provider credentials (loaded by the backend on start)
+#   /data/runs/          Kernel event logs     (CODE_NAVI_EVENTS_DIR)
+#
+# Provider config: copy an existing .code-navi/provider.env into the volume
+# once, e.g. `docker compose -f compose.web.yaml cp .code-navi/provider.env
+# backend:/data/provider.env`, then restart the backend.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: code-navi-backend:local
+    restart: unless-stopped
+    environment:
+      CODE_NAVI_DATABASE_URL: sqlite:////data/code-navi.db
+      CODE_NAVI_DATA_DIR: /data
+      CODE_NAVI_EVENTS_DIR: /data/runs
+    volumes:
+      - code_navi_data:/data
+    expose:
+      - "8000"          # reachable only via Caddy on the same network
+    networks:
+      - web
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    image: code-navi-frontend:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    expose:
+      - "3000"          # reachable only via Caddy
+    depends_on:
+      - backend
+    networks:
+      - web
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "25000:25000"   # HTTPS entry — https://91666.icu:25000 (TLS in Caddy)
+    environment:
+      # HTTP Basic Auth gate (anti-abuse). Injected from deployment .env
+      # (BASIC_AUTH_USER / BASIC_AUTH_HASH, bcrypt hash) — never committed.
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Existing TLS certificate on the NAS host (read-only).
+      # Host files: 91666.icu.pem + 91666.icu.key -> /certs
+      - /vol4/docker/xray/certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - web
+
+volumes:
+  code_navi_data:       # SQLite DB + provider config + event logs
+  caddy_data:           # Caddy TLS certificates & autosave
+  caddy_config:         # Caddy runtime config
+
+networks:
+  web:

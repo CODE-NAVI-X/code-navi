@@ -3,6 +3,14 @@
 :root {
   --background: #fafafa;
   --foreground: #09090b;
+  /* System font stack (was next/font/google Geist) so `next build` runs
+     fully offline — required for the Docker/NAS build, which cannot reach
+     Google Fonts. Variable names kept so @theme below needs no change. */
+  --font-geist-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }
 
 @theme inline {
