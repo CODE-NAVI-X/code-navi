@@ -6,6 +6,7 @@ import {
   LearningApiError,
   type SceneOutline,
   type Slide,
+  type PresentationGenerationMode,
   streamPresentation,
 } from "@/lib/api/learning";
 import TextSelectionPopover from "@/components/learning/TextSelectionPopover";
@@ -169,6 +170,12 @@ export default function LearningPage(): JSX.Element {
     savedSnapshot?.currentIndex ?? 0,
   );
   const [exporting, setExporting] = useState(false);
+  const [pptGenerationMode, setPptGenerationMode] = useState<PresentationGenerationMode | undefined>(
+    savedSnapshot?.presentationGenerationMode,
+  );
+  const [pptProviderName, setPptProviderName] = useState<string | undefined>(
+    savedSnapshot?.presentationProviderName,
+  );
 
   // Track whether the user is "following" the newest generated page so new
   // pages auto-advance, while manual navigation to earlier pages is respected.
@@ -192,9 +199,11 @@ export default function LearningPage(): JSX.Element {
         outlines,
         slides,
         currentIndex,
+        presentationGenerationMode: pptGenerationMode,
+        presentationProviderName: pptProviderName,
       });
     }
-  }, [query, result, view, outlines, slides, currentIndex]);
+  }, [query, result, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName]);
 
   const [notebookOpen, setNotebookOpen] = useState(false);
   const [goCardVisible, setGoCardVisible] = useState(true);
@@ -212,6 +221,8 @@ export default function LearningPage(): JSX.Element {
     setOutlines([]);
     setSlides([]);
     setPptError(null);
+    setPptGenerationMode(undefined);
+    setPptProviderName(undefined);
 
     try {
       const data = await explainKnowledgePoint({ knowledge_point: trimmed });
@@ -233,6 +244,8 @@ export default function LearningPage(): JSX.Element {
     setPptError(null);
     setOutlines([]);
     setSlides([]);
+    setPptGenerationMode(undefined);
+    setPptProviderName(undefined);
     setCurrentIndex(0);
     generatedCountRef.current = 0;
     currentIndexRef.current = 0;
@@ -247,6 +260,8 @@ export default function LearningPage(): JSX.Element {
       for await (const event of streamPresentation({ knowledge_point: trimmed, context })) {
         if (event.type === "outlines") {
           setOutlines(event.data);
+          setPptGenerationMode(event.generation_mode);
+          setPptProviderName(event.provider_name);
         } else if (event.type === "slide") {
           // Before this page arrived, the trailing "pending" position was
           // ``generatedCount``; if the user is parked there, follow it.
@@ -260,8 +275,13 @@ export default function LearningPage(): JSX.Element {
           if (currentIndexRef.current >= pending) {
             setCurrentIndex(event.index);
           }
+          setPptGenerationMode((current) => current === event.generation_mode ? current : "mixed");
+          setPptProviderName(event.provider_name);
+        } else if (event.type === "done") {
+          setPptGenerationMode(event.presentation.generation_mode);
+          setPptProviderName(event.presentation.provider_name);
         } else if (event.type === "error") {
-          setPptError(event.error);
+          setPptError(`${event.error.message}（错误编号：${event.error.error_id}）`);
         }
       }
     } catch (err) {
@@ -442,6 +462,8 @@ export default function LearningPage(): JSX.Element {
                   onNavigate={setCurrentIndex}
                   onExport={slides.length > 0 ? handleExport : undefined}
                   exporting={exporting}
+                  generationMode={pptGenerationMode}
+                  providerName={pptProviderName}
                 />
               ) : (
                 <div className="rounded-2xl border border-dashed border-slate-200 py-16 text-center text-slate-400 dark:border-zinc-800 dark:text-zinc-500">

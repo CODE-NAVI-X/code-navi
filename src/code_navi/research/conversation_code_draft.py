@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+from pydantic import BaseModel, ConfigDict, Field
 
 from .conversation_schemas import (
     ConversationResearchPlan,
@@ -13,11 +13,23 @@ from .conversation_schemas import (
 from .research_artifact_llm import ResearchArtifactGenerator
 
 
+class _CodeDraftPersonalization(BaseModel):
+    """The model may personalize labels, never executable file contents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=500)
+    assumptions: list[str] = Field(min_length=1, max_length=8)
+    to_verify_items: list[str] = Field(min_length=1, max_length=8)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
 def build_experiment_code_draft(
     profile: ResearchProfile,
     *,
     plan: ConversationResearchPlan | None,
     generator: ResearchArtifactGenerator | None = None,
+    conversation_id: str | None = None,
 ) -> ExperimentCodeDraft:
     """Create a fixed, synthetic-data preview only after the caller confirms intent."""
     if plan is None:
@@ -78,36 +90,23 @@ def build_experiment_code_draft(
     )
     if generator is None:
         return rules
+    if conversation_id is None:
+        raise ValueError("conversation_id is required for model code draft generation")
     outcome = generator.generate(
         kind="experiment_code_draft",
+        conversation_id=conversation_id,
         context={
             "profile": profile.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
             "safe_template_contract": {
-                "language": "Python",
-                "required_files": [
-                    "README.md",
-                    "requirements.txt",
-                    "src/data.py",
-                    "src/baseline.py",
-                    "src/evaluate.py",
-                ],
-                "default_data": "synthetic only unless an approved non-private path was supplied",
-                "forbidden": [
-                    "API keys",
-                    "private paths",
-                    "network downloads",
-                    "automatic installation",
-                    "subprocess execution",
-                    "shell execution",
-                    "writing outside the browser preview",
-                ],
+                "code_files": "server-owned fixed templates; the model cannot modify them",
+                "default_data": "synthetic only",
             },
             "required_json_shape": {
-                "title": "string", "directory_tree": "string[]", "dependencies": "string[]",
-                "files": [{"path": "relative safe path", "content": "string"}],
-                "run_instructions": "string[]", "assumptions": "string[]",
-                "to_verify_items": "string[]", "provenance_note": "string",
+                "title": "string",
+                "assumptions": "string[]",
+                "to_verify_items": "string[]",
+                "provenance_note": "string",
             },
         },
     )
@@ -116,37 +115,17 @@ def build_experiment_code_draft(
     if outcome.status != "generated" or outcome.text is None:
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
     try:
-        draft = ExperimentCodeDraft.model_validate_json(outcome.text)
-        _validate_safe_preview(draft)
-        return draft.model_copy(update={"generation_mode": "llm"})
+        personalization = _CodeDraftPersonalization.model_validate_json(outcome.text)
+        return rules.model_copy(
+            update={
+                "title": personalization.title,
+                "assumptions": personalization.assumptions,
+                "to_verify_items": personalization.to_verify_items,
+                "provenance_note": personalization.provenance_note,
+                "generation_mode": "llm",
+                "run_id": outcome.run_id,
+                "event_count": outcome.event_count,
+            }
+        )
     except ValueError:
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
-
-
-_FORBIDDEN_CODE = re.compile(
-    r"api[_-]?key|secret|token|os\.environ|subprocess|os\.system|pip\s+install|"
-    r"requests\.|urllib|curl\b|wget\b|https?://|git\+|!pip",
-    flags=re.IGNORECASE,
-)
-_REQUIRED_FILES = {
-    "README.md",
-    "requirements.txt",
-    "src/data.py",
-    "src/baseline.py",
-    "src/evaluate.py",
-}
-
-
-def _validate_safe_preview(draft: ExperimentCodeDraft) -> None:
-    paths = {item.path for item in draft.files}
-    if not _REQUIRED_FILES.issubset(paths):
-        raise ValueError("model draft omitted a required safe template file")
-    for item in draft.files:
-        if item.path.startswith(("/", "\\")) or ".." in item.path or ":" in item.path:
-            raise ValueError("model draft contains a non-relative or private path")
-        if _FORBIDDEN_CODE.search(item.content):
-            raise ValueError(
-                "model draft contains a secret, network, install, or execution pattern"
-            )
-    if any(_FORBIDDEN_CODE.search(value) for value in draft.dependencies):
-        raise ValueError("model draft contains an unsafe dependency source")

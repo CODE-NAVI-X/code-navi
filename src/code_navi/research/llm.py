@@ -6,8 +6,6 @@ import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from queue import Empty, Queue
-from threading import Thread
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -87,7 +85,14 @@ class GuidanceGenerator(Protocol):
 class DeepSeekGuidanceProvider:
     """Research-only adapter for DeepSeek's OpenAI-compatible chat/completions API."""
 
-    def __init__(self, client: object | None = None) -> None:
+    def __init__(
+        self,
+        client: object | None = None,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not is_plausible_api_key(api_key):
             raise ProviderConfigurationError(
@@ -102,6 +107,7 @@ class DeepSeekGuidanceProvider:
             api_key=api_key,
             base_url=os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL),
             max_retries=0,
+            timeout=timeout_seconds,
         )
 
     def complete(
@@ -163,7 +169,7 @@ class ProviderGuidanceGenerator:
         requesting_suggestion: bool,
         suggestion_question: ClarificationQuestion | None = None,
     ) -> GuidanceOutcome:
-        settings = ProviderSettings.resolve()
+        settings = ProviderSettings.resolve(timeout=self.timeout_seconds)
         if settings.name == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
             return GuidanceOutcome.unavailable()
         if settings.name == "openai" and not os.getenv("OPENAI_API_KEY"):
@@ -172,7 +178,7 @@ class ProviderGuidanceGenerator:
             return GuidanceOutcome.unavailable()
         try:
             provider = (
-                DeepSeekGuidanceProvider()
+                DeepSeekGuidanceProvider(timeout_seconds=self.timeout_seconds)
                 if settings.name == "deepseek"
                 else create_provider(settings)
             )
@@ -204,25 +210,8 @@ class ProviderGuidanceGenerator:
             return GuidanceOutcome.failed(str(error))
 
     def _complete_with_timeout(self, provider: object, messages: tuple[Message, ...]) -> object:
-        """Bound a provider call without changing the shared kernel adapter contract."""
-        results: Queue[tuple[bool, object]] = Queue(maxsize=1)
-
-        def complete() -> None:
-            try:
-                results.put((True, provider.complete(messages)))  # type: ignore[attr-defined]
-            except Exception as error:
-                results.put((False, error))
-
-        Thread(target=complete, daemon=True).start()
-        try:
-            succeeded, value = results.get(timeout=self.timeout_seconds)
-        except Empty as error:
-            raise TimeoutError("research guidance provider timed out") from error
-        if succeeded:
-            return value
-        if isinstance(value, Exception):
-            raise value
-        raise RuntimeError("provider call failed without an exception")
+        """Call a provider whose SDK transport owns the configured timeout."""
+        return provider.complete(messages)  # type: ignore[attr-defined,no-any-return]
 
     @staticmethod
     def _text(message: Message) -> str:

@@ -6,8 +6,7 @@ import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from queue import Empty, Queue
-from threading import Thread
+from pathlib import Path
 from typing import Literal
 
 from code_navi.providers import ProviderSettings, create_provider
@@ -32,6 +31,10 @@ research_conversation_agent = AgentSpec(
     tool_names=(),
     output_format="json",
 )
+
+
+def _events_dir() -> Path:
+    return Path(os.getenv("CODE_NAVI_EVENTS_DIR") or Path("var") / "runs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,24 +103,8 @@ class RuntimeConversationDecisionGenerator:
                     "skill_version": RESEARCH_CLARIFICATION_SKILL_VERSION,
                 },
             )
-            runtime = AgentRuntime(provider)
-            queue: Queue[tuple[bool, object]] = Queue(maxsize=1)
-
-            def run_agent() -> None:
-                try:
-                    queue.put((True, runtime.run(research_conversation_agent, request)))
-                except Exception as error:  # Kernel/provider failures become app fallback.
-                    queue.put((False, error))
-
-            Thread(target=run_agent, daemon=True).start()
-            try:
-                succeeded, value = queue.get(timeout=self.timeout_seconds)
-            except Empty as error:
-                raise TimeoutError("research conversation agent timed out") from error
-            if not succeeded:
-                if isinstance(value, Exception):
-                    raise value
-                raise RuntimeError("research conversation agent failed without an exception")
+            runtime = AgentRuntime(provider, session_dir=_events_dir())
+            value = runtime.run(research_conversation_agent, request)
             output_text = getattr(value, "output_text", None)
             if not isinstance(output_text, str) or not output_text.strip():
                 runtime_error = getattr(value.run_result, "error", None)
@@ -138,11 +125,11 @@ class RuntimeConversationDecisionGenerator:
     def _provider(self) -> object | None:
         if self.provider_factory is not None:
             return self.provider_factory()
-        settings = ProviderSettings.resolve()
+        settings = ProviderSettings.resolve(timeout=self.timeout_seconds)
         if settings.name == "deepseek":
             if not os.getenv("DEEPSEEK_API_KEY"):
                 return None
-            return DeepSeekGuidanceProvider()
+            return DeepSeekGuidanceProvider(timeout_seconds=self.timeout_seconds)
         if settings.name == "openai":
             if not os.getenv("OPENAI_API_KEY"):
                 return None

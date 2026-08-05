@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -73,6 +74,8 @@ _OUTLINE_COUNT_MAX = 10
 # Per-page element cap: the prompt asks for ≤ 24, and this is a safety net so a
 # model overshoot still produces an exportable, readable slide.
 _SLIDE_MAX_ELEMENTS = 28
+
+GenerationMode = Literal["model", "rules", "rules_fallback", "mixed"]
 
 # ---------------------------------------------------------------------------
 # Rule-based fallbacks (offline / unparseable)
@@ -260,7 +263,7 @@ class PresentationGenerator:
         user_input: str,
         session_id: str,
         offline_json: str,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Run one audited kernel call and return the raw output text."""
         agent = AgentSpec(
             name=agent_name,
@@ -269,7 +272,8 @@ class PresentationGenerator:
             tool_names=(),
             output_format="json",
         )
-        provider = create_provider(self._provider_settings(offline_json))
+        settings = self._provider_settings(offline_json)
+        provider = create_provider(settings)
         runtime = AgentRuntime(provider, session_dir=_events_dir())
         result = runtime.run(
             agent,
@@ -279,7 +283,7 @@ class PresentationGenerator:
                 metadata={"interface": "api", "agent": agent_name},
             ),
         )
-        return result.output_text or ""
+        return result.output_text or "", settings.name
 
     # -- Stage 1 ------------------------------------------------------------
 
@@ -289,10 +293,10 @@ class PresentationGenerator:
         style: str,
         session_id: str,
         context: str | None = None,
-    ) -> list[SceneOutline]:
+    ) -> tuple[list[SceneOutline], GenerationMode, str]:
         """One kernel run to plan the pages; rule fallback on failure."""
         offline = json.dumps([o.model_dump() for o in _mock_outlines(knowledge_point, style)])
-        raw = self._run(
+        raw, provider_name = self._run(
             OUTLINE_SYSTEM_PROMPT,
             "presentation_outlines",
             outline_user_prompt(knowledge_point, style, context),
@@ -304,10 +308,10 @@ class PresentationGenerator:
             data = json.loads(parsed)
         except json.JSONDecodeError:
             logger.warning("Outlines JSON unparseable; using rule fallback.")
-            return _mock_outlines(knowledge_point, style)
+            return _mock_outlines(knowledge_point, style), "rules_fallback", provider_name
         if not isinstance(data, list):
             logger.warning("Outlines payload is not a list; using rule fallback.")
-            return _mock_outlines(knowledge_point, style)
+            return _mock_outlines(knowledge_point, style), "rules_fallback", provider_name
         outlines: list[SceneOutline] = []
         for index, entry in enumerate(data[: _OUTLINE_COUNT_MAX], start=1):
             if not isinstance(entry, dict) or not isinstance(entry.get("title"), str):
@@ -330,8 +334,9 @@ class PresentationGenerator:
             logger.warning(
                 "Fewer than %d outlines parsed; using rule fallback.", _OUTLINE_COUNT_MIN
             )
-            return _mock_outlines(knowledge_point, style)
-        return outlines
+            return _mock_outlines(knowledge_point, style), "rules_fallback", provider_name
+        mode: GenerationMode = "rules" if provider_name == "mock" else "model"
+        return outlines, mode, provider_name
 
     # -- Stage 2 ------------------------------------------------------------
 
@@ -342,10 +347,10 @@ class PresentationGenerator:
         style: str,
         session_id: str,
         context: str | None = None,
-    ) -> Slide:
+    ) -> tuple[Slide, GenerationMode, str]:
         """One kernel run per page; rule fallback on failure."""
         offline = _mock_slide(knowledge_point, outline, outline.order)
-        raw = self._run(
+        raw, provider_name = self._run(
             SLIDE_SYSTEM_PROMPT,
             "presentation_slide",
             slide_user_prompt(
@@ -364,12 +369,12 @@ class PresentationGenerator:
             data = json.loads(parsed)
         except json.JSONDecodeError:
             logger.warning("Slide JSON unparseable for '%s'; using rule fallback.", outline.title)
-            return offline
+            return offline, "rules_fallback", provider_name
         if not isinstance(data, dict):
             logger.warning(
                 "Slide payload not an object for '%s'; using rule fallback.", outline.title
             )
-            return offline
+            return offline, "rules_fallback", provider_name
         try:
             slide = Slide.model_validate(data)
         except Exception as exc:  # noqa: BLE001 — validation errors fall back gracefully
@@ -378,11 +383,12 @@ class PresentationGenerator:
                 outline.title,
                 exc,
             )
-            return offline
+            return offline, "rules_fallback", provider_name
         if len(slide.elements) > _SLIDE_MAX_ELEMENTS:
             # Keep the deck exportable/readable even if the model overshoots.
             slide.elements = slide.elements[: _SLIDE_MAX_ELEMENTS]
-        return slide
+        mode: GenerationMode = "rules" if provider_name == "mock" else "model"
+        return slide, mode, provider_name
 
     # -- SSE event stream ---------------------------------------------------
 
@@ -401,14 +407,20 @@ class PresentationGenerator:
         """
         session_id = request.session_id or f"sess-{uuid4().hex[:16]}"
         try:
-            outlines = self.generate_outlines(
+            outlines, outline_mode, provider_name = self.generate_outlines(
                 request.knowledge_point, request.style, session_id, request.context
             )
-            yield {"type": "outlines", "data": [o.model_dump() for o in outlines]}
+            yield {
+                "type": "outlines",
+                "data": [o.model_dump() for o in outlines],
+                "generation_mode": outline_mode,
+                "provider_name": provider_name,
+            }
 
             slides: list[Slide] = []
+            generation_modes: list[GenerationMode] = [outline_mode]
             for index, outline in enumerate(outlines):
-                slide = self.generate_slide(
+                slide, slide_mode, slide_provider = self.generate_slide(
                     request.knowledge_point,
                     outline,
                     request.style,
@@ -416,21 +428,45 @@ class PresentationGenerator:
                     request.context,
                 )
                 slides.append(slide)
+                generation_modes.append(slide_mode)
                 yield {
                     "type": "slide",
                     "index": index,
                     "total": len(outlines),
                     "data": slide.model_dump(),
+                    "generation_mode": slide_mode,
+                    "provider_name": slide_provider,
                 }
 
+            generation_mode = self._combined_mode(generation_modes)
             presentation = self._archive(
-                db, request.knowledge_point, session_id, request.style, outlines, slides
+                db,
+                request.knowledge_point,
+                session_id,
+                request.style,
+                outlines,
+                slides,
+                generation_mode,
+                provider_name,
             )
             # mode="json" renders datetime/Path etc. as JSON-safe primitives.
             yield {"type": "done", "presentation": presentation.model_dump(mode="json")}
-        except Exception as exc:  # noqa: BLE001 — surface to client, keep stream alive
-            logger.exception("Presentation stream failed.")
-            yield {"type": "error", "error": str(exc)}
+        except Exception:  # noqa: BLE001 — convert internal details to a safe SSE event
+            error_id = f"err-{uuid4().hex[:16]}"
+            logger.exception("Presentation stream failed (error_id=%s).", error_id)
+            yield {
+                "type": "error",
+                "error": {
+                    "code": "presentation_generation_failed",
+                    "message": "PPT 生成失败，请稍后重试。",
+                    "error_id": error_id,
+                },
+            }
+
+    @staticmethod
+    def _combined_mode(modes: list[GenerationMode]) -> GenerationMode:
+        distinct = set(modes)
+        return modes[0] if len(distinct) == 1 else "mixed"
 
     def _archive(
         self,
@@ -440,6 +476,8 @@ class PresentationGenerator:
         style: str,
         outlines: list[SceneOutline],
         slides: list[Slide],
+        generation_mode: GenerationMode,
+        provider_name: str,
     ) -> Presentation:
         """Persist the finished deck as a ``presentation`` notebook item."""
         presentation = Presentation(
@@ -448,6 +486,8 @@ class PresentationGenerator:
             session_id=session_id,
             style=style,
             slides=slides,
+            generation_mode=generation_mode,
+            provider_name=provider_name,
             created_at=datetime.now(UTC),
         )
         entry = NotebookItemModel(
@@ -461,6 +501,8 @@ class PresentationGenerator:
                 "style": style,
                 "outlines": [o.model_dump() for o in outlines],
                 "slides": [s.model_dump() for s in slides],
+                "generation_mode": generation_mode,
+                "provider_name": provider_name,
             },
         )
         db.add(entry)

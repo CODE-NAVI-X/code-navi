@@ -20,6 +20,7 @@ def build_topic_difficulty_analysis(
     plan: ConversationResearchPlan | None,
     evidence_bundles: list[ConversationEvidenceBundle],
     generator: ResearchArtifactGenerator | None = None,
+    conversation_id: str | None = None,
 ) -> TopicDifficultyAnalysis:
     """List research-design gaps without asserting external facts or paper results."""
     scope = (
@@ -88,6 +89,7 @@ def build_topic_difficulty_analysis(
     return _enhance_topic_analysis(
         rules,
         generator=generator,
+        conversation_id=conversation_id,
         context={
             "profile": profile.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json") if plan else None,
@@ -112,7 +114,10 @@ def build_topic_difficulty_analysis(
 
 
 def build_paper_analysis(
-    paper: AcademicPaperResult, *, generator: ResearchArtifactGenerator | None = None
+    paper: AcademicPaperResult,
+    *,
+    generator: ResearchArtifactGenerator | None = None,
+    conversation_id: str | None = None,
 ) -> PaperAnalysis:
     """Analyze only an explicitly selected saved paper's metadata and abstract."""
     abstract = paper.abstract_excerpt
@@ -156,8 +161,11 @@ def build_paper_analysis(
     )
     if generator is None:
         return rules
+    if conversation_id is None:
+        raise ValueError("conversation_id is required for model paper analysis")
     outcome = generator.generate(
         kind="paper_analysis",
+        conversation_id=conversation_id,
         context={
             "paper": paper.model_dump(mode="json"),
             "information_scope": "metadata_and_abstract_only",
@@ -187,7 +195,13 @@ def build_paper_analysis(
         _assert_model_analysis_boundary(enhanced.items)
         if enhanced.paper_url != paper.url or enhanced.abstract_available != bool(abstract):
             raise ValueError("model changed selected paper identity or source scope")
-        return enhanced.model_copy(update={"generation_mode": "llm"})
+        return enhanced.model_copy(
+            update={
+                "generation_mode": "llm",
+                "run_id": outcome.run_id,
+                "event_count": outcome.event_count,
+            }
+        )
     except ValueError:
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
 
@@ -196,11 +210,18 @@ def _enhance_topic_analysis(
     rules: TopicDifficultyAnalysis,
     *,
     generator: ResearchArtifactGenerator | None,
+    conversation_id: str | None,
     context: dict[str, object],
 ) -> TopicDifficultyAnalysis:
     if generator is None:
         return rules
-    outcome = generator.generate(kind="topic_difficulty_analysis", context=context)
+    if conversation_id is None:
+        raise ValueError("conversation_id is required for model topic analysis")
+    outcome = generator.generate(
+        kind="topic_difficulty_analysis",
+        context=context,
+        conversation_id=conversation_id,
+    )
     if outcome.status == "unavailable":
         return rules
     if outcome.status != "generated" or outcome.text is None:
@@ -210,7 +231,13 @@ def _enhance_topic_analysis(
         _assert_model_analysis_boundary(enhanced.items)
         if enhanced.information_scope != rules.information_scope:
             raise ValueError("model changed information scope")
-        return enhanced.model_copy(update={"generation_mode": "llm"})
+        return enhanced.model_copy(
+            update={
+                "generation_mode": "llm",
+                "run_id": outcome.run_id,
+                "event_count": outcome.event_count,
+            }
+        )
     except ValueError:
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
 

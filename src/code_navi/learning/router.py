@@ -79,6 +79,7 @@ async def list_notebook_items(
 @router.get("/presentations/{presentation_id}")
 async def get_presentation(
     presentation_id: str,
+    session_id: str = Query(..., min_length=1, max_length=64),
     db: Session = _db_dependency,
 ) -> dict:
     """Return a previously archived presentation (slides + outlines) for review."""
@@ -86,7 +87,11 @@ async def get_presentation(
 
     items = (
         db.query(NotebookItemModel)
-        .filter(NotebookItemModel.item_type == "presentation")
+        .filter(
+            NotebookItemModel.user_id == "poc-user",
+            NotebookItemModel.session_id == session_id,
+            NotebookItemModel.item_type == "presentation",
+        )
         .all()
     )
     item = next(
@@ -108,6 +113,8 @@ async def get_presentation(
         "style": extra.get("style", "professional"),
         "slides": extra.get("slides", []),
         "outlines": extra.get("outlines", []),
+        "generation_mode": extra.get("generation_mode", "rules"),
+        "provider_name": extra.get("provider_name", "mock"),
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
 

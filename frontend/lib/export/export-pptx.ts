@@ -116,15 +116,12 @@ function addElement(pptx: pptxgen, slide: pptxgen.Slide, el: SlideElement): void
     }
     case "image": {
       const img = el as ImageElement;
-      // ``src`` may be a data URL (inlined) or an absolute URL.
       slide.addImage({
         x,
         y,
         w,
         h,
-        ...(img.src.startsWith("data:")
-          ? { data: img.src }
-          : { path: img.src }),
+        data: img.src,
       });
       break;
     }

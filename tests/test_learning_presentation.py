@@ -160,16 +160,22 @@ class TestOfflineFallbacks:
     def test_generate_outlines_mock_returns_valid_deck(self) -> None:
         gen = pres_services.PresentationGenerator()
         req = PresentationGenerateRequest(knowledge_point="B树")
-        outlines = gen.generate_outlines(req.knowledge_point, req.style, "sess-t")
+        outlines, mode, provider = gen.generate_outlines(
+            req.knowledge_point, req.style, "sess-t"
+        )
         assert 4 <= len(outlines) <= 10
         assert all(isinstance(o, SceneOutline) for o in outlines)
+        assert (mode, provider) == ("rules", "mock")
 
     def test_generate_slide_mock_returns_valid_slide(self) -> None:
         gen = pres_services.PresentationGenerator()
-        outlines = gen.generate_outlines("排序算法", "professional", "sess-t")
-        slide = gen.generate_slide("排序算法", outlines[0], "professional", "sess-t")
+        outlines, _, _ = gen.generate_outlines("排序算法", "professional", "sess-t")
+        slide, mode, provider = gen.generate_slide(
+            "排序算法", outlines[0], "professional", "sess-t"
+        )
         assert isinstance(slide, Slide)
         assert len(slide.elements) >= 1
+        assert (mode, provider) == ("rules", "mock")
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +206,8 @@ class TestEventStream:
         done = events[-1]
         assert done["type"] == "done"
         assert done["presentation"]["knowledge_point"] == "DHCP 四阶段报文交互"
+        assert done["presentation"]["generation_mode"] == "rules"
+        assert done["presentation"]["provider_name"] == "mock"
 
     def test_stream_persists_presentation_notebook_item(self, db: Session) -> None:
         gen = pres_services.PresentationGenerator()
@@ -262,6 +270,48 @@ class TestPresentationEndpoint:
             "/api/v1/learning/notebook", params={"session_id": "sess-nb"}
         ).json()
         assert any(item["kind"] == "presentation" for item in items)
+
+    def test_presentation_read_is_scoped_to_session(self, client: TestClient) -> None:
+        response = client.post(
+            "/api/v1/learning/presentations/generate",
+            json={"knowledge_point": "访问控制", "session_id": "sess-owner"},
+        )
+        done = next(
+            json.loads(line[6:])
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and '"type": "done"' in line
+        )
+        presentation_id = done["presentation"]["id"]
+
+        allowed = client.get(
+            f"/api/v1/learning/presentations/{presentation_id}",
+            params={"session_id": "sess-owner"},
+        )
+        denied = client.get(
+            f"/api/v1/learning/presentations/{presentation_id}",
+            params={"session_id": "sess-other"},
+        )
+
+        assert allowed.status_code == 200
+        assert denied.status_code == 404
+
+    def test_stream_returns_safe_error_event(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("private-provider-detail")
+
+        monkeypatch.setattr(pres_services.PresentationGenerator, "generate_outlines", fail)
+        response = client.post(
+            "/api/v1/learning/presentations/generate",
+            json={"knowledge_point": "错误边界", "session_id": "sess-error"},
+        )
+
+        assert "private-provider-detail" not in response.text
+        assert "presentation_generation_failed" in response.text
+        assert "error_id" in response.text
 
 
 # ---------------------------------------------------------------------------

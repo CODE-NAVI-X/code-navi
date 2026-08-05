@@ -16,7 +16,11 @@ import {
   Presentation as PresentationIcon,
   Download,
 } from "lucide-react";
-import type { SceneOutline, Slide } from "@/lib/api/learning";
+import type {
+  PresentationGenerationMode,
+  SceneOutline,
+  Slide,
+} from "@/lib/api/learning";
 import { SlideRenderer } from "./SlideRenderer";
 
 interface SlideViewerProps {
@@ -28,6 +32,8 @@ interface SlideViewerProps {
   onNavigate: (index: number) => void;
   onExport?: () => void;
   exporting?: boolean;
+  generationMode?: PresentationGenerationMode;
+  providerName?: string;
 }
 
 function ThumbPlaceholder() {
@@ -47,6 +53,8 @@ export function SlideViewer({
   onNavigate,
   onExport,
   exporting,
+  generationMode,
+  providerName,
 }: SlideViewerProps) {
   const mainRef = useRef<HTMLDivElement>(null);
   const [mainWidth, setMainWidth] = useState(800);
@@ -124,6 +132,17 @@ export function SlideViewer({
             <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] dark:bg-zinc-800">
               {hasCurrent ? currentIndex + 1 : "·"} / {total}
             </span>
+            {generationMode && (
+              <span className="shrink-0 rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+                {generationMode === "model"
+                  ? `模型生成 · ${providerName ?? "provider"}`
+                  : generationMode === "rules"
+                    ? "离线规则生成"
+                    : generationMode === "rules_fallback"
+                      ? "模型失败 · 规则降级"
+                      : `混合生成 · ${providerName ?? "provider"}`}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button

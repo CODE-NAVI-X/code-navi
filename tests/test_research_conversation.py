@@ -20,6 +20,7 @@ from code_navi.research.conversation_agent import (  # noqa: E402
     research_conversation_agent,
 )
 from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa: E402
+from code_navi.research.research_artifact_llm import ArtifactLlmOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.research.skill_runtime import (  # noqa: E402
     load_research_clarification_skill,
@@ -39,9 +40,11 @@ def fresh_tables() -> Generator[None, None, None]:
 
 @pytest.fixture(autouse=True)
 def restore_generator() -> Generator[None, None, None]:
-    original = _conversation_service.decision_generator
+    original_decision = _conversation_service.decision_generator
+    original_artifact = _conversation_service.artifact_generator
     yield
-    _conversation_service.decision_generator = original
+    _conversation_service.decision_generator = original_decision
+    _conversation_service.artifact_generator = original_artifact
 
 
 @pytest.fixture
@@ -67,6 +70,16 @@ class FailingArtifactGenerator:
 
     def generate(self, **kwargs: object) -> object:
         raise AssertionError("conversation restore must not generate LLM artefacts")
+
+
+class StaticArtifactGenerator:
+    def __init__(self, outcome: ArtifactLlmOutcome) -> None:
+        self.outcome = outcome
+        self.calls: list[dict[str, object]] = []
+
+    def generate(self, **kwargs: object) -> ArtifactLlmOutcome:
+        self.calls.append(kwargs)
+        return self.outcome
 
 
 def _decision(**overrides: object) -> ResearchConversationDecision:
@@ -575,6 +588,50 @@ def test_code_draft_endpoint_requires_explicit_user_confirmation(client: TestCli
     )
 
     assert response.status_code == 422
+
+
+def test_conversation_response_does_not_generate_optional_artifacts(
+    client: TestClient,
+) -> None:
+    _conversation_service.artifact_generator = FailingArtifactGenerator()
+
+    response = client.post("/api/v1/research/conversations", json={})
+
+    assert response.status_code == 201
+    assert response.json()["topic_difficulty_analysis"]["generation_mode"] == "rules"
+
+
+def test_difficulty_personalization_requires_explicit_endpoint(
+    client: TestClient,
+) -> None:
+    generator = StaticArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            '{"title":"个性化难点","information_scope":"profile_and_plan_only",'
+            '"items":[{"area":"问题边界","content":"需要先收窄问题。",'
+            '"classification":"to_verify","basis":"当前画像尚不完整。",'
+            '"source_scope":"profile_and_plan_only"}],'
+            '"provenance_note":"用户显式触发的个性化建议。"}',
+            run_id="run-artifact",
+            event_count=3,
+        )
+    )
+    _conversation_service.artifact_generator = generator
+    created = client.post("/api/v1/research/conversations", json={}).json()
+
+    rejected = client.post(
+        f"/api/v1/research/conversations/{created['conversation_id']}/topic-difficulty-analysis",
+        json={"user_confirmed": False},
+    )
+    generated = client.post(
+        f"/api/v1/research/conversations/{created['conversation_id']}/topic-difficulty-analysis",
+        json={"user_confirmed": True},
+    )
+
+    assert rejected.status_code == 422
+    assert generated.status_code == 200
+    assert generated.json()["generation_mode"] == "llm"
+    assert generated.json()["run_id"] == "run-artifact"
+    assert len(generator.calls) == 1
 
 
 @pytest.mark.parametrize(

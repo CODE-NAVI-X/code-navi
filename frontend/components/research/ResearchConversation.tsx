@@ -414,7 +414,7 @@ export function ResearchConversation() {
             <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
             {conversation.research_plan && <div className="mt-4"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
             <div className="mt-4"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
-            <div className="mt-4"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} /></div>
+            <div className="mt-4"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
             {conversation.experiment_design && <div className="mt-4"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>}
           </div>
 
@@ -427,7 +427,7 @@ export function ResearchConversation() {
               <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
               {conversation.research_plan && <div className="mt-3"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
               <div className="mt-3"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
-              <div className="mt-3"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} /></div>
+              <div className="mt-3"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
               {conversation.experiment_design && <div className="mt-3"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>}
             </div>
           </details>

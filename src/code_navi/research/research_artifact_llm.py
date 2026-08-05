@@ -1,4 +1,4 @@
-"""Bounded DeepSeek wording for research artefacts owned by application rules."""
+"""Audited, explicitly triggered model wording for research artefacts."""
 
 from __future__ import annotations
 
@@ -7,27 +7,52 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from queue import Empty, Queue
-from threading import Thread
+from pathlib import Path
 from typing import Literal, Protocol
 
 from code_navi.providers import ProviderConfigurationError, ProviderSettings
-from kernel.core import ContentBlock, Message
+from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
 from .llm import DeepSeekGuidanceProvider
+
+research_artifact_agent = AgentSpec(
+    name="research_artifact_agent",
+    description="Rewords one explicitly requested research artefact as bounded JSON.",
+    system_prompt=(
+        "你是科研辅助的受限表达助手。只返回 JSON，不得返回 Markdown、解释或额外字段。"
+        "只能重述和组织输入中已经给出的上下文；不得访问网络、下载论文、写文件、"
+        "安装依赖或运行代码；不得修改研究画像、研究计划、会话或用户确认状态。"
+        "不得声称全文、实验结果、数据集、GPU、许可或资源已经可用。"
+        "无法由上下文确认的内容必须标记为 to_verify，且不得新增 fact。"
+    ),
+    tool_names=(),
+    output_format="json",
+)
+
+
+def _events_dir() -> Path:
+    return Path(os.getenv("CODE_NAVI_EVENTS_DIR") or Path("var") / "runs")
 
 
 @dataclass(frozen=True, slots=True)
 class ArtifactLlmOutcome:
-    """Provider result expressed without leaking provider errors into responses."""
+    """Provider result plus its Kernel audit identity."""
 
     status: Literal["generated", "unavailable", "failed"]
     text: str | None = None
+    run_id: str | None = None
+    event_count: int = 0
     reason: str | None = None
 
     @classmethod
-    def generated(cls, text: str) -> ArtifactLlmOutcome:
-        return cls("generated", text=text)
+    def generated(
+        cls,
+        text: str,
+        *,
+        run_id: str = "test-run",
+        event_count: int = 0,
+    ) -> ArtifactLlmOutcome:
+        return cls("generated", text=text, run_id=run_id, event_count=event_count)
 
     @classmethod
     def unavailable(cls) -> ArtifactLlmOutcome:
@@ -39,15 +64,19 @@ class ArtifactLlmOutcome:
 
 
 class ResearchArtifactGenerator(Protocol):
-    """Application boundary that can be replaced by a deterministic fake in tests."""
+    """Application boundary replaceable by deterministic tests."""
 
     def generate(
-        self, *, kind: str, context: dict[str, object]
+        self,
+        *,
+        kind: str,
+        context: dict[str, object],
+        conversation_id: str,
     ) -> ArtifactLlmOutcome: ...
 
 
-class DeepSeekResearchArtifactGenerator:
-    """Use the existing DeepSeek settings for wording only; it never exposes tools."""
+class RuntimeResearchArtifactGenerator:
+    """Run one explicitly requested, no-tool artefact through AgentRuntime."""
 
     def __init__(self, timeout_seconds: float = 8.0) -> None:
         if timeout_seconds <= 0:
@@ -55,64 +84,50 @@ class DeepSeekResearchArtifactGenerator:
         self.timeout_seconds = timeout_seconds
 
     def generate(
-        self, *, kind: str, context: dict[str, object]
+        self,
+        *,
+        kind: str,
+        context: dict[str, object],
+        conversation_id: str,
     ) -> ArtifactLlmOutcome:
         settings = ProviderSettings.resolve()
         if settings.name != "deepseek" or not os.getenv("DEEPSEEK_API_KEY"):
             return ArtifactLlmOutcome.unavailable()
         try:
-            response = self._complete(DeepSeekGuidanceProvider(), self._message(kind, context))
-            return ArtifactLlmOutcome.generated(self._text(response.message))
+            provider = DeepSeekGuidanceProvider(timeout_seconds=self.timeout_seconds)
+            runtime = AgentRuntime(provider, session_dir=_events_dir())
+            result = runtime.run(
+                research_artifact_agent,
+                RuntimeRequest(
+                    self._runtime_input(kind, context),
+                    session_id=conversation_id,
+                    metadata={
+                        "interface": "research_artifact",
+                        "artifact_kind": kind,
+                        "user_triggered": True,
+                    },
+                ),
+            )
+            if not result.output_text:
+                detail = result.run_result.error or result.run_result.reason or "no output"
+                raise ValueError(f"research artefact agent returned no JSON text: {detail}")
+            return ArtifactLlmOutcome.generated(
+                result.output_text,
+                run_id=result.run_id,
+                event_count=len(result.events),
+            )
         except (ProviderConfigurationError, TimeoutError, ValueError) as error:
             return ArtifactLlmOutcome.failed(str(error))
-        except Exception as error:  # Network/SDK failures must preserve offline rules.
+        except Exception as error:
             return ArtifactLlmOutcome.failed(str(error))
 
-    def _complete(self, provider: object, message: Message) -> object:
-        results: Queue[tuple[bool, object]] = Queue(maxsize=1)
-
-        def complete() -> None:
-            try:
-                results.put((True, provider.complete((message,))))  # type: ignore[attr-defined]
-            except Exception as error:
-                results.put((False, error))
-
-        Thread(target=complete, daemon=True).start()
-        try:
-            succeeded, value = results.get(timeout=self.timeout_seconds)
-        except Empty as error:
-            raise TimeoutError("research artefact provider timed out") from error
-        if succeeded:
-            return value
-        if isinstance(value, Exception):
-            raise value
-        raise RuntimeError("research artefact provider failed without an exception")
-
     @staticmethod
-    def _text(message: Message) -> str:
-        for block in message.content:
-            if block.type == "text" and isinstance(block.data.get("text"), str):
-                return block.data["text"]
-        raise ValueError("research artefact provider returned no text")
-
-    @staticmethod
-    def _message(kind: str, context: Mapping[str, object]) -> Message:
-        prompt = {
-            "role": "科研辅助的受限表达助手",
+    def _runtime_input(kind: str, context: Mapping[str, object]) -> str:
+        payload = {
             "artifact_kind": kind,
-            "hard_rules": [
-                "只返回 JSON，不得返回 Markdown、解释或额外字段。",
-                "只能重述和组织给定上下文；不能访问网络、下载论文、写文件、安装依赖或运行代码。",
-                "不得修改研究画像、研究计划、会话状态或用户确认状态。",
-                "不得声称论文全文、实验结果、数据集、GPU、许可或资源已可用。",
-                "若无法由上下文直接确认，classification 必须为 to_verify。",
-                "模型生成的难点项不得使用 fact；事实由规则层和已保存来源负责。",
-            ],
             "validated_context": _redact_local_context(context),
         }
-        return Message(
-            "user", (ContentBlock("text", {"text": json.dumps(prompt, ensure_ascii=False)}),)
-        )
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def _redact_local_context(value: object) -> object:
@@ -136,6 +151,7 @@ def _redact_local_context(value: object) -> object:
 
 __all__ = [
     "ArtifactLlmOutcome",
-    "DeepSeekResearchArtifactGenerator",
     "ResearchArtifactGenerator",
+    "RuntimeResearchArtifactGenerator",
+    "research_artifact_agent",
 ]

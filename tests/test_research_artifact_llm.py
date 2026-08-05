@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -14,9 +14,9 @@ from code_navi.research.conversation_plan import build_conversation_research_pla
 from code_navi.research.conversation_schemas import ResearchProfile
 from code_navi.research.research_artifact_llm import (
     ArtifactLlmOutcome,
-    DeepSeekResearchArtifactGenerator,
+    RuntimeResearchArtifactGenerator,
 )
-from kernel.core import ContentBlock, Message
+from kernel.core import ContentBlock, Message, ProviderCapabilities, ProviderResult
 
 
 class FakeArtifactGenerator:
@@ -24,7 +24,14 @@ class FakeArtifactGenerator:
         self.outcome = outcome
         self.calls: list[str] = []
 
-    def generate(self, *, kind: str, context: dict[str, object]) -> ArtifactLlmOutcome:
+    def generate(
+        self,
+        *,
+        kind: str,
+        context: dict[str, object],
+        conversation_id: str,
+    ) -> ArtifactLlmOutcome:
+        assert conversation_id
         self.calls.append(kind)
         return self.outcome
 
@@ -55,7 +62,11 @@ def test_difficulty_uses_validated_model_wording_without_changing_fact_boundary(
     )
 
     analysis = build_topic_difficulty_analysis(
-        profile, plan=plan, evidence_bundles=[], generator=generator
+        profile,
+        plan=plan,
+        evidence_bundles=[],
+        generator=generator,
+        conversation_id="conv-test",
     )
 
     assert generator.calls == ["topic_difficulty_analysis"]
@@ -75,7 +86,11 @@ def test_invalid_model_fact_claim_falls_back_to_rules() -> None:
     )
 
     analysis = build_topic_difficulty_analysis(
-        _profile(), plan=None, evidence_bundles=[], generator=generator
+        _profile(),
+        plan=None,
+        evidence_bundles=[],
+        generator=generator,
+        conversation_id="conv-test",
     )
 
     assert analysis.generation_mode == "rules_fallback"
@@ -88,39 +103,50 @@ def test_unavailable_model_keeps_rules_difficulty_analysis() -> None:
         plan=None,
         evidence_bundles=[],
         generator=FakeArtifactGenerator(ArtifactLlmOutcome.unavailable()),
+        conversation_id="conv-test",
     )
 
     assert analysis.generation_mode == "rules"
 
 
 class FakeDeepSeekProvider:
+    capabilities = ProviderCapabilities()
+
     def __init__(self, text: str | Exception) -> None:
         self.text = text
 
-    def complete(self, _messages: object) -> SimpleNamespace:
+    def complete(self, _messages: object, tools: object = ()) -> ProviderResult:
+        del tools
         if isinstance(self.text, Exception):
             raise self.text
-        return SimpleNamespace(
-            message=Message("assistant", (ContentBlock("text", {"text": self.text}),))
+        return ProviderResult(
+            Message("assistant", (ContentBlock("text", {"text": self.text}),))
         )
 
 
 def test_deepseek_artifact_generator_uses_existing_settings_with_mock_provider(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-" + "a" * 32)
+    monkeypatch.setenv("CODE_NAVI_EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(
         "code_navi.research.research_artifact_llm.DeepSeekGuidanceProvider",
-        lambda: FakeDeepSeekProvider('{"title":"ok"}'),
+        lambda **_kwargs: FakeDeepSeekProvider('{"title":"ok"}'),
     )
 
-    outcome = DeepSeekResearchArtifactGenerator().generate(
-        kind="topic_difficulty_analysis", context={"profile": {}}
+    outcome = RuntimeResearchArtifactGenerator().generate(
+        kind="topic_difficulty_analysis",
+        context={"profile": {}},
+        conversation_id="conv-test",
     )
 
-    assert outcome.status == "generated"
+    assert outcome.status == "generated", outcome.reason
     assert outcome.text == '{"title":"ok"}'
+    assert outcome.run_id
+    assert outcome.event_count > 0
+    assert list(tmp_path.rglob("*.jsonl"))
 
 
 def test_deepseek_artifact_generator_without_key_is_offline(
@@ -129,8 +155,10 @@ def test_deepseek_artifact_generator_without_key_is_offline(
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
-    assert DeepSeekResearchArtifactGenerator().generate(
-        kind="topic_difficulty_analysis", context={}
+    assert RuntimeResearchArtifactGenerator().generate(
+        kind="topic_difficulty_analysis",
+        context={},
+        conversation_id="conv-test",
     ).status == "unavailable"
 
 
@@ -142,11 +170,13 @@ def test_deepseek_artifact_generator_turns_provider_failures_into_fallback_statu
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-" + "a" * 32)
     monkeypatch.setattr(
         "code_navi.research.research_artifact_llm.DeepSeekGuidanceProvider",
-        lambda: FakeDeepSeekProvider(failure),
+        lambda **_kwargs: FakeDeepSeekProvider(failure),
     )
 
-    assert DeepSeekResearchArtifactGenerator().generate(
-        kind="topic_difficulty_analysis", context={}
+    assert RuntimeResearchArtifactGenerator().generate(
+        kind="topic_difficulty_analysis",
+        context={},
+        conversation_id="conv-test",
     ).status == "failed"
 
 
@@ -169,7 +199,12 @@ def test_experiment_design_uses_validated_model_suggestions_after_plan_exists() 
         )
     )
 
-    design = build_experiment_design(profile, plan=plan, generator=generator)
+    design = build_experiment_design(
+        profile,
+        plan=plan,
+        generator=generator,
+        conversation_id="conv-test",
+    )
 
     assert design is not None
     assert generator.calls == ["experiment_design"]
@@ -186,6 +221,7 @@ def test_failed_experiment_design_model_uses_rules_fallback() -> None:
         profile,
         plan=build_conversation_research_plan(profile, ready_for_plan=True),
         generator=FakeArtifactGenerator(ArtifactLlmOutcome.generated("not-json")),
+        conversation_id="conv-test",
     )
 
     assert design is not None
@@ -196,53 +232,32 @@ def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
     profile = _profile()
     plan = build_conversation_research_plan(profile, ready_for_plan=True)
     generator = FakeArtifactGenerator(
-        ArtifactLlmOutcome.generated(json.dumps({
-            "title": "反馈策略实验草案",
-            "directory_tree": [
-                "README.md",
-                "requirements.txt",
-                "src/data.py",
-                "src/baseline.py",
-                "src/evaluate.py",
-            ],
-            "dependencies": ["Python 3.11+（请手动安装）"],
-            "files": [
-                {"path": "README.md", "content": "# 草案\n仅预览，不自动执行。"},
-                {"path": "requirements.txt", "content": "# 请在确认后手动填写依赖。"},
+        ArtifactLlmOutcome.generated(
+            json.dumps(
                 {
-                    "path": "src/data.py",
-                    "content": (
-                        "def load_data():\n"
-                        "    return [{\"input\": \"synthetic\", \"label\": 0}]"
-                    ),
+                    "title": "反馈策略实验草案",
+                    "assumptions": ["默认使用合成数据。"],
+                    "to_verify_items": ["真实数据许可待确认。"],
+                    "provenance_note": "模型只个性化说明，代码文件来自服务端固定模板。",
                 },
-                {
-                    "path": "src/baseline.py",
-                    "content": "def predict(rows):\n    return [0 for _ in rows]",
-                },
-                {
-                    "path": "src/evaluate.py",
-                    "content": (
-                        "def evaluate(predictions, labels):\n"
-                        "    return {\"status\": \"to_verify\"}"
-                    ),
-                },
-            ],
-            "run_instructions": ["先人工确认 README 中的数据与指标 TODO；系统不会执行命令。"],
-            "assumptions": ["默认使用合成数据。"],
-            "to_verify_items": ["真实数据许可待确认。"],
-            "provenance_note": "模型仅根据已确认方案生成预览。",
-        }, ensure_ascii=False))
+                ensure_ascii=False,
+            )
+        )
     )
 
-    draft = build_experiment_code_draft(profile, plan=plan, generator=generator)
+    draft = build_experiment_code_draft(
+        profile,
+        plan=plan,
+        generator=generator,
+        conversation_id="conv-test",
+    )
 
     assert draft.generation_mode == "llm"
     assert generator.calls == ["experiment_code_draft"]
     assert any(item.path == "requirements.txt" for item in draft.files)
 
 
-def test_unsafe_model_code_preview_falls_back_without_secret_or_execution() -> None:
+def test_model_cannot_replace_server_owned_code_templates() -> None:
     profile = _profile()
     draft = build_experiment_code_draft(
         profile,
@@ -250,15 +265,13 @@ def test_unsafe_model_code_preview_falls_back_without_secret_or_execution() -> N
         generator=FakeArtifactGenerator(
             ArtifactLlmOutcome.generated(json.dumps({
                 "title": "unsafe",
-                "directory_tree": ["src/data.py"],
-                "dependencies": [],
                 "files": [{"path": "src/data.py", "content": "api_key = 'secret'"}],
-                "run_instructions": ["run"],
                 "assumptions": ["x"],
                 "to_verify_items": ["x"],
                 "provenance_note": "x",
             }))
         ),
+        conversation_id="conv-test",
     )
 
     assert draft.generation_mode == "rules_fallback"

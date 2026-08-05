@@ -110,6 +110,8 @@ export interface TopicDifficultyAnalysis {
   items: ResearchAnalysisItem[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
 }
 
 export interface PaperAnalysis {
@@ -121,6 +123,8 @@ export interface PaperAnalysis {
   items: ResearchAnalysisItem[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
 }
 
 export interface ExperimentDesign {
@@ -136,10 +140,25 @@ export interface ExperimentDesign {
   advisor_confirmation_items: ResearchPlanEntry[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
 }
 
 export interface ExperimentCodeDraftFile { path: string; content: string; }
-export interface ExperimentCodeDraft { schema_version: "experiment-code-draft.v1"; title: string; directory_tree: string[]; dependencies: string[]; files: ExperimentCodeDraftFile[]; run_instructions: string[]; assumptions: string[]; to_verify_items: string[]; provenance_note: string; generation_mode: "llm" | "rules" | "rules_fallback"; }
+export interface ExperimentCodeDraft {
+  schema_version: "experiment-code-draft.v1";
+  title: string;
+  directory_tree: string[];
+  dependencies: string[];
+  files: ExperimentCodeDraftFile[];
+  run_instructions: string[];
+  assumptions: string[];
+  to_verify_items: string[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
 
 export interface ResearchConversationMessage {
   message_id: string;
@@ -392,8 +411,31 @@ export async function analyzeResearchPaper(
   );
 }
 
-export async function createExperimentCodeDraft(conversationId: string): Promise<ExperimentCodeDraft> {
-  return request<ExperimentCodeDraft>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
+export async function generateTopicDifficultyAnalysis(
+  conversationId: string,
+): Promise<TopicDifficultyAnalysis> {
+  return request<TopicDifficultyAnalysis>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/topic-difficulty-analysis`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function generateExperimentDesign(
+  conversationId: string,
+): Promise<ExperimentDesign> {
+  return request<ExperimentDesign>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-design`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function createExperimentCodeDraft(
+  conversationId: string,
+): Promise<ExperimentCodeDraft> {
+  return request<ExperimentCodeDraft>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {

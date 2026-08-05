@@ -21,6 +21,8 @@ from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     ConversationEvidenceBundle,
     CreateResearchConversationRequest,
+    ExperimentCodeDraft,
+    ExperimentDesign,
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
@@ -28,11 +30,12 @@ from .conversation_schemas import (
     ResearchProfilePatch,
     ResearchReadiness,
     SendResearchMessageRequest,
+    TopicDifficultyAnalysis,
 )
 from .models import ResearchConversationModel, ResearchEvidenceBundleModel
 from .research_artifact_llm import (
-    DeepSeekResearchArtifactGenerator,
     ResearchArtifactGenerator,
+    RuntimeResearchArtifactGenerator,
 )
 
 
@@ -62,7 +65,7 @@ class ResearchConversationService:
         artifact_generator: ResearchArtifactGenerator | None = None,
     ) -> None:
         self.decision_generator = decision_generator or RuntimeConversationDecisionGenerator()
-        self.artifact_generator = artifact_generator or DeepSeekResearchArtifactGenerator()
+        self.artifact_generator = artifact_generator or RuntimeResearchArtifactGenerator()
 
     def create(
         self,
@@ -118,11 +121,53 @@ class ResearchConversationService:
 
     def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
         """Restore a conversation without invoking a model or external service."""
-        return self._to_response(
-            self._get_model(conversation_id, db), db, include_llm_artifacts=False
+        return self._to_response(self._get_model(conversation_id, db), db)
+
+    def generate_topic_difficulty_analysis(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> TopicDifficultyAnalysis:
+        """Generate personalized wording only after the dedicated endpoint is called."""
+        conversation = self._get_model(conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        bundles = self._evidence_bundles(conversation.id, db)
+        return build_topic_difficulty_analysis(
+            profile,
+            plan=plan,
+            evidence_bundles=bundles,
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
         )
 
-    def create_experiment_code_draft(self, conversation_id: str, db: Session):
+    def generate_experiment_design(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> ExperimentDesign | None:
+        """Generate a personalized experiment design after explicit confirmation."""
+        conversation = self._get_model(conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        return build_experiment_design(
+            profile,
+            plan=plan,
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
+        )
+
+    def create_experiment_code_draft(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> ExperimentCodeDraft:
         """Generate only the confirmed preview, without re-running other artefact calls."""
         conversation = self._get_model(conversation_id, db)
         profile = ResearchProfile.model_validate(conversation.profile_data)
@@ -131,7 +176,10 @@ class ResearchConversationService:
             profile, ready_for_plan=readiness.stage == "ready_for_plan"
         )
         return build_experiment_code_draft(
-            profile, plan=plan, generator=self.artifact_generator
+            profile,
+            plan=plan,
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
         )
 
     @staticmethod
@@ -224,8 +272,6 @@ class ResearchConversationService:
         self,
         conversation: ResearchConversationModel,
         db: Session,
-        *,
-        include_llm_artifacts: bool = True,
     ) -> ResearchConversationResponse:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         messages = _messages(conversation)
@@ -240,18 +286,7 @@ class ResearchConversationService:
             profile,
             ready_for_plan=readiness.stage == "ready_for_plan",
         )
-        bundles = [
-            ConversationEvidenceBundle.model_validate(record.bundle_data)
-            for record in (
-                db.query(ResearchEvidenceBundleModel)
-                .filter(ResearchEvidenceBundleModel.conversation_id == conversation.id)
-                .order_by(ResearchEvidenceBundleModel.created_at.desc())
-                .all()
-            )
-        ]
-        artifact_generator = (
-            self.artifact_generator if include_llm_artifacts else None
-        )
+        bundles = self._evidence_bundles(conversation.id, db)
         return ResearchConversationResponse(
             conversation_id=conversation.id,
             next_skill=(
@@ -271,10 +306,9 @@ class ResearchConversationService:
                 profile,
                 plan=plan,
                 evidence_bundles=bundles,
-                generator=artifact_generator,
             ),
             experiment_design=build_experiment_design(
-                profile, plan=plan, generator=artifact_generator
+                profile, plan=plan
             ),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
@@ -285,6 +319,22 @@ class ResearchConversationService:
             messages=messages,
             last_run_id=assistant.run_id,
         )
+
+    @staticmethod
+    def _evidence_bundles(
+        conversation_id: str,
+        db: Session,
+    ) -> list[ConversationEvidenceBundle]:
+        records = (
+            db.query(ResearchEvidenceBundleModel)
+            .filter(ResearchEvidenceBundleModel.conversation_id == conversation_id)
+            .order_by(ResearchEvidenceBundleModel.created_at.desc())
+            .all()
+        )
+        return [
+            ConversationEvidenceBundle.model_validate(record.bundle_data)
+            for record in records
+        ]
 
 
 def _messages(conversation: ResearchConversationModel) -> list[ResearchConversationMessage]:

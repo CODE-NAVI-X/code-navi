@@ -2,12 +2,12 @@
 
 ## 1. 当前实现
 
-前端位于 `frontend/`，使用 Next `16.2.10`、React `19.2.4`、TypeScript、Tailwind CSS 4 和 npm 锁文件。当前页面为：
+前端位于 `frontend/`，使用 Next `16.3.0`、React `19.2.4`、TypeScript、Tailwind CSS 4 和 npm 锁文件。当前页面为：
 
 | 页面 | 当前能力 |
 | --- | --- |
-| `/learning` | 调用学习 explain API，展示讲解与引文，并读取当前学习会话笔记 |
-| `/research` | 创建或恢复动态科研对话，展示画像、离线规则研究计划、Provider 状态和检索计划，并显式触发与恢复 evidence bundle |
+| `/learning` | 调用学习 explain API，展示讲解与引文、读取当前会话笔记，并逐页生成、预览和导出演示文稿 |
+| `/research` | 创建或恢复动态科研对话，展示画像、离线规则研究计划、Provider 状态和检索计划，并显式触发研究产物个性化与 evidence bundle |
 | `/practice` | 展示接收到的原型上下文；按钮仅提示功能未上线 |
 
 `/student/learning`、`/student/practice` 和 `/student/research` 通过 Next rewrite 映射到上述页面。Web 是当前本地产品宿主；CLI 仍用于独立验证 Runtime 路径。
@@ -19,6 +19,8 @@
 默认 API 地址为 `http://127.0.0.1:8000`，可用 `NEXT_PUBLIC_CODE_NAVI_API_URL` 配置；`NEXT_PUBLIC_API_BASE` 仅作为现有兼容项。前端类型镜像后端 Pydantic schema，后端契约变化时两侧和相应测试必须同步。
 
 页面至少明确展示加载、成功、失败和需要用户主动触发的状态。服务器内部错误只显示安全的公开信息；网络错误不得伪装成空结果或成功。
+
+演示文稿页面显示每次流式结果的规则、模型、混合或降级来源；读取归档时始终携带当前学习 `session_id`。研究页面默认展示规则难点与规则实验方案，模型个性化和代码草案预览分别由独立按钮触发。
 
 ## 3. 浏览器状态
 

@@ -1,7 +1,11 @@
 import { useSyncExternalStore } from "react";
 
 import { getLearningSessionId } from "@/lib/api/learning";
-import type { SceneOutline, Slide } from "@/lib/api/learning";
+import type {
+  PresentationGenerationMode,
+  SceneOutline,
+  Slide,
+} from "@/lib/api/learning";
 
 /**
  * Lightweight external-store snapshot for the learning page.
@@ -21,6 +25,8 @@ export interface LearningSnapshot {
   outlines?: SceneOutline[];
   slides?: Slide[];
   currentIndex?: number;
+  presentationGenerationMode?: PresentationGenerationMode;
+  presentationProviderName?: string;
 }
 
 let currentSnapshot: LearningSnapshot | null = null;

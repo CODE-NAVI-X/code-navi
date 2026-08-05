@@ -255,14 +255,26 @@ export interface Presentation {
   session_id: string;
   style: string;
   slides: Slide[];
+  generation_mode: PresentationGenerationMode;
+  provider_name: string;
   created_at?: string | null;
 }
 
+export type PresentationGenerationMode = "model" | "rules" | "rules_fallback" | "mixed";
+
+export interface PresentationSource {
+  generation_mode: PresentationGenerationMode;
+  provider_name: string;
+}
+
 export type PresentationStreamEvent =
-  | { type: "outlines"; data: SceneOutline[] }
-  | { type: "slide"; index: number; total: number; data: Slide }
+  | ({ type: "outlines"; data: SceneOutline[] } & PresentationSource)
+  | ({ type: "slide"; index: number; total: number; data: Slide } & PresentationSource)
   | { type: "done"; presentation: Presentation }
-  | { type: "error"; error: string };
+  | {
+      type: "error";
+      error: { code: string; message: string; error_id: string };
+    };
 
 /**
  * POST /api/v1/learning/presentations/generate and yield one event per SSE
@@ -365,13 +377,16 @@ export interface PresentationDetail {
   style: string;
   slides: Slide[];
   outlines: SceneOutline[];
+  generation_mode: PresentationGenerationMode;
+  provider_name: string;
   created_at?: string | null;
 }
 
 export async function fetchPresentation(
   presentationId: string,
+  sessionId: string,
 ): Promise<PresentationDetail> {
-  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}`;
+  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}?session_id=${encodeURIComponent(sessionId)}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) {
     throw new LearningApiError(

@@ -70,10 +70,6 @@ python scripts/dev.py
 
 默认 Provider 为离线 Mock。在线 Provider 用 `code-navi configure-provider --provider deepseek` 显式配置，凭据写入已忽略的 `.code-navi/provider.env`。
 
-## Context Management Rule
-1. After completing any major sub-task or code phase, automatically run `/compact` to summarize the remaining context.
-2. Do not retain full implementation logs after git commits; condense progress into a status checklist.
-
 ## 文档导航
 
 按任务需要读取（最小组合规则见 AGENTS.md）：

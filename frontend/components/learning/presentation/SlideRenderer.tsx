@@ -38,6 +38,32 @@ const ALLOWED_TAGS = new Set([
   "br",
 ]);
 
+const ALLOWED_STYLE_PROPERTIES = new Set([
+  "font-size",
+  "color",
+  "text-align",
+  "font-weight",
+  "font-family",
+  "line-height",
+]);
+
+function sanitizeStyle(value: string): string {
+  return value
+    .split(";")
+    .map((declaration) => declaration.trim())
+    .filter(Boolean)
+    .flatMap((declaration) => {
+      const separator = declaration.indexOf(":");
+      if (separator < 1) return [];
+      const property = declaration.slice(0, separator).trim().toLowerCase();
+      const styleValue = declaration.slice(separator + 1).trim();
+      if (!ALLOWED_STYLE_PROPERTIES.has(property)) return [];
+      if (/url\s*\(|expression\s*\(|javascript:|@import/i.test(styleValue)) return [];
+      return [`${property}: ${styleValue}`];
+    })
+    .join("; ");
+}
+
 function sanitizeHtml(html: string): string {
   if (typeof window === "undefined") return html;
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -53,16 +79,15 @@ function sanitizeHtml(html: string): string {
           el.replaceWith(text);
           continue;
         }
-        // Drop event handlers and dangerous URL schemes.
+        // Keep only the small inline-style subset required by the slide model.
         for (const attr of Array.from(el.attributes)) {
           const name = attr.name.toLowerCase();
-          if (name.startsWith("on")) {
+          if (name === "style") {
+            const safeStyle = sanitizeStyle(attr.value);
+            if (safeStyle) el.setAttribute("style", safeStyle);
+            else el.removeAttribute(attr.name);
+          } else {
             el.removeAttribute(attr.name);
-          } else if (name === "href" || name === "src") {
-            const value = attr.value.trim().toLowerCase();
-            if (value.startsWith("javascript:") || value.startsWith("data:text/html")) {
-              el.removeAttribute(attr.name);
-            }
           }
         }
         walk(el);

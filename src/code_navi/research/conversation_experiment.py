@@ -16,6 +16,7 @@ def build_experiment_design(
     *,
     plan: ConversationResearchPlan | None,
     generator: ResearchArtifactGenerator | None = None,
+    conversation_id: str | None = None,
 ) -> ExperimentDesign | None:
     """Return no design before a plan; never claim unprovided resources are available."""
     if plan is None:
@@ -66,8 +67,11 @@ def build_experiment_design(
     )
     if generator is None:
         return rules
+    if conversation_id is None:
+        raise ValueError("conversation_id is required for model experiment design")
     outcome = generator.generate(
         kind="experiment_design",
+        conversation_id=conversation_id,
         context={
             "profile": profile.model_dump(mode="json"),
             "research_plan": plan.model_dump(mode="json"),
@@ -107,7 +111,11 @@ def build_experiment_design(
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
     try:
         return ExperimentDesign.model_validate_json(outcome.text).model_copy(
-            update={"generation_mode": "llm"}
+            update={
+                "generation_mode": "llm",
+                "run_id": outcome.run_id,
+                "event_count": outcome.event_count,
+            }
         )
     except ValueError:
         return rules.model_copy(update={"generation_mode": "rules_fallback"})

@@ -83,6 +83,8 @@ function PresentationPreviewOverlay({
             generating={false}
             currentIndex={idx}
             onNavigate={setIdx}
+            generationMode={detail.generation_mode}
+            providerName={detail.provider_name}
           />
         ) : (
           <p className="py-16 text-center text-xs text-slate-400">此 PPT 无内容</p>
@@ -131,11 +133,11 @@ export function StructuredNotebook({
   }, [open, sessionId, loadItems]);
 
   async function openPresentation(item: NotebookItem) {
-    if (!item.presentation_id) return;
+    if (!item.presentation_id || !sessionId) return;
     setLoadingPreview(true);
     setError(null);
     try {
-      const detail = await fetchPresentation(item.presentation_id);
+      const detail = await fetchPresentation(item.presentation_id, sessionId);
       setPreview(detail);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "加载 PPT 失败");

@@ -17,10 +17,13 @@ from .conversation_schemas import (
     CreateExperimentCodeDraftRequest,
     CreateResearchConversationRequest,
     ExperimentCodeDraft,
+    ExperimentDesign,
+    GenerateResearchArtifactRequest,
     PaperAnalysis,
     ResearchConversationResponse,
     ResearchSearchPlan,
     SendResearchMessageRequest,
+    TopicDifficultyAnalysis,
 )
 from .conversation_search_service import (
     ConversationPaperNotFoundError,
@@ -225,6 +228,46 @@ def analyze_conversation_paper(
             status_code=404,
             detail="Paper is not present in this conversation's saved evidence bundles.",
         ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/topic-difficulty-analysis",
+    response_model=TopicDifficultyAnalysis,
+)
+def generate_topic_difficulty_analysis(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> TopicDifficultyAnalysis:
+    """Run one audited personalization after explicit user confirmation."""
+    del request
+    try:
+        return _conversation_service.generate_topic_difficulty_analysis(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/experiment-design",
+    response_model=ExperimentDesign,
+)
+def generate_experiment_design(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> ExperimentDesign:
+    """Run one audited experiment-design personalization after confirmation."""
+    del request
+    try:
+        design = _conversation_service.generate_experiment_design(conversation_id, db)
+        if design is None:
+            raise HTTPException(
+                status_code=409,
+                detail="当前科研画像尚未形成规则研究计划。",
+            )
+        return design
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
 
 @router.post(

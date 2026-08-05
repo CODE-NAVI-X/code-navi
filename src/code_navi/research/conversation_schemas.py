@@ -278,6 +278,8 @@ class TopicDifficultyAnalysis(BaseModel):
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
 
 
 class PaperAnalysis(BaseModel):
@@ -293,6 +295,8 @@ class PaperAnalysis(BaseModel):
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
 
 
 class ExperimentDesign(BaseModel):
@@ -312,6 +316,8 @@ class ExperimentDesign(BaseModel):
     advisor_confirmation_items: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
 
 
 class ExperimentCodeDraftFile(BaseModel):
@@ -334,9 +340,19 @@ class ExperimentCodeDraft(BaseModel):
     to_verify_items: list[str] = Field(min_length=1, max_length=8)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
 
 
 class CreateExperimentCodeDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_confirmed: Literal[True]
+
+
+class GenerateResearchArtifactRequest(BaseModel):
+    """Require an explicit user action before an optional model call."""
+
     model_config = ConfigDict(extra="forbid")
 
     user_confirmed: Literal[True]
