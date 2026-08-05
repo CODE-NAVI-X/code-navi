@@ -1,17 +1,26 @@
 import { useSyncExternalStore } from "react";
 
 import { getLearningSessionId } from "@/lib/api/learning";
+import type { SceneOutline, Slide } from "@/lib/api/learning";
 
 /**
  * Lightweight external-store snapshot for the learning page.
  *
- * Allows the "explain" result and query to survive client-side navigations
- * (e.g. learning → practice → back to learning).
+ * Allows the explain result AND a partially/fully generated PPT deck to survive
+ * client-side navigations (e.g. learning → practice → back to learning). The
+ * snapshot is in-memory only (module scope), which is exactly what an SPA
+ * route switch needs — a full page reload clears it, which is fine.
  */
 
-interface LearningSnapshot {
+export interface LearningSnapshot {
   query: string;
   result: unknown; // ExplainResponse
+  /** Which of the unified result views the user was on (text | ppt). */
+  view?: "text" | "ppt";
+  /** PPT deck — set once generation starts, so it survives a route switch. */
+  outlines?: SceneOutline[];
+  slides?: Slide[];
+  currentIndex?: number;
 }
 
 let currentSnapshot: LearningSnapshot | null = null;

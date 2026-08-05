@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import openai
 
@@ -44,6 +44,7 @@ class OpenAIChatCompletionsAdapter:
         temperature: float | None = None,
         timeout: float | None = None,
         max_context: int | None = None,
+        thinking: Literal["enabled", "disabled"] | None = None,
     ) -> None:
         if not model.strip():
             raise ValueError("model is required")
@@ -51,10 +52,13 @@ class OpenAIChatCompletionsAdapter:
             raise ValueError("max_tokens must be None or positive")
         if temperature is not None and not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature must be None or within [0.0, 2.0]")
+        if thinking not in {None, "enabled", "disabled"}:
+            raise ValueError("thinking must be None, 'enabled' or 'disabled'")
         self.model = model
         self.provider_name = provider_name
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.thinking = thinking
         self.capabilities = ProviderCapabilities(
             supports_streaming=False,
             supports_parallel_tool_calls=True,
@@ -87,6 +91,10 @@ class OpenAIChatCompletionsAdapter:
             request["max_tokens"] = self.max_tokens
         if self.temperature is not None:
             request["temperature"] = self.temperature
+        if self.thinking:
+            # Reasoning models burn their token budget on chain-of-thought; for
+            # structured JSON generation we opt out so content returns directly.
+            request["extra_body"] = {"thinking": {"type": self.thinking}}
         try:
             response = self._client.chat.completions.create(**request)
         except openai.APIError as exc:
