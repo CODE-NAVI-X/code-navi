@@ -389,8 +389,10 @@ export interface PresentationDetail {
 
 export async function fetchPresentation(
   presentationId: string,
+  sessionId: string,
 ): Promise<PresentationDetail> {
-  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}`;
+  const params = new URLSearchParams({ session_id: sessionId });
+  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}?${params.toString()}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) {
     throw new LearningApiError(

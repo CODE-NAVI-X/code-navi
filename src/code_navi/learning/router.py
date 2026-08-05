@@ -79,14 +79,24 @@ async def list_notebook_items(
 @router.get("/presentations/{presentation_id}")
 async def get_presentation(
     presentation_id: str,
+    session_id: str = Query(..., min_length=1, max_length=64),
     db: Session = _db_dependency,
 ) -> dict:
-    """Return a previously archived presentation (slides + outlines) for review."""
+    """Return a previously archived presentation (slides + outlines) for review.
+
+    ``session_id`` is required and scopes the lookup to the requesting
+    session, matching the notebook list endpoint — without it a client would
+    read any session's deck by id.
+    """
     from fastapi import HTTPException
 
     items = (
         db.query(NotebookItemModel)
-        .filter(NotebookItemModel.item_type == "presentation")
+        .filter(
+            NotebookItemModel.user_id == "poc-user",
+            NotebookItemModel.session_id == session_id,
+            NotebookItemModel.item_type == "presentation",
+        )
         .all()
     )
     item = next(

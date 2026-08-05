@@ -263,6 +263,38 @@ class TestPresentationEndpoint:
         ).json()
         assert any(item["kind"] == "presentation" for item in items)
 
+    def test_get_presentation_is_scoped_to_own_session(self, client: TestClient) -> None:
+        client.post(
+            "/api/v1/learning/presentations/generate",
+            json={"knowledge_point": "红黑树", "session_id": "sess-owner"},
+        )
+        notebook = client.get(
+            "/api/v1/learning/notebook", params={"session_id": "sess-owner"}
+        ).json()
+        pres_id = next(
+            item["presentation_id"]
+            for item in notebook
+            if item["kind"] == "presentation"
+        )
+
+        # Same session can read its own deck.
+        own = client.get(
+            f"/api/v1/learning/presentations/{pres_id}",
+            params={"session_id": "sess-owner"},
+        )
+        assert own.status_code == 200
+
+        # A different session cannot read another session's deck by id.
+        other = client.get(
+            f"/api/v1/learning/presentations/{pres_id}",
+            params={"session_id": "sess-other"},
+        )
+        assert other.status_code == 404
+
+        # The session_id query parameter is required.
+        missing = client.get(f"/api/v1/learning/presentations/{pres_id}")
+        assert missing.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # 5.  Kernel-routing invariants
