@@ -17,3 +17,5 @@ var
 tests
 docs
 examples
+**/node_modules
+frontend/.next
