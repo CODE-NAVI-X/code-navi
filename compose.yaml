@@ -78,3 +78,4 @@ services:
 volumes:
   code_navi_runs:
   piston_packages:
+    name: code-navi-piston-packages
