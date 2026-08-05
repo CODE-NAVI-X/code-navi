@@ -133,7 +133,7 @@ export function StructuredNotebook({
   }, [open, sessionId, loadItems]);
 
   async function openPresentation(item: NotebookItem) {
-    if (!item.presentation_id || !sessionId) return;
+    if (!sessionId || !item.presentation_id) return;
     setLoadingPreview(true);
     setError(null);
     try {

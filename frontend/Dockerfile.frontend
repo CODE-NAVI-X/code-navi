@@ -1,0 +1,29 @@
+# Code Navi — Next.js frontend image (standalone output).
+#
+# Requires next.config.ts to set `output: "standalone"` (see next.config.ts).
+# Build via compose.web.yaml:
+#   docker compose -f compose.web.yaml build frontend
+
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+# Same-origin API: the browser calls /api/* and Caddy routes it to the backend.
+# An empty base keeps the bundle host-agnostic, so ONE image serves both the
+# LAN entry point and, later, a public DDNS domain with no rebuild.
+ENV NEXT_PUBLIC_CODE_NAVI_API_URL=""
+RUN npm run build
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+COPY --from=build /app/public ./public
+EXPOSE 3000
+CMD ["node", "server.js"]

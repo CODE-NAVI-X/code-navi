@@ -44,10 +44,29 @@ export function getLearningSessionId(): string {
   if (typeof window === "undefined") return "";
   let sessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
   if (!sessionId) {
-    sessionId = `sess-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    sessionId = newSessionId();
     window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
   }
   return sessionId;
+}
+
+/**
+ * Mint a fresh opaque session id.
+ *
+ * ``crypto.randomUUID`` is only defined in secure contexts (HTTPS or
+ * localhost). On plain HTTP — e.g. this LAN deployment
+ * ``http://192.168.0.32:25000`` — it is undefined and throws at runtime.
+ * ``crypto.getRandomValues`` is available in every context, so use it
+ * instead, and fall back to ``Math.random`` only as a last resort.
+ */
+function newSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `sess-${hex}`;
+  }
+  return `sess-${Math.random().toString(36).slice(2, 18)}`;
 }
 
 // ── API base URL ───────────────────────────────────────────────────────────────
@@ -386,7 +405,8 @@ export async function fetchPresentation(
   presentationId: string,
   sessionId: string,
 ): Promise<PresentationDetail> {
-  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}?session_id=${encodeURIComponent(sessionId)}`;
+  const params = new URLSearchParams({ session_id: sessionId });
+  const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}?${params.toString()}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) {
     throw new LearningApiError(

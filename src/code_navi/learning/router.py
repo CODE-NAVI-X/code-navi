@@ -82,7 +82,12 @@ async def get_presentation(
     session_id: str = Query(..., min_length=1, max_length=64),
     db: Session = _db_dependency,
 ) -> dict:
-    """Return a previously archived presentation (slides + outlines) for review."""
+    """Return a previously archived presentation (slides + outlines) for review.
+
+    ``session_id`` is required and scopes the lookup to the requesting
+    session, matching the notebook list endpoint — without it a client would
+    read any session's deck by id.
+    """
     from fastapi import HTTPException
 
     items = (
