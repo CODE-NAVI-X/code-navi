@@ -33,6 +33,7 @@ def create_compiler_application(settings: Settings | None = None) -> CompilerApp
         gateway,
         resolved,
         evaluator=ai_service.evaluator,
+        tutor=ai_service.tutor,
         ai_status=ai_service.status,
         ai_message=ai_service.message,
         record_store=LearningRecordStore(resolved.database_path),
@@ -85,6 +86,26 @@ def evaluate(
     """Resolve a queued AI evaluation ticket."""
 
     return _json_response(application.evaluate(payload))
+
+
+@router.post("/submit", status_code=200)
+def submit(
+    payload: Any = _json_body,
+    application: CompilerApplication = _compiler_dependency,
+) -> JSONResponse:
+    """Judge source against server-owned public and hidden tests."""
+
+    return _json_response(application.submit(payload))
+
+
+@router.post("/guidance", status_code=200)
+def guidance(
+    payload: Any = _json_body,
+    application: CompilerApplication = _compiler_dependency,
+) -> JSONResponse:
+    """Provide guided follow-up for a server-owned submission context."""
+
+    return _json_response(application.guidance(payload))
 
 
 @router.get("/records", status_code=200)

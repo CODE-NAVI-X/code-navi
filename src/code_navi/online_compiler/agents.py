@@ -26,3 +26,27 @@ code_result_explainer_agent = AgentSpec(
 )
 
 __all__ = ["code_result_explainer_agent"]
+
+guided_code_tutor_agent = AgentSpec(
+    name="guided_code_tutor",
+    description=(
+        "Guides a student through a failed programming submission "
+        "without revealing a solution."
+    ),
+    system_prompt=(
+        "你是 Python 编程教学引导助手。判题结果由服务端决定，不得修改 verdict 或 score。"
+        "只能根据题目描述、学生代码、公开测试结果和对话历史提问或给出最小提示。"
+        "绝不提供完整答案、完整代码、隐藏测试数据或隐藏测试期望输出。"
+        '只输出 JSON：{"reply":"...","strategy":"question|hint|explanation","blocked":false}。'
+    ),
+    tool_names=(),
+    default_config=KernelConfig(
+        max_steps=1,
+        max_tool_calls=0,
+        retry_max_attempts=1,
+        retry_backoff_seconds=0.25,
+    ),
+    output_format="json",
+)
+
+__all__.append("guided_code_tutor_agent")

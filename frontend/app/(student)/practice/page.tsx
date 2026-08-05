@@ -21,10 +21,13 @@ import {
   CompilerExecutionResult,
   CompilerRecord,
   CompilerRuntimeStatus,
+  CompilerJudgeResult,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
   fetchCompilerRuntime,
+  requestCompilerGuidance,
+  submitPython,
 } from "@/lib/api/compiler";
 import { useFlowStore } from "@/lib/store/flow-store";
 
@@ -162,6 +165,10 @@ function PracticeContent() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<CompilerExecutionResult | null>(null);
   const [aiFeedback, setAiFeedback] = useState<CompilerAiFeedback | null>(null);
+  const [judgeResult, setJudgeResult] = useState<CompilerJudgeResult | null>(null);
+  const [guidanceMessage, setGuidanceMessage] = useState("");
+  const [guidance, setGuidance] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [guidanceBusy, setGuidanceBusy] = useState(false);
   const [records, setRecords] = useState<CompilerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [learnerId] = useState(() => getLearnerId());
@@ -212,6 +219,9 @@ function PracticeContent() {
     setStdin(exercise.stdin);
     setResult(null);
     setAiFeedback(null);
+    setJudgeResult(null);
+    setGuidance([]);
+    setGuidanceMessage("");
     setError(null);
     setView("workspace");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -264,6 +274,43 @@ function PracticeContent() {
       setError(runError instanceof Error ? runError.message : "代码运行失败。");
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function submitCode() {
+    setRunning(true);
+    setError(null);
+    try {
+      const judged = await submitPython({
+        problemId: activeExercise.id,
+        source,
+        learnerId,
+      });
+      setJudgeResult(judged);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "提交判题失败");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function askTutor() {
+    if (!judgeResult || !guidanceMessage.trim()) return;
+    const message = guidanceMessage.trim();
+    setGuidanceBusy(true);
+    setGuidanceMessage("");
+    try {
+      const response = await requestCompilerGuidance({
+        submissionId: judgeResult.submissionId,
+        message,
+        learnerId,
+        history: guidance,
+      });
+      setGuidance((items) => [...items, { role: "user", content: message }, { role: "assistant", content: response.ai.reply }]);
+    } catch (tutorError) {
+      setError(tutorError instanceof Error ? tutorError.message : "AI 引导暂不可用");
+    } finally {
+      setGuidanceBusy(false);
     }
   }
 
@@ -396,6 +443,15 @@ function PracticeContent() {
         >
           <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
         </button>
+        <button
+          type="button"
+          onClick={() => void submitCode()}
+          disabled={running || !runtime?.ready || activeExercise.id === "imported"}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#667c68] bg-white px-4 py-2.5 text-sm font-bold text-[#233728] transition hover:bg-[#eef2e8] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />
+          提交判题
+        </button>
         <div className="min-w-0 flex-1">
           <span className="font-mono text-[10px] text-[#78827a]">
             {activeExercise.id === "imported"
@@ -521,6 +577,17 @@ function PracticeContent() {
               </div>
               <ResultPanel result={result} error={error} />
             </div>
+
+            {judgeResult ? <JudgePanel result={judgeResult} /> : null}
+            {judgeResult ? (
+              <TutorPanel
+                messages={guidance}
+                value={guidanceMessage}
+                busy={guidanceBusy}
+                onChange={setGuidanceMessage}
+                onSubmit={() => void askTutor()}
+              />
+            ) : null}
 
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <AssessmentPanel result={result} aiFeedback={aiFeedback} />
@@ -667,6 +734,79 @@ function ResultPanel({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function JudgePanel({ result }: { result: CompilerJudgeResult }) {
+  return (
+    <section className="mt-4 rounded-2xl border border-[#d9dfd2] bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-[#17201b]">判题结果</h2>
+          <p className="mt-1 text-xs text-[#667168]">
+            已通过 {result.passed}/{result.total} 个测试点，隐藏测试仅返回通过状态。
+          </p>
+        </div>
+        <strong className={`text-2xl ${result.verdict === "accepted" ? "text-[#47723e]" : "text-[#a44b38]"}`}>
+          {result.score.toFixed(0)} 分
+        </strong>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {result.testResults.map((test) => (
+            <div key={`${test.index}-${test.hidden}`} className="rounded-xl border border-[#e6eadf] bg-[#f5f6ef] p-3 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-[#667168]">测试点 {test.index + 1}</span>
+              <span className={test.status === "passed" ? "text-[#47723e]" : "text-[#a44b38]"}>
+                {test.status === "passed" ? "通过" : test.status}
+              </span>
+            </div>
+            <p className="mt-2 text-[#667168]">{test.hidden ? "隐藏测试" : "公开测试"}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TutorPanel({
+  messages,
+  value,
+  busy,
+  onChange,
+  onSubmit,
+}: {
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <section className="mt-4 rounded-2xl border border-[#d9dfd2] bg-white p-4">
+      <div className="flex items-center gap-2">
+        <BrainCircuit className="h-4 w-4 text-[#667168]" strokeWidth={1.5} />
+        <h2 className="text-sm font-semibold text-[#17201b]">AI 引导</h2>
+      </div>
+      <p className="mt-2 text-xs text-[#667168]">AI 只根据公开结果提问和提示，不直接提供完整答案。</p>
+      <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+        {messages.map((message, index) => (
+          <div key={`${message.role}-${index}`} className={`rounded-xl p-3 text-xs leading-5 ${message.role === "assistant" ? "bg-[#eef2e8] text-[#35443b]" : "ml-6 bg-[#17201b] text-white"}`}>
+            {message.content}
+          </div>
+        ))}
+      </div>
+      <form className="mt-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="描述你卡住的地方"
+          className="min-w-0 flex-1 rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 py-2 text-xs outline-none focus:border-[#9fb49d]"
+        />
+        <button type="submit" disabled={busy || !value.trim()} className="rounded-xl bg-[#17201b] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
+          {busy ? "思考中" : "提问"}
+        </button>
+      </form>
+    </section>
   );
 }
 

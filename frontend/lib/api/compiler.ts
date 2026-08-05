@@ -86,6 +86,36 @@ export interface CompilerExecutionResult {
   serviceTiming: Record<string, number>;
 }
 
+export interface CompilerTestResult {
+  testId?: string;
+  index: number;
+  status: string;
+  points: number;
+  hidden: boolean;
+  stdout: string | null;
+  stderr: string | null;
+  errorType: string | null;
+}
+
+export interface CompilerJudgeResult {
+  submissionId: string;
+  problemId: string;
+  problemVersion: number;
+  verdict: string;
+  score: number;
+  passed: number;
+  total: number;
+  passedPoints: number;
+  totalPoints: number;
+  testResults: CompilerTestResult[];
+}
+
+export interface CompilerGuidance {
+  reply: string;
+  strategy: "question" | "hint" | "explanation";
+  blocked: boolean;
+}
+
 export class CompilerApiError extends Error {
   constructor(
     public readonly status: number,
@@ -129,6 +159,30 @@ export async function evaluatePythonRun(payload: {
       body: JSON.stringify(payload),
     },
   );
+}
+
+export async function submitPython(payload: {
+  problemId: string;
+  problemVersion?: number;
+  source: string;
+  learnerId: string;
+}): Promise<CompilerJudgeResult> {
+  return request<CompilerJudgeResult>("/api/v1/compiler/submit", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, problemVersion: payload.problemVersion ?? 1 }),
+  });
+}
+
+export async function requestCompilerGuidance(payload: {
+  submissionId: string;
+  message: string;
+  learnerId: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+}): Promise<{ submissionId: string; ai: CompilerGuidance }> {
+  return request<{ submissionId: string; ai: CompilerGuidance }>("/api/v1/compiler/guidance", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function fetchCompilerRecords(

@@ -79,4 +79,3 @@ def test_compiler_api_rejects_invalid_payload_without_gateway_call() -> None:
     assert response.status_code == 400
     assert "Python" in response.json()["error"]
     assert gateway.calls == []
-

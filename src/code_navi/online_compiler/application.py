@@ -9,11 +9,14 @@ from time import monotonic, perf_counter
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from .ai_evaluation import AiEvaluationError, AiEvaluator
+from .ai_evaluation import AiEvaluationError, AiEvaluator, AiTutor
 from .config import Settings
 from .evaluation import AiFeedback, RuleAssessment, classify_execution
+from .judging import JudgeResult, judge_submission
 from .learning_records import LearningRecordStore
 from .piston import ExecutionLimits, ExecutionResult, PistonError, RuntimeInfo
+from .problems.catalog import build_default_problem_repository
+from .problems.repository import ProblemRepository
 
 
 class ValidationError(ValueError):
@@ -57,8 +60,21 @@ class PendingEvaluation:
     created_at: float
 
 
+@dataclass(frozen=True, slots=True)
+class PendingSubmission:
+    source: str
+    problem_id: str
+    version: int
+    description: str
+    result: JudgeResult
+    learner_id: str | None
+    created_at: float
+
+
 PENDING_EVALUATION_TTL_SECONDS = 300.0
 MAX_PENDING_EVALUATIONS = 256
+PENDING_SUBMISSION_TTL_SECONDS = 900.0
+MAX_PENDING_SUBMISSIONS = 256
 
 
 class CompilerApplication:
@@ -70,18 +86,24 @@ class CompilerApplication:
         settings: Settings,
         *,
         evaluator: AiEvaluator | None = None,
+        tutor: AiTutor | None = None,
         ai_status: str = "disabled",
         ai_message: str = "未配置 AI 模型，规则识别仍可使用。",
         record_store: LearningRecordStore | None = None,
+        problem_repository: ProblemRepository | None = None,
     ) -> None:
         self._gateway = gateway
         self._settings = settings
         self._evaluator = evaluator
+        self._tutor = tutor
         self._ai_status = ai_status
         self._ai_message = ai_message
         self._record_store = record_store
+        self._problem_repository = problem_repository or build_default_problem_repository()
         self._pending_evaluations: dict[str, PendingEvaluation] = {}
         self._pending_lock = Lock()
+        self._submissions: dict[str, PendingSubmission] = {}
+        self._submission_lock = Lock()
         self._limits = ExecutionLimits(
             wall_time_ms=settings.run_timeout_ms,
             cpu_time_ms=settings.run_cpu_time_ms,
@@ -146,17 +168,13 @@ class CompilerApplication:
         except PistonError:
             return ApiResponse(
                 503,
-                {
-                    "error": "执行服务暂时不可用，请确认 Piston 与 Python 运行时已经启动。"
-                },
+                {"error": "执行服务暂时不可用，请确认 Piston 与 Python 运行时已经启动。"},
             )
         execution_round_trip_ms = round((perf_counter() - execution_started) * 1_000)
 
         assessment = classify_execution(result)
         should_defer_ai = (
-            ai_enabled
-            and self._evaluator is not None
-            and assessment.category != "system_error"
+            ai_enabled and self._evaluator is not None and assessment.category != "system_error"
         )
         if not ai_enabled:
             feedback = None
@@ -254,6 +272,76 @@ class CompilerApplication:
             },
         )
 
+    def submit(self, payload: Any) -> ApiResponse:
+        """Judge a problem using tests and limits owned by the server."""
+        try:
+            problem_id, version, source, learner_id = self._validate_submit_payload(payload)
+        except ValidationError as error:
+            return ApiResponse(400, {"error": str(error)})
+        problem = self._problem_repository.get(problem_id, version)
+        if problem is None:
+            return ApiResponse(404, {"error": "problem or version not found"})
+        try:
+            result = judge_submission(
+                source, problem, self._gateway, self._settings.python_version, self._limits
+            )
+        except PistonError:
+            return ApiResponse(503, {"error": "execution service is temporarily unavailable"})
+        submission_id = str(uuid4())
+        pending = PendingSubmission(
+            source,
+            problem.problem_id,
+            problem.version,
+            self._problem_description(problem.problem_id),
+            result,
+            learner_id,
+            monotonic(),
+        )
+        with self._submission_lock:
+            self._discard_expired_submissions(monotonic())
+            while len(self._submissions) >= MAX_PENDING_SUBMISSIONS:
+                self._submissions.pop(next(iter(self._submissions)))
+            self._submissions[submission_id] = pending
+        body = result.as_dict()
+        body.update(
+            {
+                "submissionId": submission_id,
+                "problemId": problem.problem_id,
+                "problemVersion": problem.version,
+            }
+        )
+        return ApiResponse(200, body)
+
+    def guidance(self, payload: Any) -> ApiResponse:
+        """Return bounded guidance from server-owned submission context."""
+        try:
+            submission_id, message, learner_id, history = self._validate_guidance_payload(payload)
+        except ValidationError as error:
+            return ApiResponse(400, {"error": str(error)})
+        with self._submission_lock:
+            self._discard_expired_submissions(monotonic())
+            submission = self._submissions.get(submission_id)
+        if submission is None or submission.learner_id != learner_id:
+            return ApiResponse(404, {"error": "submission context not found or expired"})
+        if self._tutor is None:
+            return ApiResponse(503, {"error": "AI tutor is not available"})
+        context = {
+            "problemId": submission.problem_id,
+            "problemVersion": submission.version,
+            "problemDescription": submission.description,
+            "source": submission.source[:20_000],
+            "verdict": submission.result.verdict,
+            "score": submission.result.score,
+            "publicTests": [
+                item.as_dict() for item in submission.result.test_results if not item.hidden
+            ],
+        }
+        try:
+            reply = self._tutor.chat(message, context, history, learner_id)
+        except AiEvaluationError:
+            return ApiResponse(503, {"error": "AI tutor is temporarily unavailable"})
+        return ApiResponse(200, {"submissionId": submission_id, "ai": reply})
+
     def learning_records(self, learner_id: str | None) -> ApiResponse:
         """Return privacy-minimized records for one anonymous browser identity."""
 
@@ -268,6 +356,78 @@ class CompilerApplication:
         except (OSError, ValueError, sqlite3.Error):
             return ApiResponse(503, {"error": "学习记录服务暂时不可用。"})
         return ApiResponse(200, {"records": [record.as_dict() for record in records]})
+
+    def _validate_submit_payload(self, payload: Any) -> tuple[str, int, str, str | None]:
+        if not isinstance(payload, dict):
+            raise ValidationError("request body must be a JSON object")
+        problem_id = payload.get("problemId")
+        version = payload.get("problemVersion", 1)
+        source = payload.get("source")
+        if not isinstance(problem_id, str) or not problem_id.strip():
+            raise ValidationError("problemId is required")
+        if not isinstance(version, int) or isinstance(version, bool) or version <= 0:
+            raise ValidationError("problemVersion must be a positive integer")
+        if not isinstance(source, str) or not source.strip():
+            raise ValidationError("source must be non-empty Python code")
+        if "\x00" in source or len(source.encode("utf-8")) > self._settings.max_source_bytes:
+            raise ValidationError("source exceeds the server limit")
+        return (
+            problem_id.strip(),
+            version,
+            source,
+            self._validate_learner_id(payload.get("learnerId"), required=False),
+        )
+
+    def _validate_guidance_payload(
+        self, payload: Any
+    ) -> tuple[str, str, str | None, list[dict[str, str]]]:
+        if not isinstance(payload, dict):
+            raise ValidationError("request body must be a JSON object")
+        submission_id = payload.get("submissionId")
+        message = payload.get("message")
+        if (
+            not isinstance(submission_id, str)
+            or not isinstance(message, str)
+            or not message.strip()
+        ):
+            raise ValidationError("submissionId and message are required")
+        try:
+            parsed = UUID(submission_id)
+        except ValueError as exc:
+            raise ValidationError("submissionId must be a UUID") from exc
+        if parsed.version != 4 or len(message) > 800:
+            raise ValidationError("invalid submissionId or message length")
+        learner_id = self._validate_learner_id(payload.get("learnerId"), required=False)
+        raw_history = payload.get("history", [])
+        if not isinstance(raw_history, list) or len(raw_history) > 8:
+            raise ValidationError("history is invalid")
+        history: list[dict[str, str]] = []
+        for item in raw_history:
+            if (
+                not isinstance(item, dict)
+                or item.get("role") not in {"user", "assistant"}
+                or not isinstance(item.get("content"), str)
+            ):
+                raise ValidationError("history is invalid")
+            history.append({"role": item["role"], "content": item["content"][:800]})
+        return str(parsed), message.strip(), learner_id, history
+
+    def _problem_description(self, problem_id: str) -> str:
+        from .problems.catalog import DEFAULT_PROBLEM_DEFINITIONS
+
+        for definition in DEFAULT_PROBLEM_DEFINITIONS:
+            if definition.problem_id == problem_id:
+                return definition.description
+        return "完成题目要求并通过测试。"
+
+    def _discard_expired_submissions(self, now: float) -> None:
+        expired = [
+            key
+            for key, item in self._submissions.items()
+            if now - item.created_at > PENDING_SUBMISSION_TTL_SECONDS
+        ]
+        for key in expired:
+            self._submissions.pop(key, None)
 
     def _validate_payload(self, payload: Any) -> tuple[str, str, str | None, bool]:
         if not isinstance(payload, dict):
@@ -290,9 +450,7 @@ class CompilerApplication:
         if "\x00" in source or "\x00" in stdin:
             raise ValidationError("代码和标准输入不能包含空字节。")
         if len(source.encode("utf-8")) > self._settings.max_source_bytes:
-            raise ValidationError(
-                f"代码不能超过 {self._settings.max_source_bytes // 1024} KiB。"
-            )
+            raise ValidationError(f"代码不能超过 {self._settings.max_source_bytes // 1024} KiB。")
         if len(stdin.encode("utf-8")) > self._settings.max_stdin_bytes:
             raise ValidationError(
                 f"标准输入不能超过 {self._settings.max_stdin_bytes // 1024} KiB。"
