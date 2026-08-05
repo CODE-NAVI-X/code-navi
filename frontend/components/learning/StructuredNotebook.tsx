@@ -131,11 +131,11 @@ export function StructuredNotebook({
   }, [open, sessionId, loadItems]);
 
   async function openPresentation(item: NotebookItem) {
-    if (!item.presentation_id) return;
+    if (!sessionId || !item.presentation_id) return;
     setLoadingPreview(true);
     setError(null);
     try {
-      const detail = await fetchPresentation(item.presentation_id);
+      const detail = await fetchPresentation(item.presentation_id, sessionId);
       setPreview(detail);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "加载 PPT 失败");
