@@ -32,7 +32,7 @@ if not exist ".code-navi\provider.env" (
     echo.
 )
 
-echo [1/3] Applying database migrations ...
+echo [1/4] Applying database migrations ...
 ".venv\Scripts\python.exe" -m alembic upgrade head
 if errorlevel 1 (
     echo.
@@ -46,11 +46,29 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/3] Starting backend (port 8000) ...
+echo [2/4] Starting Piston execution service ...
+docker compose up -d piston
+if errorlevel 1 (
+    echo [ERROR] Failed to start Docker/Piston. Please ensure Docker Desktop is running.
+    popd
+    pause
+    exit /b 1
+)
+
+echo [3/4] Preparing Python runtime ...
+set "PISTON_BASE_URL=http://127.0.0.1:2000"
+set "PISTON_PYTHON_VERSION=3.12.0"
+.venv\Scripts\python.exe -m code_navi.online_compiler.runtime_setup
+if errorlevel 1 (
+    echo [ERROR] Failed to prepare the Python runtime in Piston.
+    popd
+    pause
+    exit /b 1
+)
+
+echo [4/4] Starting backend and frontend ...
 start "Backend :8000" /D "%PROJECT_DIR%" cmd /k ".venv\Scripts\python.exe -m uvicorn code_navi.server:app --app-dir src --reload --host 127.0.0.1 --port 8000"
 timeout /t 2 /nobreak >nul
-
-echo [3/3] Starting frontend (port 3000) ...
 start "Frontend :3000" /D "%PROJECT_DIR%frontend" cmd /k "npm.cmd run dev -- --port 3000"
 
 echo.
