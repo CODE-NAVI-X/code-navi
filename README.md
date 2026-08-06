@@ -28,6 +28,7 @@ python scripts/dev.py
 - DeepSeek 仅可改善科研追问、难点分析和实验方案的表达；会话、确认、事实边界、受限来源和降级仍由规则控制。无密钥、超时或输出不合法时保持离线规则可用。
 - 代码草案必须由用户明确确认后才生成，且只在浏览器中预览、复制或下载文本；不会自动写入项目、自动安装依赖或自动执行代码。
 - 导图基于已保存的画像、规则计划与 EvidenceBundle，用 XYFlow 和 Dagre 显示真实节点与后端边关系；当前支持真实 SVG 导出。PNG 需要额外且尚未验证稳定性的浏览器栅格化方案，保留为后续增强。
+- 已完成隔离的外部 Skill 选型试用：仅将 Socratic 的“一次一问、证据/替代解释/可行性”作为本地模型追问策略参考；未接入外部 Prompt、脚本、完整框架或运行时依赖。详见[外部科研 Skill 评估](docs/research-skill-evaluation.md)和 [EvoScientist 设计笔记](docs/references/evo_scientist_experiment_notes.md)。
 
 当前**尚未实现**论文全文下载与精读、自动检索、自动写入项目、自动安装依赖、自动执行代码，以及多 Agent/MCP；不能把建议或摘要范围外的信息表述为已验证事实。
 
@@ -40,5 +41,6 @@ python scripts/dev.py
 | 系统、Kernel 与前端架构 | [系统架构](docs/architecture/system.md)、[Kernel](docs/architecture/kernel.md)、[前端](docs/architecture/frontend.md) |
 | 开发、测试与高风险能力 | [开发流程](docs/development/workflow.md)、[测试](docs/development/testing.md)、[高风险能力](docs/development/high-risk-capabilities.md) |
 | 本地运行与生产准入 | [本地运行](docs/deployment/local.md)、[生产准入](docs/deployment/production.md) |
+| 外部科研 Skill 试用与论文设计依据 | [Skill 评估](docs/research-skill-evaluation.md)、[EvoScientist 笔记](docs/references/evo_scientist_experiment_notes.md) |
 
 当前本地闭环不等于生产可用；实际能力和生产阻塞项分别以产品路线和生产准入文档为准。

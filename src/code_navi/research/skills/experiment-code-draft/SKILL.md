@@ -36,4 +36,4 @@ description: 在用户明确确认后生成仅供浏览器预览、复制或下�
 
 ## 外部参考与许可证
 
-仅生成应用内模板文本；不复制外部仓库代码，不包含第三方源码、凭据或数据集内容。
+本地试用过 `qinyan-academic-skills` 中标注 `BSD-3-Clause` 的 scikit-learn 指导资料，仅参考“README、数据模板、基线、评测、待验证项”的结构检查清单；不复制示例代码、不安装其依赖、不运行训练脚本。完整选择记录见 [外部 Skill 评估](../../../../../docs/research-skill-evaluation.md)。
