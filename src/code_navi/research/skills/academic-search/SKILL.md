@@ -1,42 +1,41 @@
 ---
 name: academic-search
-description: Prepare and execute source-restricted academic metadata searches from a confirmed research profile. Use after research-clarification hands off a topic or candidate question, when the user wants traceable papers from explicitly allowed scholarly databases rather than an unrestricted web search.
+description: 在用户明确触发后，仅从允许的学术来源检索元数据和摘要，并保存可追溯 EvidenceBundle。
 ---
 
-# Academic Search
+# 受限学术检索
 
-Turn a confirmed research profile into an auditable search plan and an evidence bundle. Keep query planning offline. Access the network only after explicit user confirmation.
+## 版本与用途
 
-## Workflow
+- 版本：`0.2.0`
+- 用途：根据已确认画像和研究计划生成可审计的检索结果及 `academic-evidence.v1` EvidenceBundle；不是默认全网搜索。
 
-1. Read structured profile fields instead of using the raw chat sentence as the query.
-2. Build one concise primary query and up to three alternatives from the topic, research question, context, method, and data requirements.
-3. Show the query, evidence scope, and allow-listed sources before execution.
-4. Require explicit confirmation of both query and sources.
-5. Dispatch only the registered `academic_search` Tool with `READ + NETWORK` permission.
-6. Return every source status, access time, result URL, and failure reason. Preserve successful sources when another source fails.
-7. Persist each EvidenceBundle with its conversation. Reuse a non-expired bundle only when the normalized query and ordered source selection match exactly, and label the response as a cache hit.
+## 输入与输出
 
-## Evidence boundary
+- 输入：会话/计划标识、用户明确提交的检索词和已选来源。
+- 输出：`research-search-plan.v1`、来源状态、`AcademicPaperResult` 元数据/摘要片段和包含访问时间、失败原因、`fact / inference / to_verify` 分类的 EvidenceBundle；证据范围固定为 `metadata_and_abstract_only`。
 
-- Treat titles, authors, years, identifiers, URLs, and source-returned abstracts as `fact` metadata.
-- Treat keyword relevance as `inference`, never as proof that a paper supports a claim.
-- Mark methods, datasets, findings, and conclusions as `to_verify` until full text is inspected.
-- State `metadata_and_abstract_only`; do not imply that the full paper was downloaded or read.
-- Never fabricate papers, citations, abstracts, identifiers, source coverage, or successful searches.
+## 规则层与模型层边界
 
-## Source and permission boundary
+- 规则层构造查询、验证来源、保存证据包并区分事实边界。
+- 此 Skill 不需要模型；模型不得虚构论文、摘要、来源状态或把关键词关联写成事实。
 
-- Search only sources present in the host allow-list and selected by the user.
-- Do not fall back to a browser or unrestricted web search.
-- Do not search while restoring a conversation, clarifying a requirement, or preparing a plan.
-- Do not expose provider keys, proxy credentials, or raw upstream error bodies.
-- Reject unsupported sources before any network request.
+## 权限、来源与副作用
 
-## Failure behavior
+- 只能经已注册的 `academic_search` Tool，以 `READ + NETWORK` 权限运行，且必须由用户显式触发。
+- 当前允许来源由宿主 allow-list 决定（OpenAlex、Crossref、arXiv）；未选或未允许来源在联网前拒绝。
+- 仅写入应用的 EvidenceBundle；不下载全文、不写用户项目、不执行代码。
+- Execution requires explicit user confirmation. Do not fall back to a browser or unrestricted web search.
 
-- Return `timeout`, `network_error`, `disabled`, `no_results`, or `unavailable` per source.
-- Keep partial results when at least one source succeeds.
-- Show every selected source status and duration even when the combined result contains papers.
-- Suggest changing the query or source selection only after reporting what actually ran.
-- Allow retries only within the host's bounded per-source policy; never retry indefinitely.
+## 失败与规则降级
+
+网络、超时、来源禁用/不可用、依赖缺失或无结果时，返回空的安全结果和逐来源原因；保留其他来源已成功的元数据，绝不回退为浏览器或全网检索。
+
+## 测试样例
+
+- `tests/test_academic_evidence.py`：EvidenceBundle 字段、来源状态与事实/推断边界。
+- `tests/test_conversation_search.py`、`tests/test_research_tools.py`：显式触发、allow-list 和 Tool 权限契约。
+
+## 外部参考与许可证
+
+仅调用公开学术来源的受限 API 适配，不引入完整 MCP 服务或抓取器。上游数据的使用遵循各来源条款；仓库未复制其代码。

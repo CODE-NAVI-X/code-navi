@@ -1,41 +1,42 @@
 ---
 name: research-clarification
-description: Clarify a vague research or project idea through adaptive multi-turn dialogue, maintain a factual research profile, and prepare an explicit handoff to constrained academic search. Use when a user is exploring, narrowing, correcting, comparing, or reviewing a research direction before evidence collection.
+description: 以可恢复对话收集学生确认的研究画像，并在规则控制下提供可选的模型个性化追问。
 ---
 
-# Research clarification
+# 科研需求澄清
 
-Turn the user's own statements into a reviewable, searchable research profile. Guide the
-conversation naturally; do not run a fixed questionnaire.
+## 版本与用途
 
-## Dialogue policy
+- 版本：`0.2.0`
+- 用途：将模糊想法整理为可审阅的 `ResearchProfile`，为规则研究计划和用户主动的学术检索提供输入。
 
-1. Extract every dimension explicitly stated in the latest message. Preserve prior facts unless
-   the user corrects or clears them.
-2. Keep guesses out of the profile. Put plausible but unconfirmed ideas in `assumptions` and
-   missing information in `uncertainties`.
-3. Ask at most one primary question per turn. Choose the question that most improves feasibility
-   or distinguishes candidate directions.
-4. Treat suggested answers as optional shortcuts. Always accept free text and interpret short
-   answers against the previous assistant question.
-5. Never repeat the same question after the user selects one of its suggestions. Confirm the
-   effect of the answer, update the profile, and advance or explicitly explain why it is unusable.
-6. When the user asks to continue narrowing, ask about the most useful unresolved dimension,
-   such as motivation, research question, method, evidence preference, scope, or constraint.
-7. When the user asks to review, summarize known facts, assumptions, and uncertainties, then ask
-   for corrections without pretending that the profile is final.
-8. When the profile can support a search and the user explicitly asks to prepare or start search,
-   set `intent` and `recommended_action` to `prepare_search`, set `next_question` to null, and
-   provide no suggested answers. State that clarification is complete and that the academic-search
-   Skill must be invoked separately with explicit user confirmation.
-9. Do not create or decide a `research_plan`. When the validated profile reaches plan readiness,
-   the application derives `research-plan.v1` deterministically outside the model decision.
+## 输入与输出
 
-## Boundaries
+- 输入：`research-conversation.v1` 的会话标识、历史消息、用户自由文本或推荐项，以及已保存画像。
+- 输出：更新后的会话、`ResearchProfile`、下一轮问题/三个可选建议、`generation_mode`；画像可支撑规划时由应用生成规则 `research-plan.v1`。
 
-- Do not browse, call tools, download papers, write files, or claim that evidence was verified.
-- Do not promise to produce a paper merely because `expected_output` is a paper. Record the
-  requested output and continue planning evidence collection.
-- Do not expose hidden reasoning. Return only the required JSON decision object.
-- Follow the supplied JSON shape exactly. Do not add fields or Markdown fences.
-- Do not invent datasets, metrics, papers, or findings for the application-owned research plan.
+## 规则层与模型层边界
+
+- 规则层唯一管理会话标识、画像保存与恢复、确认状态、字段完整性、研究计划就绪判定和事实边界。
+- 已配置 DeepSeek 时，模型只能返回经校验的追问 JSON（回复、下一问、三个选项及受限建议值），不能改写已确认事实、决定流程或触发检索。
+- 用户说“不知道/有什么推荐吗”时，仅校验通过的建议值可填充当前缺口；否则保留缺口，不把原话写成研究事实。
+- Never repeat the same question after a user selects a suggestion; confirm the saved effect and advance to the most useful unresolved dimension.
+- 完成澄清后的联网交接只能交给独立的 `academic-search` Skill，并继续要求用户明确确认。
+
+## 权限、来源与副作用
+
+- 不需要联网权限；不访问论文、网页或外部资料源。
+- 只写入应用的科研会话/画像持久化状态；不写用户项目、不安装依赖、不执行命令或代码。
+
+## 失败与规则降级
+
+缺少 Provider 或密钥、超时、网络错误、非 JSON、字段缺失或越界输出时，返回原有规则问题与三个固定建议，且不中断会话。模型回复从不作为论文事实。
+
+## 测试样例
+
+- `tests/test_research_conversation.py`：对话推进、画像恢复和规则研究计划。
+- `tests/test_research_deepseek.py`、`tests/test_research_llm.py`：模型成功、非法输出/无密钥降级，以及“不知道”建议值边界。
+
+## 外部参考与许可证
+
+仅采用项目内的规则会话与 Provider 适配；不复制第三方 Skill 内容或 Agent Runtime。无新增外部代码许可证义务。

@@ -1,6 +1,39 @@
 ---
 name: paper-analysis
-description: Analyze only user-selected saved paper metadata and source abstract; never download or claim to read full text.
+description: 仅分析用户已选且已保存的论文元数据/摘要范围，不下载或声称读过全文。
 ---
 
-Use only the provided metadata/abstract range. Missing experimental details, datasets, conclusions, code, and resources remain to_verify. Do not browse, write, execute, or create a paper evidence card.
+# 论文/方向难点分析
+
+## 版本与用途
+
+- 版本：`0.2.0`
+- 用途：输出 `paper-analysis.v1`，帮助学生识别与当前研究计划有关、但仍需验证的方向和论文难点。
+
+## 输入与输出
+
+- 输入：已确认 `ResearchProfile`、规则研究计划、用户选择的 EvidenceBundle 论文元数据及可用摘要。
+- 输出：问题、方法、数据/指标、复现与资源等分析项；每项带 `fact / inference / to_verify`、依据和信息范围。
+
+## 规则层与模型层边界
+
+- 规则层只读取已保存证据，决定摘要缺失时的 `to_verify` 边界，并校验输出。
+- 可选模型只能组织已校验上下文，不能把摘要外的实验细节、数据集、结论或全文内容标为事实。
+
+## 权限、来源与副作用
+
+- 不联网，不下载全文，不调用检索 Tool；允许的信息仅为已保存的来源元数据和摘要。
+- 不写用户项目、不安装依赖、不执行命令或代码。
+
+## 失败与规则降级
+
+无模型、无密钥、超时、网络错误或 JSON 校验失败时使用规则分析。没有摘要时明确标记“仅元数据/无摘要”和 `to_verify`，不伪造精读结果。
+
+## 测试样例
+
+- `tests/test_research_mindmap.py`：无摘要论文分析仍保留待验证边界。
+- `tests/test_research_conversation.py`：保存证据与分析接口回归。
+
+## 外部参考与许可证
+
+分析只处理用户已取得的元数据/摘要；不复制论文全文、第三方 Skill 或论文分析代码。外部资料的引用范围以 EvidenceBundle 来源为准。
