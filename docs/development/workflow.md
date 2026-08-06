@@ -12,7 +12,7 @@ python -m pip install -e ".[dev,server]"
 code-navi --help
 ```
 
-前端要求 Node `20.9` 或更高版本，依赖以 `frontend/package.json` 和 `package-lock.json` 为准：
+前端要求 Node `20.19` 或更高版本，依赖以 `frontend/package.json` 和 `package-lock.json` 为准：
 
 ```powershell
 cd frontend

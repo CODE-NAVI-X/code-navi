@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Generator
 from types import SimpleNamespace
 
@@ -127,6 +126,7 @@ def test_deepseek_provider_uses_chat_completions_and_existing_environment_names(
         "api_key": "test-key-value-123456",
         "base_url": "https://deepseek.example/v1",
         "max_retries": 0,
+        "timeout": 10.0,
     }
     assert calls["request"] == {
         "model": "deepseek-test",
@@ -167,6 +167,7 @@ def test_deepseek_defaults_and_cli_provider_boundary(monkeypatch: pytest.MonkeyP
         "api_key": "test-key-value-123456",
         "base_url": DEEPSEEK_DEFAULT_BASE_URL,
         "max_retries": 0,
+        "timeout": 10.0,
     }
     assert provider.model == DEEPSEEK_DEFAULT_MODEL
     monkeypatch.setenv("CODE_NAVI_MODEL", DEEPSEEK_DEFAULT_MODEL)
@@ -177,7 +178,10 @@ def test_deepseek_defaults_and_cli_provider_boundary(monkeypatch: pytest.MonkeyP
 def test_deepseek_guidance_generates_validated_response(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_deepseek(monkeypatch)
     fake = FakeDeepSeekProvider([_guidance_json()])
-    monkeypatch.setattr("code_navi.research.llm.DeepSeekGuidanceProvider", lambda: fake)
+    monkeypatch.setattr(
+        "code_navi.research.llm.DeepSeekGuidanceProvider",
+        lambda **_kwargs: fake,
+    )
 
     outcome = ProviderGuidanceGenerator().generate(
         state=ResearchState(),
@@ -239,7 +243,7 @@ def test_deepseek_invalid_output_becomes_safe_failure(
     _configure_deepseek(monkeypatch)
     fake = FakeDeepSeekProvider([model_text])
     monkeypatch.setattr(
-        "code_navi.research.llm.DeepSeekGuidanceProvider", lambda: fake
+        "code_navi.research.llm.DeepSeekGuidanceProvider", lambda **_kwargs: fake
     )
 
     outcome = ProviderGuidanceGenerator().generate(
@@ -259,7 +263,7 @@ def test_deepseek_timeout_or_network_error_becomes_safe_failure(
     _configure_deepseek(monkeypatch)
     fake = FakeDeepSeekProvider(error=error)
     monkeypatch.setattr(
-        "code_navi.research.llm.DeepSeekGuidanceProvider", lambda: fake
+        "code_navi.research.llm.DeepSeekGuidanceProvider", lambda **_kwargs: fake
     )
 
     outcome = ProviderGuidanceGenerator().generate(
@@ -272,14 +276,22 @@ def test_deepseek_timeout_or_network_error_becomes_safe_failure(
     assert outcome.status == "failed"
 
 
-def test_deepseek_timeout_guard_becomes_safe_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    class SlowProvider:
+def test_deepseek_native_timeout_becomes_safe_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class TimeoutProvider:
         def complete(self, _messages: object) -> SimpleNamespace:
-            time.sleep(0.05)
-            return SimpleNamespace(message=Message("assistant", ()))
+            raise TimeoutError("network timeout")
 
     _configure_deepseek(monkeypatch)
-    monkeypatch.setattr("code_navi.research.llm.DeepSeekGuidanceProvider", SlowProvider)
+    configured: list[float] = []
+
+    def create_timeout_provider(*, timeout_seconds: float) -> TimeoutProvider:
+        configured.append(timeout_seconds)
+        return TimeoutProvider()
+
+    monkeypatch.setattr(
+        "code_navi.research.llm.DeepSeekGuidanceProvider",
+        create_timeout_provider,
+    )
 
     outcome = ProviderGuidanceGenerator(timeout_seconds=0.001).generate(
         state=ResearchState(),
@@ -289,6 +301,7 @@ def test_deepseek_timeout_guard_becomes_safe_failure(monkeypatch: pytest.MonkeyP
     )
 
     assert outcome.status == "failed"
+    assert configured == [0.001]
 
 
 def test_deepseek_suggested_value_replaces_uncertainty_in_session(
@@ -301,7 +314,10 @@ def test_deepseek_suggested_value_replaces_uncertainty_in_session(
             _guidance_json(suggested_value="比较两种教学反馈策略的学习效果"),
         ]
     )
-    monkeypatch.setattr("code_navi.research.llm.DeepSeekGuidanceProvider", lambda: fake)
+    monkeypatch.setattr(
+        "code_navi.research.llm.DeepSeekGuidanceProvider",
+        lambda **_kwargs: fake,
+    )
     _service.guidance_generator = ProviderGuidanceGenerator()
 
     session_id = client.post("/api/v1/research/sessions", json={}).json()["session_id"]

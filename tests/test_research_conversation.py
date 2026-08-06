@@ -20,6 +20,7 @@ from code_navi.research.conversation_agent import (  # noqa: E402
     research_conversation_agent,
 )
 from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa: E402
+from code_navi.research.research_artifact_llm import ArtifactLlmOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.research.skill_runtime import (  # noqa: E402
     load_research_clarification_skill,
@@ -39,9 +40,11 @@ def fresh_tables() -> Generator[None, None, None]:
 
 @pytest.fixture(autouse=True)
 def restore_generator() -> Generator[None, None, None]:
-    original = _conversation_service.decision_generator
+    original_decision = _conversation_service.decision_generator
+    original_artifact = _conversation_service.artifact_generator
     yield
-    _conversation_service.decision_generator = original
+    _conversation_service.decision_generator = original_decision
+    _conversation_service.artifact_generator = original_artifact
 
 
 @pytest.fixture
@@ -60,6 +63,23 @@ class FakeDecisionGenerator:
     def generate(self, **kwargs: object) -> ConversationDecisionOutcome:
         self.calls.append(kwargs)
         return self.outcomes.pop(0)
+
+
+class FailingArtifactGenerator:
+    """Prove that restoring a conversation must not wait for an LLM artefact call."""
+
+    def generate(self, **kwargs: object) -> object:
+        raise AssertionError("conversation restore must not generate LLM artefacts")
+
+
+class StaticArtifactGenerator:
+    def __init__(self, outcome: ArtifactLlmOutcome) -> None:
+        self.outcome = outcome
+        self.calls: list[dict[str, object]] = []
+
+    def generate(self, **kwargs: object) -> ArtifactLlmOutcome:
+        self.calls.append(kwargs)
+        return self.outcome
 
 
 def _decision(**overrides: object) -> ResearchConversationDecision:
@@ -105,9 +125,7 @@ def test_one_message_can_update_multiple_profile_dimensions(client: TestClient) 
                         context="本科生编程课程",
                         constraints=["只能使用公开数据", "不训练模型"],
                     ),
-                    candidate_questions=[
-                        "不同提示策略是否影响编程解释的学习效果？"
-                    ],
+                    candidate_questions=["不同提示策略是否影响编程解释的学习效果？"],
                     uncertainties=["尚未确定评价指标"],
                 ),
                 run_id="run-multi-field",
@@ -121,8 +139,7 @@ def test_one_message_can_update_multiple_profile_dimensions(client: TestClient) 
         "/api/v1/research/conversations",
         json={
             "initial_message": (
-                "我想研究生成式 AI 辅助编程学习，面向本科生，"
-                "只能用公开数据，而且不想自己训练模型。"
+                "我想研究生成式 AI 辅助编程学习，面向本科生，只能用公开数据，而且不想自己训练模型。"
             )
         },
     )
@@ -132,9 +149,7 @@ def test_one_message_can_update_multiple_profile_dimensions(client: TestClient) 
     assert body["profile"]["topic"] == "生成式 AI 辅助编程学习"
     assert body["profile"]["context"] == "本科生编程课程"
     assert body["profile"]["constraints"] == ["只能使用公开数据", "不训练模型"]
-    assert body["candidate_questions"] == [
-        "不同提示策略是否影响编程解释的学习效果？"
-    ]
+    assert body["candidate_questions"] == ["不同提示策略是否影响编程解释的学习效果？"]
     assert body["last_run_id"] == "run-multi-field"
     assert len(body["messages"]) == 2
 
@@ -153,9 +168,7 @@ def test_follow_up_can_correct_existing_profile_and_restore_without_model_call(
                 _decision(
                     reply="已将主题收窄到编程学习场景。",
                     intent="correct",
-                    profile_patch=ResearchProfilePatch(
-                        topic="生成式 AI 辅助编程学习"
-                    ),
+                    profile_patch=ResearchProfilePatch(topic="生成式 AI 辅助编程学习"),
                 ),
                 run_id="run-2",
                 event_count=3,
@@ -172,9 +185,7 @@ def test_follow_up_can_correct_existing_profile_and_restore_without_model_call(
         f"/api/v1/research/conversations/{created['conversation_id']}/messages",
         json={"message": "范围太大了，改成生成式 AI 辅助编程学习"},
     )
-    restored = client.get(
-        f"/api/v1/research/conversations/{created['conversation_id']}"
-    )
+    restored = client.get(f"/api/v1/research/conversations/{created['conversation_id']}")
 
     assert progressed.status_code == 200
     assert progressed.json()["profile"]["topic"] == "生成式 AI 辅助编程学习"
@@ -182,6 +193,24 @@ def test_follow_up_can_correct_existing_profile_and_restore_without_model_call(
     assert restored.json()["profile"] == progressed.json()["profile"]
     assert len(restored.json()["messages"]) == 4
     assert len(fake.calls) == 2
+
+
+def test_restore_does_not_generate_llm_artifacts(client: TestClient) -> None:
+    """Restoring saved state must remain fast even when DeepSeek is configured."""
+    original = _conversation_service.artifact_generator
+    try:
+        _conversation_service.artifact_generator = None
+        created = client.post("/api/v1/research/conversations", json={}).json()
+        _conversation_service.artifact_generator = FailingArtifactGenerator()
+
+        restored = client.get(
+            f"/api/v1/research/conversations/{created['conversation_id']}"
+        )
+
+        assert restored.status_code == 200
+        assert restored.json()["conversation_id"] == created["conversation_id"]
+    finally:
+        _conversation_service.artifact_generator = original
 
 
 def test_follow_up_can_explicitly_clear_rejected_candidate_questions(
@@ -200,9 +229,7 @@ def test_follow_up_can_explicitly_clear_rejected_candidate_questions(
             ConversationDecisionOutcome.generated(
                 _decision(
                     intent="correct",
-                    profile_patch=ResearchProfilePatch(
-                        clear_fields=["candidate_questions"]
-                    ),
+                    profile_patch=ResearchProfilePatch(clear_fields=["candidate_questions"]),
                     candidate_questions=[],
                 ),
                 run_id="run-clear",
@@ -532,13 +559,19 @@ def test_ready_conversation_returns_a_restorable_rules_research_plan(
     assert body["research_plan"]["two_week_mvp_plan"]
     assert body["research_plan"]["suggested_search_keywords"]
     assert "论文事实" in body["research_plan"]["provenance_note"]
-
-    restored = client.get(
-        f"/api/v1/research/conversations/{body['conversation_id']}"
+    assert body["research_mindmap"]["schema_version"] == "research-mindmap.v1"
+    assert body["research_mindmap"]["root_node_id"] == "topic"
+    assert any(
+        node["id"] == "research-plan" and node["status"] == "inference"
+        for node in body["research_mindmap"]["nodes"]
     )
+    assert body["research_mindmap"]["edges"]
+
+    restored = client.get(f"/api/v1/research/conversations/{body['conversation_id']}")
 
     assert restored.status_code == 200
     assert restored.json()["research_plan"] == body["research_plan"]
+    assert restored.json()["research_mindmap"] == body["research_mindmap"]
 
 
 def test_incomplete_conversation_has_no_research_plan(client: TestClient) -> None:
@@ -546,6 +579,59 @@ def test_incomplete_conversation_has_no_research_plan(client: TestClient) -> Non
 
     assert response.status_code == 201
     assert response.json()["research_plan"] is None
+
+
+def test_code_draft_endpoint_requires_explicit_user_confirmation(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/research/conversations/not-used/experiment-code-draft",
+        json={"user_confirmed": False},
+    )
+
+    assert response.status_code == 422
+
+
+def test_conversation_response_does_not_generate_optional_artifacts(
+    client: TestClient,
+) -> None:
+    _conversation_service.artifact_generator = FailingArtifactGenerator()
+
+    response = client.post("/api/v1/research/conversations", json={})
+
+    assert response.status_code == 201
+    assert response.json()["topic_difficulty_analysis"]["generation_mode"] == "rules"
+
+
+def test_difficulty_personalization_requires_explicit_endpoint(
+    client: TestClient,
+) -> None:
+    generator = StaticArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            '{"title":"个性化难点","information_scope":"profile_and_plan_only",'
+            '"items":[{"area":"问题边界","content":"需要先收窄问题。",'
+            '"classification":"to_verify","basis":"当前画像尚不完整。",'
+            '"source_scope":"profile_and_plan_only"}],'
+            '"provenance_note":"用户显式触发的个性化建议。"}',
+            run_id="run-artifact",
+            event_count=3,
+        )
+    )
+    _conversation_service.artifact_generator = generator
+    created = client.post("/api/v1/research/conversations", json={}).json()
+
+    rejected = client.post(
+        f"/api/v1/research/conversations/{created['conversation_id']}/topic-difficulty-analysis",
+        json={"user_confirmed": False},
+    )
+    generated = client.post(
+        f"/api/v1/research/conversations/{created['conversation_id']}/topic-difficulty-analysis",
+        json={"user_confirmed": True},
+    )
+
+    assert rejected.status_code == 422
+    assert generated.status_code == 200
+    assert generated.json()["generation_mode"] == "llm"
+    assert generated.json()["run_id"] == "run-artifact"
+    assert len(generator.calls) == 1
 
 
 @pytest.mark.parametrize(

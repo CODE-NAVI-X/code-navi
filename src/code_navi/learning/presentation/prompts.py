@@ -147,7 +147,7 @@ _SLIDE_TEMPLATE = """\
 1. text — 富文本。content 用受限 HTML：仅支持 <p>、<span>、<strong>、<b>、<em>、<i>、<u>、<br>；样式用内联 style 的 font-size、color、text-align、font-weight、font-family、line-height。fill 可给文字框底色。**不要在 text 里写 LaTeX 命令**（\\frac、\\sum、\\sqrt 等一律放到 latex 元素）。
 2. shape — 形状/色块。shapeType ∈ rect | roundRect | circle | triangle | diamond | message；fill 给填充色；strokeColor/strokeWidth 可给强调边框。
 3. latex — 数学公式。latex 字段给 LaTeX 源码（如 \\sum_{i=1}^{n} i）。
-4. image — 图片。src 给绝对 URL（仅当明确需要时）。
+4. image — 图片。仅允许内联 PNG/JPEG/WebP data URL；没有可信内联图片时不要生成 image 元素。
 5. line — 分隔/连接线。strokeColor 给颜色，strokeWidth 2~4px。
 
 ## 反幻觉与可读性约束

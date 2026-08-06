@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 CANVAS_WIDTH = 1280
 CANVAS_HEIGHT = 720
@@ -71,11 +71,19 @@ class LatexElement(SlideElementBase):
 
 
 class ImageElement(SlideElementBase):
-    """Image. ``src`` may be a data URL or absolute URL."""
+    """Inlined image; remote browser fetches are deliberately forbidden."""
 
     type: Literal["image"]
-    src: str = Field(..., description="Data URL or absolute URL of the image.")
+    src: str = Field(..., max_length=2_000_000, description="Inlined image data URL.")
     borderRadius: float = Field(default=0.0, ge=0)
+
+    @field_validator("src")
+    @classmethod
+    def validate_inlined_image(cls, value: str) -> str:
+        allowed = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")
+        if not value.startswith(allowed):
+            raise ValueError("image src must be an inlined PNG, JPEG, or WebP data URL")
+        return value
 
 
 class LineElement(SlideElementBase):
@@ -157,6 +165,8 @@ class Presentation(BaseModel):
     session_id: str
     style: str = "professional"
     slides: list[Slide] = Field(default_factory=list)
+    generation_mode: Literal["model", "rules", "rules_fallback", "mixed"]
+    provider_name: str
     created_at: datetime | None = Field(default=None)
 
 

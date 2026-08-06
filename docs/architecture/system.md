@@ -40,9 +40,14 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `code-navi ask`、`code-navi shell` | 问题、项目上下文、Provider 配置 | `RuntimeResult` 和 Event JSONL；不修改项目文件 |
 | `POST /api/v1/learning/explain` | `ExplainRequest` | `ExplainResponse`、Runtime Event，并写入 `notebook_items` |
 | `GET /api/v1/learning/notebook?session_id=...` | 学习 `session_id` | 该学习会话的 `NotebookItem` 列表 |
+| `POST /api/v1/learning/presentations/generate` | 知识点、学习 `session_id`、风格 | SSE 逐页返回演示文稿、生成来源并归档 |
+| `GET /api/v1/learning/presentations/{presentation_id}?session_id=...` | 演示文稿 id 与学习 `session_id` | 只返回该学习会话内的已归档演示文稿 |
 | `POST /api/v1/research/conversations` | `CreateResearchConversationRequest` | 新的 `ResearchConversationResponse` |
 | `POST /api/v1/research/conversations/{conversation_id}/messages` | 自由文本 | 更新画像、消息与下一步；达到准备度时附带规则生成的 `research_plan` |
 | `GET /api/v1/research/conversations/{conversation_id}` | `conversation_id` | 已持久化的动态对话，并按当前画像恢复相同规则研究计划 |
+| `POST /api/v1/research/conversations/{conversation_id}/topic-difficulty-analysis` | `user_confirmed: true` | 显式触发的难点个性化结果及 Runtime run 标识 |
+| `POST /api/v1/research/conversations/{conversation_id}/experiment-design` | `user_confirmed: true` | 显式触发的实验方案个性化结果及 Runtime run 标识 |
+| `POST /api/v1/research/conversations/{conversation_id}/experiment-code-draft` | 明确确认仅预览 | 服务端固定代码模板；模型只可补充建议性元数据 |
 | `GET /api/v1/research/conversations/{conversation_id}/search-plan` | `conversation_id` | 不联网的 `ResearchSearchPlan` |
 | `POST /api/v1/research/conversations/{conversation_id}/evidence-bundles` | 用户确认、查询和允许来源 | OpenAlex、Crossref、arXiv 元数据与摘要组成的 `ConversationEvidenceBundle` |
 | `GET /api/v1/research/conversations/{conversation_id}/evidence-bundles` | `conversation_id` | 已保存的 evidence bundle 列表，不触发联网 |
@@ -67,7 +72,7 @@ AgentSpec + RuntimeRequest
 RuntimeResult + Event JSONL
 ```
 
-动态科研对话和 Provider 连接测试已经使用该接口，均不授予工具权限；模型不可用或结构无效时回退到规则。对话 reducer 完成画像校验后，`research-plan.v1` 由应用规则派生，不产生新的 Agent run，也不访问 Provider 或网络。兼容流程的 `ProviderGuidanceGenerator` 是唯一已知例外：它通过统一 Provider 契约直接调用 `complete()`，无工具、经过 Schema 校验且可回退，但没有 Runtime Event。不得扩展该例外；生产化前迁入 Runtime，或用 ADR 接受其审计边界。
+动态科研对话、显式触发的研究产物个性化和 Provider 连接测试使用该接口，均不授予工具权限；模型不可用或结构无效时回退到规则。对话 reducer 完成画像校验后，`research-plan.v1` 由应用规则派生，不产生新的 Agent run，也不访问 Provider 或网络。个性化结果返回 `run_id` 与 `event_count`，对应 Event JSONL。兼容五字段流程仍通过统一 Provider 契约调用 `complete()`；超时由供应商 SDK 传输层配置，不启动后台守护线程。
 
 ### Provider
 

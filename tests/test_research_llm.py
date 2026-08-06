@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Generator
 from types import SimpleNamespace
 
@@ -13,6 +12,7 @@ from fastapi.testclient import TestClient
 os.environ["CODE_NAVI_DATABASE_URL"] = "sqlite:///:memory:"
 
 from code_navi.db import Base, engine  # noqa: E402
+from code_navi.providers import ProviderSettings  # noqa: E402
 from code_navi.research.llm import (  # noqa: E402
     GuidanceOutcome,
     LlmGuidance,
@@ -161,15 +161,21 @@ def test_provider_generator_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch
 def test_provider_generator_timeout_becomes_a_safe_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class SlowProvider:
+    class TimeoutProvider:
         def complete(self, _messages: object) -> SimpleNamespace:
-            time.sleep(0.1)
-            return SimpleNamespace(message=Message("assistant", ()))
+            raise TimeoutError("research guidance provider timed out")
 
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "openai")
     monkeypatch.setenv("CODE_NAVI_MODEL", "test-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr("code_navi.research.llm.create_provider", lambda _settings: SlowProvider())
+    def create_timeout_provider(settings: ProviderSettings) -> TimeoutProvider:
+        assert settings.timeout == 0.001
+        return TimeoutProvider()
+
+    monkeypatch.setattr(
+        "code_navi.research.llm.create_provider",
+        create_timeout_provider,
+    )
     question = next_question(ResearchState())
     assert question is not None
 

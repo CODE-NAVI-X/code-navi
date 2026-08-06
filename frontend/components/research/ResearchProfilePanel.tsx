@@ -145,7 +145,7 @@ export function ResearchProfilePanel({
           <p className="flex items-center gap-1.5 font-semibold">
             <Search className="h-3.5 w-3.5" /> 信息来源边界
           </p>
-          <p className="mt-1">当前对话不会自动联网检索。受限学术来源检索将在下一阶段接入，并始终需要你明确触发。</p>
+          <p className="mt-1">当前对话不会自动联网检索。受限学术来源检索只有你明确触发后才会执行。</p>
         </div>
       </section>
     </aside>
