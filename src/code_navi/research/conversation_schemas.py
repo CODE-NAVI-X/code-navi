@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 
@@ -603,3 +604,124 @@ class PaperBlueprint(BaseModel):
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
     run_id: str | None = None
     event_count: int = Field(default=0, ge=0)
+
+
+class PaperSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    section_id: str
+    heading: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=20000)
+    order: int = Field(ge=1, le=100)
+
+
+class CreatePaperDraftRequest(BaseModel):
+    """A user-pasted local draft; file import is intentionally not supported."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=60000)
+    format: Literal["markdown", "plain_text"]
+
+    @field_validator("content")
+    @classmethod
+    def reject_secrets_and_local_paths(cls, value: str) -> str:
+        lowered = value.casefold()
+        if any(marker in lowered for marker in ("api_key=", "api_key =", "sk-")):
+            raise ValueError("draft content must not include API keys")
+        if re.search(r"[a-z]:\\(?:users|home|private)\\", lowered):
+            raise ValueError("draft content must not include a local private path")
+        return value
+
+
+class PaperDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-draft.v1"] = "paper-draft.v1"
+    draft_id: str
+    conversation_id: str
+    title: str
+    content: str
+    format: Literal["markdown", "plain_text"]
+    version: int = Field(ge=1)
+    sections: list[PaperSection] = Field(default_factory=list, max_length=100)
+    created_at: datetime
+    source_scope: Literal["user_pasted_local_session"] = "user_pasted_local_session"
+
+
+ReviewSeverity = Literal["blocker", "major", "minor", "suggestion"]
+ReviewSourceScope = Literal[
+    "draft_text",
+    "research_profile",
+    "research_plan",
+    "academic_metadata_abstract",
+    "experiment_evidence",
+]
+
+
+class ReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str
+    severity: ReviewSeverity
+    section: str = Field(min_length=1, max_length=300)
+    issue: str = Field(min_length=1, max_length=1500)
+    why_it_matters: str = Field(min_length=1, max_length=2000)
+    recommended_action: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+    source_scope: ReviewSourceScope
+    related_blueprint_item: str | None = Field(default=None, max_length=500)
+    can_auto_suggest: bool = False
+
+
+class RevisionTask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    finding_id: str
+    status: Literal["pending", "accepted", "skipped", "completed"] = "pending"
+    finding: ReviewFinding
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaperReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-review.v1"] = "paper-review.v1"
+    review_id: str
+    draft_id: str
+    conversation_id: str
+    findings: list[ReviewFinding] = Field(min_length=1, max_length=40)
+    revision_tasks: list[RevisionTask] = Field(min_length=1, max_length=40)
+    provenance_note: str = Field(min_length=1, max_length=1500)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+    created_at: datetime
+
+
+class UpdateRevisionTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["accepted", "skipped"]
+
+
+class PaperRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-revision.v1"] = "paper-revision.v1"
+    revision_id: str
+    parent_draft_id: str
+    review_id: str
+    version: int = Field(ge=2)
+    content: str
+    applied_task_ids: list[str] = Field(min_length=1, max_length=40)
+    change_summary: list[str] = Field(min_length=1, max_length=40)
+    diff_preview: str = Field(min_length=1, max_length=30000)
+    created_at: datetime
+    source_scope: Literal["user_pasted_draft_plus_accepted_suggestions"] = (
+        "user_pasted_draft_plus_accepted_suggestions"
+    )

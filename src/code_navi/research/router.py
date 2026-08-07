@@ -16,6 +16,7 @@ from .conversation_schemas import (
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
     CreateExperimentEvidenceBundleRequest,
+    CreatePaperDraftRequest,
     CreateResearchConversationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
@@ -23,10 +24,14 @@ from .conversation_schemas import (
     GenerateResearchArtifactRequest,
     PaperAnalysis,
     PaperBlueprint,
+    PaperDraft,
+    PaperReview,
+    PaperRevision,
     ResearchConversationResponse,
     ResearchSearchPlan,
     SendResearchMessageRequest,
     TopicDifficultyAnalysis,
+    UpdateRevisionTaskRequest,
 )
 from .conversation_search_service import (
     ConversationPaperNotFoundError,
@@ -340,6 +345,93 @@ def generate_paper_blueprint(
         return _conversation_service.generate_paper_blueprint(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/paper-drafts",
+    response_model=PaperDraft,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_paper_draft(
+    conversation_id: str,
+    request: CreatePaperDraftRequest,
+    db: Session = _db_dependency,
+) -> PaperDraft:
+    """Save only user-pasted Markdown/plain text for the current local session."""
+    try:
+        return _conversation_service.create_paper_draft(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get("/conversations/{conversation_id}/paper-drafts", response_model=list[PaperDraft])
+def list_paper_drafts(conversation_id: str, db: Session = _db_dependency) -> list[PaperDraft]:
+    """Restore local-session draft metadata without external access."""
+    try:
+        return _conversation_service.list_paper_drafts(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post("/paper-drafts/{draft_id}/reviews", response_model=PaperReview)
+def create_paper_review(
+    draft_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> PaperReview:
+    """Generate rules-first review findings after the user explicitly asks."""
+    del request
+    try:
+        return _conversation_service.create_paper_review(draft_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper draft not found.") from error
+
+
+@router.get("/paper-drafts/{draft_id}/reviews", response_model=list[PaperReview])
+def list_paper_reviews(draft_id: str, db: Session = _db_dependency) -> list[PaperReview]:
+    try:
+        return _conversation_service.list_paper_reviews(draft_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper draft not found.") from error
+
+
+@router.patch("/paper-reviews/{review_id}/revision-tasks/{task_id}", response_model=PaperReview)
+def update_revision_task(
+    review_id: str,
+    task_id: str,
+    request: UpdateRevisionTaskRequest,
+    db: Session = _db_dependency,
+) -> PaperReview:
+    """Record one explicit accept/skip decision; it never changes the original draft."""
+    try:
+        return _conversation_service.update_revision_task(review_id, task_id, request, db)
+    except LookupError as error:
+        raise HTTPException(
+            status_code=404, detail="Paper review or revision task not found."
+        ) from error
+
+
+@router.post(
+    "/paper-reviews/{review_id}/revisions",
+    response_model=PaperRevision,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_paper_revision(review_id: str, db: Session = _db_dependency) -> PaperRevision:
+    """Create a preview only for accepted tasks, preserving every original version."""
+    try:
+        return _conversation_service.create_paper_revision(review_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper review not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get("/paper-drafts/{draft_id}/revisions", response_model=list[PaperRevision])
+def list_paper_revisions(draft_id: str, db: Session = _db_dependency) -> list[PaperRevision]:
+    try:
+        return _conversation_service.list_paper_revisions(draft_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper draft not found.") from error
 
 
 @router.post(

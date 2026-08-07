@@ -18,16 +18,25 @@ from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
 from .conversation_paper_blueprint import build_paper_blueprint
+from .conversation_paper_review import (
+    build_revision_preview,
+    build_rules_paper_review,
+    parse_paper_sections,
+)
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     ConversationEvidenceBundle,
     CreateExperimentEvidenceBundleRequest,
+    CreatePaperDraftRequest,
     CreateResearchConversationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
     ExperimentEvidenceBundle,
     ExperimentEvidenceItem,
     PaperBlueprint,
+    PaperDraft,
+    PaperReview,
+    PaperRevision,
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
@@ -36,11 +45,15 @@ from .conversation_schemas import (
     ResearchReadiness,
     SendResearchMessageRequest,
     TopicDifficultyAnalysis,
+    UpdateRevisionTaskRequest,
 )
 from .models import (
     ResearchConversationModel,
     ResearchEvidenceBundleModel,
     ResearchExperimentEvidenceBundleModel,
+    ResearchPaperDraftModel,
+    ResearchPaperReviewModel,
+    ResearchPaperRevisionModel,
 )
 from .research_artifact_llm import (
     ResearchArtifactGenerator,
@@ -274,6 +287,161 @@ class ResearchConversationService:
             academic_evidence=self._evidence_bundles(conversation.id, db),
             experiment_evidence=self._experiment_evidence_bundles(conversation.id, db),
         )
+
+    def create_paper_draft(
+        self, conversation_id: str, request: CreatePaperDraftRequest, db: Session
+    ) -> PaperDraft:
+        """Persist only an explicitly pasted text draft; no local file is read."""
+        self._get_model(conversation_id, db)
+        previous = (
+            db.query(ResearchPaperDraftModel)
+            .filter(ResearchPaperDraftModel.conversation_id == conversation_id)
+            .count()
+        )
+        created_at = datetime.now(UTC)
+        draft = PaperDraft(
+            draft_id=str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            title=request.title,
+            content=request.content,
+            format=request.format,
+            version=previous + 1,
+            sections=parse_paper_sections(request.content, format=request.format),
+            created_at=created_at,
+        )
+        db.add(
+            ResearchPaperDraftModel(
+                id=draft.draft_id,
+                conversation_id=conversation_id,
+                draft_data=draft.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+        return draft
+
+    def list_paper_drafts(self, conversation_id: str, db: Session) -> list[PaperDraft]:
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchPaperDraftModel)
+            .filter(ResearchPaperDraftModel.conversation_id == conversation_id)
+            .order_by(ResearchPaperDraftModel.created_at.desc())
+            .all()
+        )
+        return [PaperDraft.model_validate(record.draft_data) for record in records]
+
+    def create_paper_review(self, draft_id: str, db: Session) -> PaperReview:
+        draft = self._get_paper_draft(draft_id, db)
+        conversation = self._get_model(draft.conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        blueprint = build_paper_blueprint(
+            profile,
+            conversation_id=draft.conversation_id,
+            plan=plan,
+            academic_evidence=self._evidence_bundles(draft.conversation_id, db),
+            experiment_evidence=self._experiment_evidence_bundles(draft.conversation_id, db),
+        )
+        review = build_rules_paper_review(
+            draft,
+            profile=profile,
+            blueprint=blueprint,
+            academic_evidence=self._evidence_bundles(draft.conversation_id, db),
+            experiment_evidence=self._experiment_evidence_bundles(draft.conversation_id, db),
+            generator=self.artifact_generator,
+            conversation_id=draft.conversation_id,
+        )
+        db.add(
+            ResearchPaperReviewModel(
+                id=review.review_id,
+                draft_id=draft_id,
+                conversation_id=draft.conversation_id,
+                review_data=review.model_dump(mode="json"),
+                created_at=review.created_at,
+            )
+        )
+        db.commit()
+        return review
+
+    def list_paper_reviews(self, draft_id: str, db: Session) -> list[PaperReview]:
+        self._get_paper_draft(draft_id, db)
+        records = (
+            db.query(ResearchPaperReviewModel)
+            .filter(ResearchPaperReviewModel.draft_id == draft_id)
+            .order_by(ResearchPaperReviewModel.created_at.desc())
+            .all()
+        )
+        return [PaperReview.model_validate(record.review_data) for record in records]
+
+    def update_revision_task(
+        self, review_id: str, task_id: str, request: UpdateRevisionTaskRequest, db: Session
+    ) -> PaperReview:
+        record = self._get_paper_review_record(review_id, db)
+        review = PaperReview.model_validate(record.review_data)
+        found = False
+        now = datetime.now(UTC)
+        tasks = []
+        for task in review.revision_tasks:
+            if task.task_id == task_id:
+                found = True
+                tasks.append(task.model_copy(update={"status": request.status, "updated_at": now}))
+            else:
+                tasks.append(task)
+        if not found:
+            raise LookupError(task_id)
+        updated = review.model_copy(update={"revision_tasks": tasks})
+        record.review_data = updated.model_dump(mode="json")
+        db.commit()
+        return updated
+
+    def create_paper_revision(self, review_id: str, db: Session) -> PaperRevision:
+        record = self._get_paper_review_record(review_id, db)
+        review = PaperReview.model_validate(record.review_data)
+        draft = self._get_paper_draft(review.draft_id, db)
+        existing = (
+            db.query(ResearchPaperRevisionModel)
+            .filter(ResearchPaperRevisionModel.parent_draft_id == draft.draft_id)
+            .count()
+        )
+        revision = build_revision_preview(review, draft, version=draft.version + existing + 1)
+        db.add(
+            ResearchPaperRevisionModel(
+                id=revision.revision_id,
+                parent_draft_id=draft.draft_id,
+                review_id=review_id,
+                revision_data=revision.model_dump(mode="json"),
+                created_at=revision.created_at,
+            )
+        )
+        db.commit()
+        return revision
+
+    def list_paper_revisions(self, draft_id: str, db: Session) -> list[PaperRevision]:
+        self._get_paper_draft(draft_id, db)
+        records = (
+            db.query(ResearchPaperRevisionModel)
+            .filter(ResearchPaperRevisionModel.parent_draft_id == draft_id)
+            .order_by(ResearchPaperRevisionModel.created_at.desc())
+            .all()
+        )
+        return [PaperRevision.model_validate(record.revision_data) for record in records]
+
+    @staticmethod
+    def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:
+        record = db.get(ResearchPaperDraftModel, draft_id)
+        if record is None:
+            raise LookupError(draft_id)
+        return PaperDraft.model_validate(record.draft_data)
+
+    @staticmethod
+    def _get_paper_review_record(review_id: str, db: Session) -> ResearchPaperReviewModel:
+        record = db.get(ResearchPaperReviewModel, review_id)
+        if record is None:
+            raise LookupError(review_id)
+        return record
 
     @staticmethod
     def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:

@@ -64,3 +64,32 @@ class ResearchExperimentEvidenceBundleModel(Base):
     conversation_id = Column(String(36), nullable=False, index=True)
     bundle_data = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+
+class ResearchPaperDraftModel(Base):
+    __tablename__ = "research_paper_drafts"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String(36), nullable=False, index=True)
+    draft_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+
+class ResearchPaperReviewModel(Base):
+    __tablename__ = "research_paper_reviews"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    draft_id = Column(String(36), nullable=False, index=True)
+    conversation_id = Column(String(36), nullable=False, index=True)
+    review_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+
+class ResearchPaperRevisionModel(Base):
+    __tablename__ = "research_paper_revisions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    parent_draft_id = Column(String(36), nullable=False, index=True)
+    review_id = Column(String(36), nullable=False, index=True)
+    revision_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
