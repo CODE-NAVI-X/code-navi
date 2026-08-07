@@ -112,7 +112,11 @@ def _create_openai_provider(settings: ProviderSettings) -> object:
         raise ProviderConfigurationError(
             'OpenAI support is not installed; run pip install -e ".[online]"'
         ) from exc
-    return OpenAIResponsesAdapter(model, timeout=settings.timeout)
+    return OpenAIResponsesAdapter(
+        model,
+        max_output_tokens=settings.max_tokens,
+        timeout=settings.timeout,
+    )
 
 
 def _create_deepseek_provider(settings: ProviderSettings) -> object:

@@ -65,6 +65,13 @@ npm run build
 
 真实 Provider 测试必须显式设置 `live` marker 所需配置，并使用无敏感信息的最小请求。外部服务失败要与应用失败区分，且不得破坏默认离线测试。
 
+本地 Piston 启动并完成 Python runtime 安装后，使用以下命令验证真实隔离边界：
+
+```powershell
+$env:CODE_NAVI_PISTON_LIVE_TEST = "1"
+.venv\Scripts\python.exe -m pytest -m live tests/online_compiler/test_piston_live.py -q
+```
+
 联网工具、代码执行和远程仓库按统一顺序验证：
 
 1. 用 Mock 或假适配器验证请求、结果和错误分类；

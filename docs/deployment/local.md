@@ -93,7 +93,7 @@ docker compose exec code-navi code-navi ask "这个项目的目标是什么？" 
 
 完成信号是命令返回明确状态并在 `/data/runs` 产生对应 Event；只有模型文字而没有预期 Event 不算接线通过。
 
-当前 Compose 直接支持 Mock、OpenAI 与 DeepSeek 凭据。通用 Agent 和练习 AI 使用不同的模型选择变量；练习执行与判题本身不依赖模型。启用通用 OpenAI Provider：
+当前 Compose 直接支持 Mock、OpenAI 与 DeepSeek 凭据。通用 Agent 和练习 AI 复用同一组 Provider 与模型选择变量；练习执行与判题本身不依赖模型。启用 OpenAI Provider：
 
 ```powershell
 $env:CODE_NAVI_PROVIDER = "openai"
@@ -102,7 +102,7 @@ $env:OPENAI_API_KEY = "<api-key>"
 docker compose up --build
 ```
 
-练习 AI 另行使用 `COMPILER_AI_PROVIDER` 和 `COMPILER_AI_MODEL`；未配置模型时只返回执行器、判题和规则结果。
+练习 AI 复用 `CODE_NAVI_PROVIDER` 和 `CODE_NAVI_MODEL`；Provider 为 `mock` 或未配置模型时，只返回执行器、判题和规则结果。页面默认关闭 AI，用户明确开启后才会把本次源码与执行输出发送给已配置模型。
 
 ## 5. 受限 Web Compose
 

@@ -25,8 +25,8 @@
 
 当前边界：
 
-1. `compose.yaml` 将 Piston API 只绑定到宿主 loopback，但 Piston 容器使用 `privileged: true`；
-2. 服务端请求限制已有 Mock/适配器测试，真实 Piston 的网络、文件系统、进程、临时文件清理和并发资源争用尚未完成隔离验证；
+1. `compose.yaml` 将 Piston API 只绑定到宿主 loopback；Piston 按官方 Isolate 运行方式使用 `privileged: true`，同时显式关闭作业网络并限制进程、文件、输出、并发和容器总资源；
+2. 服务端请求限制已有 Mock/适配器测试，`tests/online_compiler/test_piston_live.py` 提供真实 Piston 的网络、工作区清理、仓库隔离和进程/文件限制检查；该显式测试取得通过结果后才满足真实执行隔离的合并准入；
 3. Piston runtime 安装需要访问其包源，属于显式部署联网动作；
 4. 练习记录使用浏览器 UUID 和独立 SQLite，只保存代码哈希与摘要，不保存原始代码或标准输入，但没有应用身份授权、迁移和删除流程；
 5. `compose.web.yaml` 尚未接入 Piston，当前 Web 容器部署不提供练习执行服务。

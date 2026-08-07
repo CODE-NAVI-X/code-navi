@@ -195,7 +195,7 @@ function PracticeContent() {
       .then((status) => {
         if (!active) return;
         setRuntime(status);
-        setEnableAi(status.ai.status === "ready");
+        if (status.ai.status !== "ready") setEnableAi(false);
       })
       .catch((runtimeError: Error) => {
         if (active) setError(runtimeError.message);
@@ -574,6 +574,9 @@ function PracticeContent() {
                   />
                   AI 评析
                 </label>
+                <p className="mt-2 text-[11px] leading-5 text-[#66736b]">
+                  开启后，本次运行的源码和执行输出会发送给已配置的外部模型，可能产生费用。
+                </p>
               </div>
               <ResultPanel result={result} error={error} />
             </div>

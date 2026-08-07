@@ -22,11 +22,10 @@ class Settings:
     run_memory_limit_bytes: int = 134_217_728
     output_limit_bytes: int = 65_536
     database_path: str = "var/learning-records.sqlite3"
-    ai_provider: str = "openai"
+    ai_provider: str = "mock"
     ai_model: str | None = None
     ai_max_output_tokens: int = 700
     ai_request_timeout_seconds: float = 20.0
-    deepseek_base_url: str = "https://api.deepseek.com"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -50,16 +49,13 @@ class Settings:
                 "COMPILER_DATABASE_PATH", "var/learning-records.sqlite3"
             ),
             ai_provider=_choice(
-                "COMPILER_AI_PROVIDER", "openai", frozenset({"openai", "deepseek"})
+                "CODE_NAVI_PROVIDER", "mock", frozenset({"mock", "openai", "deepseek"})
             ),
-            ai_model=_optional_string("COMPILER_AI_MODEL"),
+            ai_model=_optional_string("CODE_NAVI_MODEL"),
             ai_max_output_tokens=_positive_int("COMPILER_AI_MAX_OUTPUT_TOKENS", 700),
             ai_request_timeout_seconds=_positive_float(
                 "COMPILER_AI_REQUEST_TIMEOUT_SECONDS", 20.0
             ),
-            deepseek_base_url=os.getenv(
-                "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
-            ).rstrip("/"),
         )
 
 

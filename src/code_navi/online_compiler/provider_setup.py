@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
-from openai import OpenAI
-
-from kernel.adapters.openai import OpenAIResponsesAdapter
+from code_navi.providers import (
+    ProviderConfigurationError,
+    ProviderSettings,
+    create_provider,
+)
 from kernel.runtime import AgentRuntime
 
 from .ai_evaluation import AiEvaluator, AiTutor, KernelAiEvaluator
 from .config import Settings
-from .deepseek import DeepSeekChatCompletionsAdapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,42 +24,24 @@ class AiService:
     message: str
 
 
-ClientFactory = Callable[..., Any]
+ProviderFactory = Callable[[ProviderSettings], object]
 
 
 def create_ai_service(
-    settings: Settings, *, client_factory: ClientFactory | None = None
+    settings: Settings, *, provider_factory: ProviderFactory = create_provider
 ) -> AiService:
-    if settings.ai_model is None:
+    if settings.ai_provider == "mock" or settings.ai_model is None:
         return AiService(None, None, "disabled", "未配置 AI 模型，规则识别与学习记录仍可使用。")
-    if settings.ai_provider == "deepseek":
-        return _create_deepseek_service(settings, client_factory or OpenAI)
-    return _create_openai_service(settings, client_factory or OpenAI)
-
-
-def _create_deepseek_service(settings: Settings, client_factory: ClientFactory) -> AiService:
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        return AiService(None, None, "disabled", "已选择 DeepSeek，但尚未配置 DEEPSEEK_API_KEY。")
-    client = client_factory(
-        api_key=api_key,
-        base_url=settings.deepseek_base_url,
+    provider_settings = ProviderSettings(
+        name=settings.ai_provider,
+        model=settings.ai_model,
+        max_tokens=settings.ai_max_output_tokens,
         timeout=settings.ai_request_timeout_seconds,
-        max_retries=0,
     )
-    provider = DeepSeekChatCompletionsAdapter(
-        settings.ai_model or "", client=client, max_output_tokens=settings.ai_max_output_tokens
-    )
+    try:
+        provider = provider_factory(provider_settings)
+    except ProviderConfigurationError as error:
+        return AiService(None, None, "disabled", str(error))
     service = KernelAiEvaluator(AgentRuntime(provider))
-    return AiService(service, service, "ready", f"DeepSeek AI 已启用（{settings.ai_model}）。")
-
-
-def _create_openai_service(settings: Settings, client_factory: ClientFactory) -> AiService:
-    if not os.getenv("OPENAI_API_KEY"):
-        return AiService(None, None, "disabled", "已选择 OpenAI，但尚未配置 OPENAI_API_KEY。")
-    client = client_factory(timeout=settings.ai_request_timeout_seconds, max_retries=0)
-    provider = OpenAIResponsesAdapter(
-        settings.ai_model or "", client=client, max_output_tokens=settings.ai_max_output_tokens
-    )
-    service = KernelAiEvaluator(AgentRuntime(provider))
-    return AiService(service, service, "ready", f"OpenAI AI 已启用（{settings.ai_model}）。")
+    label = "DeepSeek" if settings.ai_provider == "deepseek" else "OpenAI"
+    return AiService(service, service, "ready", f"{label} AI 已启用（{settings.ai_model}）。")
