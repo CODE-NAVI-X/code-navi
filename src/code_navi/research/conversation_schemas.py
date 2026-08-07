@@ -480,3 +480,126 @@ class ConversationEvidenceBundle(BaseModel):
     provenance_note: str
     tool_audit: dict[str, object] | None = None
     cache_hit: bool = False
+
+
+ExperimentEvidenceCategory = Literal[
+    "data_or_sample",
+    "setup",
+    "baseline_or_control",
+    "random_seed_or_reason",
+    "metric_or_result",
+    "result_table",
+    "chart_description",
+    "failure_or_limitation",
+    "ethics_or_data_governance",
+    "pending_item",
+]
+
+
+class ExperimentEvidenceItem(BaseModel):
+    """One bounded, user-submitted experiment statement and its evidence boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    category: ExperimentEvidenceCategory
+    content: str = Field(min_length=1, max_length=4000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+    source_scope: Literal["user_submitted_text"] = "user_submitted_text"
+    related_plan_item: str | None = Field(default=None, max_length=500)
+    related_evidence_urls: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CreateExperimentEvidenceItem(BaseModel):
+    """Raw user text. Classification is a reporting boundary, not a system verification."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    category: ExperimentEvidenceCategory
+    content: str = Field(min_length=1, max_length=4000)
+    classification: AnalysisClassification = "fact"
+    related_plan_item: str | None = Field(default=None, max_length=500)
+    related_evidence_urls: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CreateExperimentEvidenceBundleRequest(BaseModel):
+    """Explicit, text-only result submission. No local file is read or uploaded."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    experiment_name: str = Field(min_length=1, max_length=500)
+    goal: str = Field(min_length=1, max_length=1000)
+    items: list[CreateExperimentEvidenceItem] = Field(min_length=1, max_length=30)
+
+
+class ExperimentEvidenceBundle(BaseModel):
+    """Restorable user-reported experimental evidence; it is not independently verified."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment-evidence.v1"] = "experiment-evidence.v1"
+    bundle_id: str
+    conversation_id: str
+    experiment_name: ExperimentEvidenceItem
+    goal: ExperimentEvidenceItem
+    items: list[ExperimentEvidenceItem] = Field(min_length=1, max_length=30)
+    submitted_at: datetime
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class PaperBlueprintReference(BaseModel):
+    """A traceable reference to an already stored local research artefact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal[
+        "research_profile",
+        "research_plan",
+        "academic_evidence",
+        "experiment_evidence",
+    ]
+    bundle_id: str | None = None
+    label: str = Field(min_length=1, max_length=1000)
+    classification: AnalysisClassification
+    source_url: str | None = Field(default=None, max_length=2000)
+    information_scope: str = Field(min_length=1, max_length=200)
+
+
+class PaperBlueprintEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+
+
+class PaperBlueprintSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section: Literal["引言", "相关工作", "方法", "实验", "讨论", "结论"]
+    writing_goal: PaperBlueprintEntry
+    evidence_references: list[PaperBlueprintReference] = Field(default_factory=list, max_length=24)
+    missing_evidence: list[PaperBlueprintEntry] = Field(default_factory=list, max_length=12)
+    forbidden_claims: list[str] = Field(default_factory=list, max_length=12)
+    citation_placeholders: list[PaperBlueprintReference] = Field(
+        default_factory=list, max_length=24
+    )
+
+
+class PaperBlueprint(BaseModel):
+    """A rule-governed writing outline, never a claim that a paper is ready to submit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-blueprint.v1"] = "paper-blueprint.v1"
+    conversation_id: str
+    candidate_titles: list[PaperBlueprintEntry] = Field(min_length=1, max_length=3)
+    target_submission_direction: PaperBlueprintEntry
+    abstract_requirements: list[PaperBlueprintEntry] = Field(min_length=4, max_length=8)
+    sections: list[PaperBlueprintSection] = Field(min_length=6, max_length=6)
+    submission_readiness: PaperBlueprintEntry
+    gaps: list[PaperBlueprintEntry] = Field(min_length=1, max_length=12)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)

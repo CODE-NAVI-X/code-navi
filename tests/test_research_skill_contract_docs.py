@@ -22,6 +22,8 @@ SKILL_NAMES = (
     "topic-difficulty-analysis",
     "experiment-design",
     "experiment-code-draft",
+    "experiment-evidence",
+    "paper-blueprint",
     "research-mindmap",
 )
 
@@ -48,6 +50,8 @@ def test_research_demo_docs_describe_the_closed_loop_and_non_goals() -> None:
             "自动执行代码",
             "多 Agent/MCP",
             "PNG",
+            "实验结果证据包",
+            "论文蓝图",
         ):
             assert phrase in document
 

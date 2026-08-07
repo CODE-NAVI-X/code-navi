@@ -17,12 +17,17 @@ from .conversation_code_draft import build_experiment_code_draft
 from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
+from .conversation_paper_blueprint import build_paper_blueprint
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     ConversationEvidenceBundle,
+    CreateExperimentEvidenceBundleRequest,
     CreateResearchConversationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
+    ExperimentEvidenceBundle,
+    ExperimentEvidenceItem,
+    PaperBlueprint,
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
@@ -32,7 +37,11 @@ from .conversation_schemas import (
     SendResearchMessageRequest,
     TopicDifficultyAnalysis,
 )
-from .models import ResearchConversationModel, ResearchEvidenceBundleModel
+from .models import (
+    ResearchConversationModel,
+    ResearchEvidenceBundleModel,
+    ResearchExperimentEvidenceBundleModel,
+)
 from .research_artifact_llm import (
     ResearchArtifactGenerator,
     RuntimeResearchArtifactGenerator,
@@ -182,6 +191,90 @@ class ResearchConversationService:
             conversation_id=conversation.id,
         )
 
+    def create_experiment_evidence_bundle(
+        self,
+        conversation_id: str,
+        request: CreateExperimentEvidenceBundleRequest,
+        db: Session,
+    ) -> ExperimentEvidenceBundle:
+        """Persist explicit user text only; this operation has no model or network path."""
+        self._get_model(conversation_id, db)
+        submitted_at = datetime.now(UTC)
+        basis = f"用户于 {submitted_at.isoformat()} 显式提交；系统未复核其真实性。"
+        bundle = ExperimentEvidenceBundle(
+            bundle_id=str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            experiment_name=ExperimentEvidenceItem(
+                category="setup",
+                content=request.experiment_name,
+                classification="fact",
+                basis=basis,
+            ),
+            goal=ExperimentEvidenceItem(
+                category="setup",
+                content=request.goal,
+                classification="fact",
+                basis=basis,
+            ),
+            items=[
+                ExperimentEvidenceItem(
+                    **item.model_dump(),
+                    basis=(
+                        basis
+                        if item.classification == "fact"
+                        else (
+                            f"用户于 {submitted_at.isoformat()} 标记为"
+                            f"{_classification_label(item.classification)}；系统未补造或验证。"
+                        )
+                    ),
+                )
+                for item in request.items
+            ],
+            submitted_at=submitted_at,
+            provenance_note=(
+                "本证据包仅保存用户主动粘贴的文本、表格文本或图表说明；其中 fact "
+                "表示用户报告事实，未由系统读取原始数据、运行代码或独立复核。"
+            ),
+        )
+        db.add(
+            ResearchExperimentEvidenceBundleModel(
+                id=bundle.bundle_id,
+                conversation_id=conversation_id,
+                bundle_data=bundle.model_dump(mode="json"),
+                created_at=submitted_at,
+            )
+        )
+        db.commit()
+        return bundle
+
+    def list_experiment_evidence_bundles(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> list[ExperimentEvidenceBundle]:
+        self._get_model(conversation_id, db)
+        return self._experiment_evidence_bundles(conversation_id, db)
+
+    def generate_paper_blueprint(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> PaperBlueprint:
+        """Build a rules-only, traceable outline after an explicit user action."""
+        conversation = self._get_model(conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        return build_paper_blueprint(
+            profile,
+            conversation_id=conversation.id,
+            plan=plan,
+            academic_evidence=self._evidence_bundles(conversation.id, db),
+            experiment_evidence=self._experiment_evidence_bundles(conversation.id, db),
+        )
+
     @staticmethod
     def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:
         conversation = db.get(ResearchConversationModel, conversation_id)
@@ -307,9 +400,7 @@ class ResearchConversationService:
                 plan=plan,
                 evidence_bundles=bundles,
             ),
-            experiment_design=build_experiment_design(
-                profile, plan=plan
-            ),
+            experiment_design=build_experiment_design(profile, plan=plan),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",
@@ -331,10 +422,20 @@ class ResearchConversationService:
             .order_by(ResearchEvidenceBundleModel.created_at.desc())
             .all()
         )
-        return [
-            ConversationEvidenceBundle.model_validate(record.bundle_data)
-            for record in records
-        ]
+        return [ConversationEvidenceBundle.model_validate(record.bundle_data) for record in records]
+
+    @staticmethod
+    def _experiment_evidence_bundles(
+        conversation_id: str,
+        db: Session,
+    ) -> list[ExperimentEvidenceBundle]:
+        records = (
+            db.query(ResearchExperimentEvidenceBundleModel)
+            .filter(ResearchExperimentEvidenceBundleModel.conversation_id == conversation_id)
+            .order_by(ResearchExperimentEvidenceBundleModel.created_at.desc())
+            .all()
+        )
+        return [ExperimentEvidenceBundle.model_validate(record.bundle_data) for record in records]
 
 
 def _messages(conversation: ResearchConversationModel) -> list[ResearchConversationMessage]:
@@ -342,6 +443,10 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         ResearchConversationMessage.model_validate(message)
         for message in conversation.messages_data
     ]
+
+
+def _classification_label(classification: str) -> str:
+    return {"inference": "建议", "to_verify": "待验证"}.get(classification, "事实")
 
 
 def _apply_decision(

@@ -301,6 +301,87 @@ export interface ConversationEvidenceBundle {
   cache_hit: boolean;
 }
 
+export type ExperimentEvidenceCategory =
+  | "data_or_sample"
+  | "setup"
+  | "baseline_or_control"
+  | "random_seed_or_reason"
+  | "metric_or_result"
+  | "result_table"
+  | "chart_description"
+  | "failure_or_limitation"
+  | "ethics_or_data_governance"
+  | "pending_item";
+
+export interface ExperimentEvidenceItem {
+  category: ExperimentEvidenceCategory;
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+  source_scope: "user_submitted_text";
+  related_plan_item: string | null;
+  related_evidence_urls: string[];
+}
+
+export interface ExperimentEvidenceBundle {
+  schema_version: "experiment-evidence.v1";
+  bundle_id: string;
+  conversation_id: string;
+  experiment_name: ExperimentEvidenceItem;
+  goal: ExperimentEvidenceItem;
+  items: ExperimentEvidenceItem[];
+  submitted_at: string;
+  provenance_note: string;
+}
+
+export interface CreateExperimentEvidenceBundleRequest {
+  experiment_name: string;
+  goal: string;
+  items: Array<Pick<ExperimentEvidenceItem, "category" | "content" | "classification"> & {
+    related_plan_item?: string | null;
+    related_evidence_urls?: string[];
+  }>;
+}
+
+export interface PaperBlueprintReference {
+  source_type: "research_profile" | "research_plan" | "academic_evidence" | "experiment_evidence";
+  bundle_id: string | null;
+  label: string;
+  classification: AnalysisClassification;
+  source_url: string | null;
+  information_scope: string;
+}
+
+export interface PaperBlueprintEntry {
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+}
+
+export interface PaperBlueprintSection {
+  section: "引言" | "相关工作" | "方法" | "实验" | "讨论" | "结论";
+  writing_goal: PaperBlueprintEntry;
+  evidence_references: PaperBlueprintReference[];
+  missing_evidence: PaperBlueprintEntry[];
+  forbidden_claims: string[];
+  citation_placeholders: PaperBlueprintReference[];
+}
+
+export interface PaperBlueprint {
+  schema_version: "paper-blueprint.v1";
+  conversation_id: string;
+  candidate_titles: PaperBlueprintEntry[];
+  target_submission_direction: PaperBlueprintEntry;
+  abstract_requirements: PaperBlueprintEntry[];
+  sections: PaperBlueprintSection[];
+  submission_readiness: PaperBlueprintEntry;
+  gaps: PaperBlueprintEntry[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
 export class ResearchApiError extends Error {
   constructor(
     public readonly status: number,
@@ -434,6 +515,31 @@ export async function createExperimentCodeDraft(
 ): Promise<ExperimentCodeDraft> {
   return request<ExperimentCodeDraft>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function createExperimentEvidenceBundle(
+  conversationId: string,
+  payload: CreateExperimentEvidenceBundleRequest,
+): Promise<ExperimentEvidenceBundle> {
+  return request<ExperimentEvidenceBundle>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listExperimentEvidenceBundles(
+  conversationId: string,
+): Promise<ExperimentEvidenceBundle[]> {
+  return request<ExperimentEvidenceBundle[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+  );
+}
+
+export async function generatePaperBlueprint(conversationId: string): Promise<PaperBlueprint> {
+  return request<PaperBlueprint>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-blueprint`,
     { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
   );
 }

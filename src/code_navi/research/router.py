@@ -15,11 +15,14 @@ from .conversation_schemas import (
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
+    CreateExperimentEvidenceBundleRequest,
     CreateResearchConversationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
+    ExperimentEvidenceBundle,
     GenerateResearchArtifactRequest,
     PaperAnalysis,
+    PaperBlueprint,
     ResearchConversationResponse,
     ResearchSearchPlan,
     SendResearchMessageRequest,
@@ -284,6 +287,57 @@ def create_experiment_code_draft(
         return _conversation_service.create_experiment_code_draft(conversation_id, db)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/experiment-evidence-bundles",
+    response_model=ExperimentEvidenceBundle,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_experiment_evidence_bundle(
+    conversation_id: str,
+    request: CreateExperimentEvidenceBundleRequest,
+    db: Session = _db_dependency,
+) -> ExperimentEvidenceBundle:
+    """Save explicit text evidence only; no model, file access, or network call occurs."""
+    try:
+        return _conversation_service.create_experiment_evidence_bundle(
+            conversation_id, request, db
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/experiment-evidence-bundles",
+    response_model=list[ExperimentEvidenceBundle],
+)
+def list_experiment_evidence_bundles(
+    conversation_id: str,
+    db: Session = _db_dependency,
+) -> list[ExperimentEvidenceBundle]:
+    """Restore saved user-submitted evidence without reading files or the network."""
+    try:
+        return _conversation_service.list_experiment_evidence_bundles(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/paper-blueprint",
+    response_model=PaperBlueprint,
+)
+def generate_paper_blueprint(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> PaperBlueprint:
+    """Create a rules-only paper outline after an explicit user confirmation."""
+    del request
+    try:
+        return _conversation_service.generate_paper_blueprint(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
