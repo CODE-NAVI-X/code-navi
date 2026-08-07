@@ -37,6 +37,7 @@
 | --- | --- | --- |
 | 普通模块、Workflow 或 Skill 功能 | `docs/product/scope.md`、`docs/development/workflow.md` | 改变系统边界时加 `docs/architecture/system.md`；新增或修改测试时加 `docs/development/testing.md` |
 | 产品范围、模块行为或非目标 | `docs/product/scope.md` | 涉及优先级、状态或阶段验收时加 `docs/product/roadmap.md` |
+| Learning、Practice 与 Research 跨模块上下文 | `docs/product/scope.md`、`docs/architecture/system.md`、`docs/architecture/frontend.md` | 改持久化时加 `docs/development/workflow.md`、`docs/development/testing.md` |
 | 缺陷诊断与修复 | `docs/development/workflow.md`、`docs/development/testing.md` | 改变产品行为时加 `docs/product/scope.md`；触及架构边界时加 `docs/architecture/system.md` |
 | Kernel 修改或同步 | `docs/architecture/system.md`、`docs/architecture/kernel.md`、`docs/development/workflow.md`、`docs/development/testing.md` | 改变产品可见行为时加 `docs/product/scope.md` |
 | Web 页面或前端交互 | `docs/product/scope.md`、`docs/architecture/frontend.md`、`docs/development/workflow.md` | 改 API 契约时加 `docs/architecture/system.md`；测试任务加 `docs/development/testing.md`；上线任务加 `docs/deployment/production.md` |

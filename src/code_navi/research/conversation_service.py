@@ -9,6 +9,8 @@ from typing import Literal, Protocol
 
 from sqlalchemy.orm import Session
 
+from code_navi.context_transfer.schemas import ConfirmedContextProvenance
+
 from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
@@ -53,6 +55,7 @@ class ConversationDecisionGenerator(Protocol):
         messages: list[ResearchConversationMessage],
         user_message: str,
         conversation_id: str,
+        confirmed_context: ConfirmedContextProvenance | None = None,
     ) -> ConversationDecisionOutcome: ...
 
 
@@ -106,6 +109,62 @@ class ResearchConversationService:
             )
             db.commit()
             db.refresh(conversation)
+        return self._to_response(conversation, db)
+
+    def create_from_confirmed_context(
+        self,
+        provenance: ConfirmedContextProvenance,
+        db: Session,
+        *,
+        commit: bool = True,
+    ) -> ResearchConversationResponse:
+        """Create a rules-only conversation from one final confirmed snapshot."""
+        profile = ResearchProfile(
+            topic=provenance.topic,
+            uncertainties=[
+                "具体研究问题仍需确认",
+                "研究对象、方法、数据条件和完成标准仍需在对话中确认",
+            ],
+        )
+        conversation = ResearchConversationModel(
+            profile_data=profile.model_dump(mode="json"),
+            messages_data=[],
+            context_provenance=provenance.model_dump(mode="json"),
+        )
+        db.add(conversation)
+        db.flush()
+        selected_labels = "、".join(item.label for item in provenance.selected_content)
+        user_message = (
+            "我已检查并确认从 Learning 带入本科研会话的上下文。\n"
+            f"研究主题：{provenance.topic}\n"
+            f"学习摘要：{provenance.summary[:1000]}"
+        )
+        if selected_labels:
+            user_message += f"\n保留内容：{selected_labels}"
+        self._append_user(conversation, user_message)
+        self._append_assistant(
+            conversation,
+            ResearchConversationDecision(
+                reply=(
+                    f"已接收并记录你确认的 Learning 上下文，当前研究主题是“{provenance.topic}”。"
+                    "接下来可以在此基础上收敛研究问题；原始学习笔记不会被科研会话修改。"
+                ),
+                intent="clarify",
+                uncertainties=list(profile.uncertainties),
+                next_question="你希望围绕这个主题优先比较、解释还是解决什么具体问题？",
+                suggested_answers=[
+                    "比较不同方法的效果",
+                    "解释关键影响因素",
+                    "形成一个可执行实验",
+                ],
+            ),
+            generation_mode="rules",
+        )
+        if commit:
+            db.commit()
+            db.refresh(conversation)
+        else:
+            db.flush()
         return self._to_response(conversation, db)
 
     def send_message(
@@ -197,12 +256,14 @@ class ResearchConversationService:
     ) -> None:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         existing_messages = _messages(conversation)
+        confirmed_context = _confirmed_context(conversation)
         self._append_user(conversation, user_message)
         outcome = self.decision_generator.generate(
             profile=profile,
             messages=existing_messages,
             user_message=user_message,
             conversation_id=conversation.id,
+            confirmed_context=confirmed_context,
         )
         if outcome.status == "generated" and outcome.decision is not None:
             decision = _enforce_runtime_decision(
@@ -213,7 +274,12 @@ class ResearchConversationService:
             )
             mode = "agent"
         else:
-            decision = _fallback_decision(profile, user_message, existing_messages)
+            decision = _fallback_decision(
+                profile,
+                user_message,
+                existing_messages,
+                confirmed_context=confirmed_context,
+            )
             mode = "rules_fallback" if outcome.status == "failed" else "rules"
         updated_profile = _apply_decision(profile, decision)
         conversation.profile_data = updated_profile.model_dump(mode="json")
@@ -318,6 +384,11 @@ class ResearchConversationService:
             candidate_questions=profile.candidate_questions,
             messages=messages,
             last_run_id=assistant.run_id,
+            context_provenance=(
+                ConfirmedContextProvenance.model_validate(conversation.context_provenance)
+                if conversation.context_provenance
+                else None
+            ),
         )
 
     @staticmethod
@@ -342,6 +413,14 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         ResearchConversationMessage.model_validate(message)
         for message in conversation.messages_data
     ]
+
+
+def _confirmed_context(
+    conversation: ResearchConversationModel,
+) -> ConfirmedContextProvenance | None:
+    if not conversation.context_provenance:
+        return None
+    return ConfirmedContextProvenance.model_validate(conversation.context_provenance)
 
 
 def _apply_decision(
@@ -459,6 +538,8 @@ def _fallback_decision(
     profile: ResearchProfile,
     user_message: str,
     messages: list[ResearchConversationMessage] | None = None,
+    *,
+    confirmed_context: ConfirmedContextProvenance | None = None,
 ) -> ResearchConversationDecision:
     """Provide a dynamic, non-fabricating dialogue step when no model is available."""
     patch = _fallback_patch(profile, messages or [], user_message)
@@ -490,7 +571,7 @@ def _fallback_decision(
         )
     if _requests_profile_review(user_message):
         return ResearchConversationDecision(
-            reply=_profile_review_reply(provisional),
+            reply=_profile_review_reply(provisional, confirmed_context),
             intent="summarize",
             profile_patch=patch,
             candidate_questions=candidate_questions,
@@ -510,6 +591,11 @@ def _fallback_decision(
         "我已经先记录你明确表达的信息。当前没有可用的模型个性化分析，"
         "我们仍可以通过自由对话继续收窄方向。"
     )
+    if confirmed_context:
+        reply = (
+            "我已结合你确认的 Learning 背景记录本轮信息。已有背景会继续作为已知条件，"
+            "接下来只澄清研究问题、场景、方法和数据等尚未明确的部分。"
+        )
     if patch.expected_output:
         reply = (
             f"已记录你的预期产出是“{patch.expected_output}”。这不会直接生成或承诺一篇论文；"
@@ -735,8 +821,13 @@ def _requests_continue_narrowing(message: str) -> bool:
     return any(marker in normalized for marker in ("继续收窄", "继续细化", "继续澄清"))
 
 
-def _profile_review_reply(profile: ResearchProfile) -> str:
+def _profile_review_reply(
+    profile: ResearchProfile,
+    confirmed_context: ConfirmedContextProvenance | None = None,
+) -> str:
     lines = ["请检查当前科研画像："]
+    if confirmed_context:
+        lines.append(f"- 已确认学习背景：{confirmed_context.summary[:300]}")
     for label, value in (
         ("研究主题", profile.topic),
         ("研究动机", profile.motivation),

@@ -47,7 +47,7 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 默认业务数据库为 `.code-navi/learning_poc.db`，学习 Runtime Event 默认写入 `var/runs`。练习记录默认写入 `var/learning-records.sqlite3`，可用 `COMPILER_DATABASE_PATH` 调整。新业务配置使用 `CODE_NAVI_DATABASE_URL` 和 `CODE_NAVI_EVENTS_DIR`；`LEARNING_DATABASE_URL` 仅为数据库兼容项。前端 API 地址使用 `NEXT_PUBLIC_CODE_NAVI_API_URL`，默认指向 `http://127.0.0.1:8000`。
 
-停止时关闭脚本打开的两个窗口。`dev-stop.cmd` 会终止端口 8000 和 3000 上的监听进程并停止 Piston；运行前确认这些端口没有承载其他服务。
+`dev-start.cmd` 覆盖本地 Web 产品所需的数据库迁移、FastAPI、Next、Piston 和固定 Python runtime；它不启动 CLI 容器，也不启动独立的 `compose.web.yaml` Caddy 部署。停止时运行 `dev-stop.cmd`，它会关闭该启动脚本创建的前后端窗口并停止 Piston。
 
 ## 3. 本地 Provider
 

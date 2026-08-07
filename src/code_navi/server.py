@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .context_transfer import models as context_transfer_models  # noqa: F401
+from .context_transfer.router import router as context_transfer_router
 from .db import DATABASE_URL, Base, engine
 from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
@@ -66,6 +68,7 @@ app = FastAPI(
 app.include_router(learning_router)
 app.include_router(research_router)
 app.include_router(compiler_router)
+app.include_router(context_transfer_router)
 
 # ---------------------------------------------------------------------------
 # CORS - explicit origin allowlist.

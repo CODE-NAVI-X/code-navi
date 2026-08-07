@@ -35,6 +35,7 @@ class ResearchConversationModel(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     profile_data = Column(JSON, nullable=False, default=dict)
     messages_data = Column(JSON, nullable=False, default=list)
+    context_provenance = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at = Column(
         DateTime,

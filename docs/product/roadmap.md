@@ -10,7 +10,7 @@
 | 知识点学习 | 本地闭环已实现 | FastAPI 与 Next 页面可提交知识点；模型调用经 Runtime；结果写入按学习会话隔离的 SQLite 笔记 |
 | 科研助手 | 本地闭环已实现 | 动态研究对话、画像与消息恢复、离线规则研究计划、检索计划，以及用户确认后的 OpenAlex、Crossref、arXiv 元数据与摘要检索；模型不可用时回退到规则 |
 | 代码测试练习 | 本地原型已实现 | Python 3.12 代码通过本机 Piston 执行；支持自由运行、服务端题目判定、规则反馈、可选 AI 指导和匿名学习记录 |
-| 跨模块上下文 | 浏览器原型 | `FlowPayload` 仅在当前前端进程内接力；刷新后丢失，用户查看、修改、清除和服务端持久化未完成 |
+| 跨模块上下文 | Learning → Research 接收恢复闭环 | 用户确认后原子创建带来源记录的科研会话；Research 展示并在每轮澄清中加载已确认学习背景，来源、画像、消息和规则研究计划均可恢复；Learning → Practice 仍使用进程内 `FlowPayload` |
 | Web/API 宿主 | 本地与受限容器可用 | Next 前端、FastAPI、本地启动脚本，以及由 Caddy 统一入口的 Web Compose 已存在；`/health` 仅检查后端进程存活 |
 | 业务持久化 | 本地可用 | 学习笔记、兼容科研会话、动态对话和证据共用 SQLAlchemy Base；Alembic 管理当前 schema |
 | Docker | 两套容器基线 | `compose.yaml` 运行 CLI、Piston 和 runtime 初始化；`compose.web.yaml` 构建 FastAPI、Next standalone 与 Caddy，但尚未接入 Piston |
@@ -25,7 +25,7 @@
 1. 保持所有 ORM schema 变化同步新增 Alembic revision，并验证空库和受影响旧库升级；
 2. 保持学习、科研、CLI 的 Provider 配置和错误语义一致；
 3. 明确 Runtime Event、学习会话、科研对话和兼容科研会话标识的职责；
-4. 补齐跨模块上下文的查看、修改和清除，再将其标记为可用产品流程。
+4. 在现有“确认后新建科研会话”基础上，按实际需求评估加入现有科研会话，并保持每次来源与最终快照可追溯。
 
 ### 2.2 收敛代码练习本地闭环
 

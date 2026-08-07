@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from code_navi.context_transfer.schemas import ConfirmedContextProvenance
+
 from .schemas import AcademicPaperResult, AcademicSourceStatus
 
 ProfileField = Literal[
@@ -424,6 +426,7 @@ class ResearchConversationResponse(BaseModel):
     candidate_questions: list[str]
     messages: list[ResearchConversationMessage]
     last_run_id: str | None = None
+    context_provenance: ConfirmedContextProvenance | None = None
 
 
 class ResearchSearchSource(BaseModel):

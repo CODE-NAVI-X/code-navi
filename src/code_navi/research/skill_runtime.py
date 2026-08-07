@@ -6,7 +6,7 @@ from functools import lru_cache
 from importlib.resources import files
 
 RESEARCH_CLARIFICATION_SKILL_ID = "research-clarification"
-RESEARCH_CLARIFICATION_SKILL_VERSION = "1.0.0"
+RESEARCH_CLARIFICATION_SKILL_VERSION = "1.1.0"
 ACADEMIC_SEARCH_SKILL_ID = "academic-search"
 ACADEMIC_SEARCH_SKILL_VERSION = "1.0.0"
 

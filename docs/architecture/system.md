@@ -23,6 +23,7 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `src/code_navi/cli.py`、`application.py`、`context.py`、`assistant.py` | CLI 入口、上下文装配和学习问答用例 |
 | `src/code_navi/server.py` | FastAPI 装配、CORS、统一异常边界和 `/health` |
 | `src/code_navi/learning/` | 知识讲解 API、Runtime 编排和学习笔记 |
+| `src/code_navi/context_transfer/` | 跨模块上下文的来源校验、可编辑快照、会话范围读取、取消和确认消费 |
 | `src/code_navi/online_compiler/` | Python/Piston 接线、服务端判题、规则反馈、可选 AI 指导和匿名学习记录 |
 | `src/code_navi/research/` | 动态科研对话、Provider 状态、兼容澄清流程、检索计划和学术证据 |
 | `src/code_navi/providers.py` | Mock、OpenAI 与 DeepSeek Provider 的统一选择 |
@@ -44,6 +45,9 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `code-navi ask`、`code-navi shell` | 问题、项目上下文、Provider 配置 | `RuntimeResult` 和 Event JSONL；不修改项目文件 |
 | `POST /api/v1/learning/explain` | `ExplainRequest` | `ExplainResponse`、Runtime Event，并写入 `notebook_items` |
 | `GET /api/v1/learning/notebook?session_id=...` | 学习 `session_id` | 该学习会话的 `NotebookItem` 列表 |
+| `POST /api/v1/context-transfers` | Learning 笔记 ID、学习 `session_id`、目标模块和选择内容 | 从真实笔记派生并持久化 `context-transfer.v1` 待确认上下文 |
+| `GET`、`PATCH`、`DELETE /api/v1/context-transfers/{id}` | 上下文 ID 和来源学习 `session_id` | 在来源会话范围内恢复、编辑或清除传递快照；不修改原笔记 |
+| `POST /api/v1/context-transfers/{id}/confirm` | 上下文 ID、来源学习 `session_id` 和用户最终确认的主题、摘要、保留内容 | 原子保存最终快照、创建科研会话并写入 `context-provenance.v1`；重复确认返回同一会话 |
 | `POST /api/v1/learning/presentations/generate` | 知识点、学习 `session_id`、风格 | SSE 逐页返回演示文稿、生成来源并归档 |
 | `GET /api/v1/learning/presentations/{presentation_id}?session_id=...` | 演示文稿 id 与学习 `session_id` | 只返回该学习会话内的已归档演示文稿 |
 | `GET /api/v1/compiler/runtime` | 无 | Piston runtime 状态和服务端执行限制；不执行用户代码 |
@@ -68,6 +72,8 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 请求 schema 不合法返回 422；科研对话或兼容会话不存在返回 404；画像尚未达到检索条件时返回 409；未处理异常返回不暴露内部细节的 500 和 `error_id`。调用方不得把这些状态映射为成功或空结果。
 
 动态研究画像维护主题、动机、问题、上下文、方法、数据需求、证据偏好、时间范围、限制、预期产出、假设和不确定性，并以 `research-conversation.v1` 返回。画像达到计划准备度后，纯规则生成器派生 `research-plan.v1`；它不调用模型或网络，只使用已校验画像，结构化条目只允许 `inference` 或 `to_verify`。检索计划和证据分别使用 `research-search-plan.v1`、`academic-evidence.v1`。原五字段规则只属于兼容流程；这些业务状态都不进入 Kernel 契约。
+
+由跨模块确认创建的科研会话额外返回 `context_provenance`，完整保存服务端来源引用、确认时间和用户最终确认内容。科研对话服务在每轮消息处理时从会话记录加载该快照：Runtime 请求通过 `confirmed_learning_context` 接收完整背景，离线规则也识别其存在并只追问画像中尚未明确的研究选择。来源快照不随后续对话修改，普通科研会话的该字段为 `null`。
 
 ## 4. Runtime、Provider 与工具接口
 
@@ -106,17 +112,18 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 | --- | --- | --- |
 | Runtime `session_id` | 组织同一来源的 Event JSONL | 业务状态、身份或自动恢复的对话 |
 | 学习 `session_id` | 隔离 `notebook_items` 并关联学习 run | 用户账号或跨设备会话 |
+| 上下文 `id` + 来源 `session_id` | 恢复待确认快照，并在显式确认后绑定一个科研会话 | 身份授权、未经确认的 Research 写入或工具权限 |
 | 练习 `learner_id` | 筛选独立 SQLite 中的匿名练习摘要 | 身份、授权或防止他人读取已知 UUID |
 | 科研 `conversation_id` | 恢复动态画像、消息和 evidence bundle | Kernel 权限、身份或长期记忆 |
 | 兼容科研 `session_id` | 恢复原五字段澄清状态与 turns | 当前科研页面主流程 |
 
 浏览器将学习 `session_id`、科研 `conversation_id` 和练习 `learner_id` 存入 `localStorage`，只提供同一浏览器内恢复，不提供身份绑定或授权。
 
-业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。当前业务表包括 `notebook_items`、`research_sessions`、`research_conversations` 和 `research_evidence_bundles`。Runtime Event 单独写入 JSONL，不作为业务数据库。
+业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。当前业务表包括 `notebook_items`、`context_transfers`、`research_sessions`、`research_conversations` 和 `research_evidence_bundles`。Runtime Event 单独写入 JSONL，不作为业务数据库。
 
 练习记录当前例外地使用 `COMPILER_DATABASE_PATH` 指向独立 SQLite，并由模块自行创建 `learning_records` 表；它不进入共享 SQLAlchemy Base 或 Alembic。记录保存匿名 UUID、规则与 AI 摘要、代码哈希、代码大小和运行指标，不保存原始代码与标准输入。该路径属于本地原型，生产化前必须统一迁移、所有权和删除规则。
 
-schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。当前 `0003` revision 创建动态科研对话和证据表；启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
+schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
 
 ## 6. 架构变更条件
 

@@ -7,9 +7,8 @@ export interface FlowPayload {
     name: string;
   };
   studentPersona: "academic" | "software_coursework" | "cross_disciplinary";
-  targetModule: "practice" | "research";
+  targetModule: "practice";
   payloadData: {
-    recommendedTopic?: string;
     exerciseIds?: string[];
   };
 }
