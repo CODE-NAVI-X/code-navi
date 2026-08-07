@@ -27,6 +27,7 @@ npm ci
 | --- | --- |
 | CLI 问答 | `src/code_navi/cli.py`、`application.py`、`context.py` |
 | 学习 API | `src/code_navi/learning/`、`frontend/lib/api/learning.ts`、学习页面 |
+| Python 练习与判题 | `src/code_navi/online_compiler/`、`frontend/lib/api/compiler.ts`、练习页面、`tests/online_compiler/` |
 | 科研对话与检索 | `src/code_navi/research/conversation_agent.py`、`conversation_service.py`、`conversation_search_service.py`、`academic.py`、科研页面 |
 | Provider | `src/code_navi/providers.py` 与 `src/kernel/adapters/` |
 | Kernel | `src/kernel/` 与 `tests/kernel/` |

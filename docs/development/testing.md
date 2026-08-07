@@ -15,6 +15,7 @@
 | Kernel Runtime、Event、Provider 或权限 | 对应 `tests/kernel/`，再加一个应用接线测试 |
 | CLI、上下文或公共 Provider 选择 | `tests/test_cli.py`、`test_context.py`、`test_providers.py` |
 | 知识点学习 | `tests/test_learning_module.py` 与相关 server/provider 测试 |
+| Python 执行、判题与学习记录 | `tests/online_compiler/`；涉及真实 Piston 时再追加显式隔离环境测试 |
 | 科研兼容规则、API 或措辞 | `tests/test_research_api.py`、`test_research_llm.py` |
 | 动态科研对话、规则研究计划与 Provider | `tests/test_research_conversation.py`、`test_research_frontend_copy.py`、`test_research_deepseek.py`、`test_provider_configuration.py` |
 | 学术检索与对话检索 | `tests/test_research_tools.py`、`test_academic_evidence.py`、`test_conversation_search.py` |
@@ -58,6 +59,7 @@ npm run build
 3. API 测试使用临时或内存数据库，不读取开发者本地 PoC 数据。
 4. 学习笔记测试必须验证 `session_id` 隔离；科研测试必须验证 `conversation_id` 恢复、兼容 `session_id` 路径和缺失状态。
 5. 前后端 schema 变化需要验证字段、错误状态和兼容项，不只检查页面文案。
+6. 代码执行测试必须证明请求不能扩大服务端语言、runtime、CPU、内存、时间、输入和输出限制；隐藏测试不得泄漏内容，执行服务失败不得归因于学生代码。
 
 ## 5. 在线与高风险测试
 

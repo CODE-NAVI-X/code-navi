@@ -4,9 +4,12 @@
 
 ```text
 Next Web ─→ FastAPI routers ─→ learning / research services
-                                      ├─→ AgentRuntime ─→ Provider ─→ Event JSONL
-                                      ├─→ ToolRegistry ─→ academic sources
-                                      └─→ SQLAlchemy ─→ business database
+        │                             ├─→ AgentRuntime ─→ Provider ─→ Event JSONL
+        │                             ├─→ ToolRegistry ─→ academic sources
+        │                             └─→ SQLAlchemy ─→ business database
+        └───────────────────→ online compiler service ─→ Piston
+                                             ├─→ compiler records SQLite
+                                             └─→ optional AgentRuntime guidance
 
 CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSONL
 ```
@@ -20,6 +23,7 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `src/code_navi/cli.py`、`application.py`、`context.py`、`assistant.py` | CLI 入口、上下文装配和学习问答用例 |
 | `src/code_navi/server.py` | FastAPI 装配、CORS、统一异常边界和 `/health` |
 | `src/code_navi/learning/` | 知识讲解 API、Runtime 编排和学习笔记 |
+| `src/code_navi/online_compiler/` | Python/Piston 接线、服务端判题、规则反馈、可选 AI 指导和匿名学习记录 |
 | `src/code_navi/research/` | 动态科研对话、Provider 状态、兼容澄清流程、检索计划和学术证据 |
 | `src/code_navi/providers.py` | Mock、OpenAI 与 DeepSeek Provider 的统一选择 |
 | `src/code_navi/db.py` | 所有业务模块共享的 SQLAlchemy Base、engine 和 session |
@@ -33,7 +37,7 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 
 ## 3. 宿主与业务接口
 
-请求和响应模型以 `src/code_navi/learning/schemas.py` 以及科研目录中的 `conversation_schemas.py`、`provider_schemas.py`、`schemas.py` 为准；前端类型镜像这些模型。
+学习与科研请求响应模型以各模块 Pydantic schema 为准；在线编译器当前在应用层手工校验 JSON，并由 `frontend/lib/api/compiler.ts` 镜像公开字段。前端不能绕过模块 API 直接调用 Provider、Piston 或数据库。
 
 | 入口 | 输入 | 输出与副作用 |
 | --- | --- | --- |
@@ -42,6 +46,11 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `GET /api/v1/learning/notebook?session_id=...` | 学习 `session_id` | 该学习会话的 `NotebookItem` 列表 |
 | `POST /api/v1/learning/presentations/generate` | 知识点、学习 `session_id`、风格 | SSE 逐页返回演示文稿、生成来源并归档 |
 | `GET /api/v1/learning/presentations/{presentation_id}?session_id=...` | 演示文稿 id 与学习 `session_id` | 只返回该学习会话内的已归档演示文稿 |
+| `GET /api/v1/compiler/runtime` | 无 | Piston runtime 状态和服务端执行限制；不执行用户代码 |
+| `POST /api/v1/compiler/execute` | Python 源码、标准输入、可选匿名 `learnerId` 和 AI 开关 | Piston 执行结果、规则分类、可选评价票据和最小学习记录 |
+| `POST /api/v1/compiler/submit` | 服务端题目标识、版本、Python 源码和匿名 `learnerId` | 公开与隐藏测试的服务端判定；隐藏测试不返回内容或执行输出 |
+| `POST /api/v1/compiler/evaluate`、`POST /api/v1/compiler/guidance` | 一次性票据或服务端提交上下文、匿名 `learnerId` | 可选 AgentRuntime 评价或引导；不修改执行和判题事实 |
+| `GET /api/v1/compiler/records?learnerId=...` | 浏览器生成的匿名 UUID | 对应 UUID 的最近练习摘要；不是授权查询 |
 | `POST /api/v1/research/conversations` | `CreateResearchConversationRequest` | 新的 `ResearchConversationResponse` |
 | `POST /api/v1/research/conversations/{conversation_id}/messages` | 自由文本 | 更新画像、消息与下一步；达到准备度时附带规则生成的 `research_plan` |
 | `GET /api/v1/research/conversations/{conversation_id}` | `conversation_id` | 已持久化的动态对话，并按当前画像恢复相同规则研究计划 |
@@ -72,7 +81,7 @@ AgentSpec + RuntimeRequest
 RuntimeResult + Event JSONL
 ```
 
-动态科研对话、显式触发的研究产物个性化和 Provider 连接测试使用该接口，均不授予工具权限；模型不可用或结构无效时回退到规则。对话 reducer 完成画像校验后，`research-plan.v1` 由应用规则派生，不产生新的 Agent run，也不访问 Provider 或网络。个性化结果返回 `run_id` 与 `event_count`，对应 Event JSONL。兼容五字段流程仍通过统一 Provider 契约调用 `complete()`；超时由供应商 SDK 传输层配置，不启动后台守护线程。
+动态科研对话、显式触发的研究产物个性化、Provider 连接测试，以及可选的练习评价与引导使用该接口，均不授予工具权限。模型不可用或结构无效时，科研回退到规则，练习保留执行器与规则结果并把 AI 标记为禁用或不可用。对话 reducer 完成画像校验后，`research-plan.v1` 由应用规则派生，不产生新的 Agent run，也不访问 Provider 或网络。兼容五字段流程仍通过统一 Provider 契约调用 `complete()`；超时由供应商 SDK 传输层配置。
 
 ### Provider
 
@@ -89,18 +98,23 @@ ToolSpec → ToolRegistry.register(...)
 
 grant 和 execution context 每次调用独立创建，权限不因页面、业务标识或上下文传递而继承。当前科研 evidence bundle 注册 `academic_search`，仅授予 `READ + NETWORK`，且必须在用户确认后调用。`ProviderResult` 是模型输出；外部操作状态以 `ToolResult` 或对应执行器结果为准。
 
+Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状态以规范化的 Piston 响应为准，题目正确性以服务端测试比较为准；AgentRuntime 文本只作为独立建议。
+
 ## 5. 会话与持久化接口
 
 | 标识 | 作用 | 不代表什么 |
 | --- | --- | --- |
 | Runtime `session_id` | 组织同一来源的 Event JSONL | 业务状态、身份或自动恢复的对话 |
 | 学习 `session_id` | 隔离 `notebook_items` 并关联学习 run | 用户账号或跨设备会话 |
+| 练习 `learner_id` | 筛选独立 SQLite 中的匿名练习摘要 | 身份、授权或防止他人读取已知 UUID |
 | 科研 `conversation_id` | 恢复动态画像、消息和 evidence bundle | Kernel 权限、身份或长期记忆 |
 | 兼容科研 `session_id` | 恢复原五字段澄清状态与 turns | 当前科研页面主流程 |
 
-浏览器将学习 `session_id` 和科研 `conversation_id` 存入 `localStorage`，只提供同一浏览器内恢复，不提供身份绑定或授权。
+浏览器将学习 `session_id`、科研 `conversation_id` 和练习 `learner_id` 存入 `localStorage`，只提供同一浏览器内恢复，不提供身份绑定或授权。
 
 业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。当前业务表包括 `notebook_items`、`research_sessions`、`research_conversations` 和 `research_evidence_bundles`。Runtime Event 单独写入 JSONL，不作为业务数据库。
+
+练习记录当前例外地使用 `COMPILER_DATABASE_PATH` 指向独立 SQLite，并由模块自行创建 `learning_records` 表；它不进入共享 SQLAlchemy Base 或 Alembic。记录保存匿名 UUID、规则与 AI 摘要、代码哈希、代码大小和运行指标，不保存原始代码与标准输入。该路径属于本地原型，生产化前必须统一迁移、所有权和删除规则。
 
 schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。当前 `0003` revision 创建动态科研对话和证据表；启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
 
