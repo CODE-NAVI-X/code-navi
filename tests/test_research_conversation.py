@@ -5,12 +5,18 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 os.environ["LEARNING_DATABASE_URL"] = "sqlite:///:memory:"
 
+from code_navi.context_transfer.schemas import (  # noqa: E402
+    ConfirmedContextProvenance,
+    ContextSourceObject,
+    SelectedContextContent,
+)
 from code_navi.db import engine  # noqa: E402
 from code_navi.learning.models import Base  # noqa: E402
 from code_navi.research.conversation_agent import (  # noqa: E402
@@ -434,6 +440,7 @@ def test_runtime_skill_contract_is_packaged_and_used_by_agent() -> None:
     skill = load_research_clarification_skill()
 
     assert "Never repeat the same question" in skill
+    assert "confirmed_learning_context" in skill
     assert "academic-search" in skill
     assert research_conversation_agent.system_prompt == skill
 
@@ -750,12 +757,30 @@ def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> Non
         provider_factory=lambda: provider,
         timeout_seconds=1,
     )
+    confirmed_context = ConfirmedContextProvenance(
+        transfer_id="transfer-runtime-test",
+        source_module="learning",
+        source_object=ContextSourceObject(type="notebook_item", id="note-runtime-test"),
+        source_scope_id="sess-runtime-test",
+        target_module="research",
+        topic="RAG 评测",
+        summary="已确认的学习背景",
+        selected_content=[
+            SelectedContextContent(
+                kind="summary",
+                label="学习重点",
+                content="检索质量影响证据覆盖。",
+            )
+        ],
+        confirmed_at=datetime.now(UTC),
+    )
 
     outcome = generator.generate(
         profile={},
         messages=[],
         user_message="我想研究 RAG 评测",
         conversation_id="conversation-runtime-test",
+        confirmed_context=confirmed_context,
     )
 
     assert outcome.status == "generated"
@@ -766,6 +791,15 @@ def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> Non
     assert provider.calls[0]["tools"] == []
     system_message = provider.calls[0]["messages"][0]
     assert system_message["metadata"]["agent_name"] == "research_conversation_agent"
+    runtime_payload = json.loads(provider.calls[0]["messages"][1]["content"][0]["text"])
+    assert runtime_payload["confirmed_learning_context"]["topic"] == "RAG 评测"
+    assert runtime_payload["confirmed_learning_context"]["selected_content"] == [
+        {
+            "kind": "summary",
+            "label": "学习重点",
+            "content": "检索质量影响证据覆盖。",
+        }
+    ]
 
 
 def test_runtime_generator_rejects_blank_profile_patch_before_persistence() -> None:

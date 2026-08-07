@@ -14,6 +14,7 @@ from alembic.autogenerate import compare_metadata  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from alembic.migration import MigrationContext  # noqa: E402
 
+from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
@@ -85,3 +86,61 @@ def test_legacy_rows_are_backfilled_not_dropped(
         engine.dispose()
 
     assert rows == [("legacy-1", "sess-legacy-import")]
+
+
+def test_confirmation_migration_preserves_existing_drafts_and_conversations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision 0005 must retain 0004 rows and mark existing transfers as drafts."""
+    database_url = f"sqlite:///{tmp_path / 'context-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0004")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO research_conversations "
+                "(id, profile_data, messages_data, created_at, updated_at) VALUES "
+                "('conversation-before-confirm', '{}', '[]', CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO context_transfers "
+                "(id, source_module, source_object_type, source_object_id, "
+                "source_scope_id, target_module, topic, summary, selected_content, "
+                "created_at, updated_at) VALUES "
+                "('transfer-before-confirm', 'learning', 'notebook_item', 'note-1', "
+                "'sess-1', 'research', 'topic', 'summary', '[]', CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            transfer = connection.execute(
+                text(
+                    "SELECT id, status, confirmed_conversation_id, confirmed_at "
+                    "FROM context_transfers"
+                )
+            ).one()
+            conversation = connection.execute(
+                text("SELECT id, context_provenance FROM research_conversations")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert transfer == ("transfer-before-confirm", "draft", None, None)
+    assert conversation == ("conversation-before-confirm", None)

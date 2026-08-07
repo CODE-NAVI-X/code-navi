@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   fetchNotebookItems,
   fetchPresentation,
   type NotebookItem,
   type PresentationDetail,
 } from "@/lib/api/learning";
+import { createLearningToResearchContext } from "@/lib/api/context-transfers";
 import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
 import {
   Bookmark,
@@ -19,6 +21,7 @@ import {
   ExternalLink,
   Presentation,
   Loader2,
+  GraduationCap,
 } from "lucide-react";
 
 type TabId = "summary" | "note" | "wrong_answer" | "presentation";
@@ -99,12 +102,14 @@ export function StructuredNotebook({
   onDismiss,
   sessionId,
 }: StructuredNotebookProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>("summary");
   const [items, setItems] = useState<NotebookItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PresentationDetail | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [transferringItemId, setTransferringItemId] = useState<string | null>(null);
 
   const loadItems = useCallback(async () => {
     if (!sessionId) return;
@@ -143,6 +148,19 @@ export function StructuredNotebook({
       setError(err instanceof Error ? err.message : "加载 PPT 失败");
     } finally {
       setLoadingPreview(false);
+    }
+  }
+
+  async function continueToResearch(item: NotebookItem) {
+    if (!sessionId) return;
+    setTransferringItemId(item.id);
+    setError(null);
+    try {
+      const context = await createLearningToResearchContext(item.id, sessionId);
+      router.push(`/research/confirm/${encodeURIComponent(context.id)}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "创建待传递上下文失败");
+      setTransferringItemId(null);
     }
   }
 
@@ -256,13 +274,9 @@ export function StructuredNotebook({
           ) : (
             <div className="space-y-3">
               {currentTabItems.map((item) => (
-                <button
+                <article
                   key={item.id}
-                  type="button"
-                  onClick={() => item.kind === "presentation" && openPresentation(item)}
-                  className={`block w-full cursor-pointer rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 text-left dark:border-zinc-800 dark:bg-zinc-800/30 ${
-                    item.kind === "presentation" ? "hover:border-indigo-300 hover:bg-indigo-50/40 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/20" : ""
-                  }`}
+                  className="block w-full rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 text-left dark:border-zinc-800 dark:bg-zinc-800/30"
                 >
                   {item.timestamp && (
                     <div className="mb-2 flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-zinc-500 font-mono">
@@ -287,7 +301,33 @@ export function StructuredNotebook({
                       <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
                     </span>
                   )}
-                </button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.kind === "presentation" && (
+                      <button
+                        type="button"
+                        onClick={() => void openPresentation(item)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:bg-zinc-900 dark:text-indigo-300"
+                      >
+                        <Presentation className="h-3 w-3" /> 预览课件
+                      </button>
+                    )}
+                    {item.kind === "summary" && (
+                      <button
+                        type="button"
+                        onClick={() => void continueToResearch(item)}
+                        disabled={transferringItemId !== null}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                      >
+                        {transferringItemId === item.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <GraduationCap className="h-3 w-3" />
+                        )}
+                        继续研究
+                      </button>
+                    )}
+                  </div>
+                </article>
               ))}
             </div>
           )}

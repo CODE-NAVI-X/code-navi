@@ -1,6 +1,8 @@
 /** Browser client for the versioned conversational research API. */
 
 export const RESEARCH_CONVERSATION_SCHEMA = "research-conversation.v1" as const;
+export const RESEARCH_CONVERSATION_STORAGE_KEY =
+  "code-navi.research.conversation-id";
 
 export type ResearchStage = "exploring" | "focusing" | "ready_for_plan";
 export type GenerationMode = "agent" | "rules" | "rules_fallback";
@@ -175,6 +177,23 @@ export interface ResearchConversationMessage {
   recommended_action: RecommendedAction | null;
 }
 
+export interface ConfirmedContextProvenance {
+  schema_version: "context-provenance.v1";
+  transfer_id: string;
+  source_module: "learning";
+  source_object: { type: "notebook_item"; id: string };
+  source_scope_id: string;
+  target_module: "research";
+  topic: string;
+  summary: string;
+  selected_content: Array<{
+    kind: "summary" | "detail";
+    label: string;
+    content: string;
+  }>;
+  confirmed_at: string;
+}
+
 export interface ResearchConversationResponse {
   schema_version: typeof RESEARCH_CONVERSATION_SCHEMA;
   active_skill: "research-clarification";
@@ -196,6 +215,7 @@ export interface ResearchConversationResponse {
   candidate_questions: string[];
   messages: ResearchConversationMessage[];
   last_run_id: string | null;
+  context_provenance: ConfirmedContextProvenance | null;
 }
 
 export interface ProviderStatusResponse {
