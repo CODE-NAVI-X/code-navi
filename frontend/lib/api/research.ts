@@ -97,12 +97,23 @@ export interface ResearchMindMap {
 
 export type AnalysisClassification = "fact" | "inference" | "to_verify";
 
+export interface EvidenceReference {
+  bundle_id: string;
+  paper_url: string;
+  title: string;
+  source_name: string;
+  year: number | null;
+  evidence_level: "metadata" | "abstract" | "full_text";
+  evidence_summary: string | null;
+}
+
 export interface ResearchAnalysisItem {
   area: string;
   content: string;
   classification: AnalysisClassification;
   basis: string;
   source_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+  evidence_refs: EvidenceReference[];
 }
 
 export interface TopicDifficultyAnalysis {
@@ -284,6 +295,17 @@ export interface AcademicPaperResult {
   abstract_excerpt: string | null;
   information_scope: "metadata_and_abstract_only";
   full_text_available: false;
+  metadata_evidence: EvidenceStatement[];
+  supporting_snippets: EvidenceStatement[];
+  relevance: EvidenceStatement;
+  verification: EvidenceStatement;
+}
+
+export interface EvidenceStatement {
+  content: string;
+  classification: "fact" | "inference" | "to_verify";
+  source_url: string | null;
+  basis: string;
 }
 
 export interface AcademicSourceStatus {
@@ -319,6 +341,18 @@ export interface ConversationEvidenceBundle {
   provenance_note: string;
   tool_audit: Record<string, unknown> | null;
   cache_hit: boolean;
+}
+
+export interface SavedResearchNotebookNote {
+  schema_version: "research-notebook-note.v1";
+  notebook_item_id: string;
+  learning_session_id: string;
+  conversation_id: string;
+  bundle_id: string;
+  research_topic: string;
+  research_question: string;
+  evidence_refs: EvidenceReference[];
+  next_steps: string[];
 }
 
 export class ResearchApiError extends Error {
@@ -418,6 +452,24 @@ export async function listResearchEvidence(
 ): Promise<ConversationEvidenceBundle[]> {
   return request<ConversationEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles`,
+  );
+}
+
+export async function saveResearchNotebookNote(
+  conversationId: string,
+  bundleId: string,
+  learningSessionId: string,
+  selectedPaperUrls: string[],
+): Promise<SavedResearchNotebookNote> {
+  return request<SavedResearchNotebookNote>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles/${encodeURIComponent(bundleId)}/notebook-notes`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        learning_session_id: learningSessionId,
+        selected_paper_urls: selectedPaperUrls,
+      }),
+    },
   );
 }
 

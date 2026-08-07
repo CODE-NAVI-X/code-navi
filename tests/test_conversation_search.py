@@ -169,6 +169,98 @@ def test_repeated_search_uses_persistent_cache_and_restores_bundle(
     assert restored.json()[0]["bundle_id"] == first.json()["bundle_id"]
 
 
+def test_selected_evidence_is_saved_as_a_traceable_learning_research_note(
+    client: TestClient,
+) -> None:
+    source = FakeSource()
+    _conversation_search_service.search_tool = AcademicSearchTool({"arxiv": source})
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想研究编程学习中的生成式 AI"},
+    ).json()
+    conversation_id = created["conversation_id"]
+    bundle = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/evidence-bundles",
+        json={"sources": ["arxiv"]},
+    ).json()
+    paper = bundle["papers"][0]
+    save_url = (
+        f"/api/v1/research/conversations/{conversation_id}/evidence-bundles/"
+        f"{bundle['bundle_id']}/notebook-notes"
+    )
+
+    first = client.post(
+        save_url,
+        json={
+            "learning_session_id": "sess-research-notebook",
+            "selected_paper_urls": [paper["url"]],
+        },
+    )
+    repeated = client.post(
+        save_url,
+        json={
+            "learning_session_id": "sess-research-notebook",
+            "selected_paper_urls": [paper["url"]],
+        },
+    )
+    notebook = client.get(
+        "/api/v1/learning/notebook",
+        params={"session_id": "sess-research-notebook"},
+    )
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.json()["notebook_item_id"] == first.json()["notebook_item_id"]
+    assert first.json()["conversation_id"] == conversation_id
+    assert first.json()["bundle_id"] == bundle["bundle_id"]
+    assert first.json()["evidence_refs"][0] == {
+        "bundle_id": bundle["bundle_id"],
+        "paper_url": paper["url"],
+        "title": paper["title"],
+        "source_name": "arXiv",
+        "year": 2025,
+        "evidence_level": "abstract",
+        "evidence_summary": paper["abstract_excerpt"],
+    }
+    assert notebook.status_code == 200
+    assert len(notebook.json()) == 1
+    note = notebook.json()[0]
+    assert note["kind"] == "research_note"
+    assert note["research_note"]["conversation_id"] == conversation_id
+    assert note["research_note"]["bundle_id"] == bundle["bundle_id"]
+    assert note["source_url"] == paper["url"]
+
+
+def test_research_note_rejects_evidence_outside_the_selected_bundle(
+    client: TestClient,
+) -> None:
+    _conversation_search_service.search_tool = AcademicSearchTool({"arxiv": FakeSource()})
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想研究编程学习中的生成式 AI"},
+    ).json()
+    conversation_id = created["conversation_id"]
+    bundle = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/evidence-bundles",
+        json={"sources": ["arxiv"]},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/evidence-bundles/"
+        f"{bundle['bundle_id']}/notebook-notes",
+        json={
+            "learning_session_id": "sess-research-notebook",
+            "selected_paper_urls": ["https://example.invalid/not-in-bundle"],
+        },
+    )
+
+    assert response.status_code == 404
+    assert client.get(
+        "/api/v1/learning/notebook",
+        params={"session_id": "sess-research-notebook"},
+    ).json() == []
+
+
 def test_sparse_conversation_cannot_start_network_search(client: TestClient) -> None:
     _conversation_service.decision_generator = type(
         "UnavailableGenerator",

@@ -26,6 +26,7 @@ Code Navi（智教码航）面向学生自主学习、代码练习和项目实�
 4. 笔记读取按学习 `session_id` 隔离；
 5. Provider 失败不得伪装为已有知识来源或执行成功。
 6. 演示文稿必须显示规则、模型或降级来源；归档读取按学习 `session_id` 隔离，图片只接受受限的内联 PNG、JPEG 或 WebP 数据。
+7. 用户显式保存的科研证据可作为研究笔记进入当前 Learning Notebook；研究笔记保留对应 Research Conversation、Evidence Bundle、论文来源和信息范围。
 
 当前不引入 OpenMAIC，也不设计其适配器、前端承载或集成测试。
 
@@ -54,6 +55,7 @@ Code Navi（智教码航）面向学生自主学习、代码练习和项目实�
 2. 外部检索结果包含注册工具返回的来源、检索范围和失败状态；
 3. 主流程可以通过 `conversation_id` 恢复对话、规则研究计划与证据；
 4. 项目、课程、多 Agent 和远程仓库流程在分别跑通前不计入现有能力。
+5. Evidence 条目展示来源平台、标题、年份、原始链接、摘要与全文可用状态及规则相关性；使用 Evidence 的研究分析必须返回可核验的 Evidence 引用。
 
 原五字段 `research_sessions` 流程仅作为兼容 API 保留，不再代表当前科研页面和产品主流程。
 
@@ -66,6 +68,8 @@ Code Navi（智教码航）面向学生自主学习、代码练习和项目实�
 5. 浏览器内存状态和 `localStorage` 只是当前本地原型状态，不是身份、授权或跨设备会话。
 
 Learning 可以从真实摘要笔记创建 `context-transfer.v1` Research 待确认上下文；服务端保存来源模块、来源对象、学习会话、目标模块、主题、摘要和用户选择内容。确认页支持刷新恢复、修改、删除补充内容和取消；只有用户点击确认后，服务端才使用页面最终数据创建科研会话，并在会话中保存 `context-provenance.v1` 来源及最终快照。Research 每轮需求澄清都从会话加载该快照，将其作为已确认学习背景，避免重复询问其中已经明确的信息；一般知识内容不会自动变成用户的研究问题、方法、数据或结论。确认过程不调用模型或继承工具权限。`FlowPayload` 仅保留 Learning 到 Practice 的进程内原型接力，刷新后丢失。
+
+Research → Learning 回程只在用户从已保存 Evidence Bundle 中选择论文并确认保存后发生。前端显式提交当前 Learning `session_id`，服务端验证 Conversation、Bundle 与论文归属后写入 `research_note`；重复保存同一选择不会创建重复记录。
 
 ## 4. 当前非目标
 
