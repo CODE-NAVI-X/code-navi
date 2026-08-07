@@ -58,6 +58,108 @@ export interface ConversationResearchPlan {
   provenance_note: string;
 }
 
+export type ResearchMindMapNodeStatus =
+  | "confirmed"
+  | "inference"
+  | "to_verify"
+  | "evidence"
+  | "risk";
+
+export interface ResearchMindMapSource {
+  label: string;
+  url: string;
+  accessed_at: string;
+}
+
+export interface ResearchMindMapNode {
+  id: string;
+  label: string;
+  status: ResearchMindMapNodeStatus;
+  detail: string;
+  sources: ResearchMindMapSource[];
+}
+
+export interface ResearchMindMapEdge {
+  source_id: string;
+  target_id: string;
+  relation: string;
+}
+
+export interface ResearchMindMap {
+  schema_version: "research-mindmap.v1";
+  root_node_id: string;
+  nodes: ResearchMindMapNode[];
+  edges: ResearchMindMapEdge[];
+  provenance_note: string;
+}
+
+export type AnalysisClassification = "fact" | "inference" | "to_verify";
+
+export interface ResearchAnalysisItem {
+  area: string;
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+  source_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+}
+
+export interface TopicDifficultyAnalysis {
+  schema_version: "topic-difficulty-analysis.v1";
+  title: string;
+  information_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+  items: ResearchAnalysisItem[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
+export interface PaperAnalysis {
+  schema_version: "paper-analysis.v1";
+  title: string;
+  paper_url: string;
+  information_scope: "metadata_and_abstract_only";
+  abstract_available: boolean;
+  items: ResearchAnalysisItem[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
+export interface ExperimentDesign {
+  schema_version: "experiment-design.v1";
+  hypothesis: ResearchPlanEntry;
+  variables: ResearchPlanEntry[];
+  data_sources: ResearchPlanEntry[];
+  baselines: ResearchPlanEntry[];
+  metrics: ResearchPlanEntry[];
+  steps: ResearchPlanEntry[];
+  resources: ResearchPlanEntry[];
+  risks: ResearchPlanEntry[];
+  advisor_confirmation_items: ResearchPlanEntry[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
+export interface ExperimentCodeDraftFile { path: string; content: string; }
+export interface ExperimentCodeDraft {
+  schema_version: "experiment-code-draft.v1";
+  title: string;
+  directory_tree: string[];
+  dependencies: string[];
+  files: ExperimentCodeDraftFile[];
+  run_instructions: string[];
+  assumptions: string[];
+  to_verify_items: string[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
 export interface ResearchConversationMessage {
   message_id: string;
   role: "user" | "assistant";
@@ -83,6 +185,9 @@ export interface ResearchConversationResponse {
   stage: ResearchStage;
   ready_for_plan: boolean;
   research_plan: ConversationResearchPlan | null;
+  research_mindmap: ResearchMindMap;
+  topic_difficulty_analysis: TopicDifficultyAnalysis;
+  experiment_design: ExperimentDesign | null;
   reply: string;
   generation_mode: GenerationMode;
   recommended_action: RecommendedAction;
@@ -213,6 +318,7 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const MODEL_TURN_TIMEOUT_MS = 25_000;
 
 export async function createResearchConversation(
   initialMessage?: string,
@@ -240,6 +346,7 @@ export async function sendResearchMessage(
   const data = await request<unknown>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/messages`,
     { method: "POST", body: JSON.stringify({ message }) },
+    MODEL_TURN_TIMEOUT_MS,
   );
   return validateConversationResponse(data);
 }
@@ -291,6 +398,43 @@ export async function listResearchEvidence(
 ): Promise<ConversationEvidenceBundle[]> {
   return request<ConversationEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles`,
+  );
+}
+
+export async function analyzeResearchPaper(
+  conversationId: string,
+  paperUrl: string,
+): Promise<PaperAnalysis> {
+  return request<PaperAnalysis>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-analysis`,
+    { method: "POST", body: JSON.stringify({ paper_url: paperUrl }) },
+  );
+}
+
+export async function generateTopicDifficultyAnalysis(
+  conversationId: string,
+): Promise<TopicDifficultyAnalysis> {
+  return request<TopicDifficultyAnalysis>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/topic-difficulty-analysis`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function generateExperimentDesign(
+  conversationId: string,
+): Promise<ExperimentDesign> {
+  return request<ExperimentDesign>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-design`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function createExperimentCodeDraft(
+  conversationId: string,
+): Promise<ExperimentCodeDraft> {
+  return request<ExperimentCodeDraft>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
   );
 }
 

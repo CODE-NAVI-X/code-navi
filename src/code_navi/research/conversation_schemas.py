@@ -126,9 +126,7 @@ class ResearchConversationDecision(BaseModel):
         "prepare_search",
     ] = "continue_dialogue"
 
-    @field_validator(
-        "candidate_questions", "assumptions", "uncertainties", "suggested_answers"
-    )
+    @field_validator("candidate_questions", "assumptions", "uncertainties", "suggested_answers")
     @classmethod
     def normalize_decision_lists(cls, values: list[str]) -> list[str]:
         """Keep assistant-facing suggestions non-empty and unique."""
@@ -151,11 +149,14 @@ class ResearchConversationMessage(BaseModel):
     next_question: str | None = None
     suggested_answers: list[str] = Field(default_factory=list)
     candidate_questions: list[str] = Field(default_factory=list)
-    recommended_action: Literal[
-        "continue_dialogue",
-        "review_profile",
-        "prepare_search",
-    ] | None = None
+    recommended_action: (
+        Literal[
+            "continue_dialogue",
+            "review_profile",
+            "prepare_search",
+        ]
+        | None
+    ) = None
 
 
 class ResearchReadiness(BaseModel):
@@ -168,6 +169,7 @@ class ResearchReadiness(BaseModel):
 
 
 PlanClassification = Literal["inference", "to_verify"]
+MindMapNodeStatus = Literal["confirmed", "inference", "to_verify", "evidence", "risk"]
 
 
 class ResearchPlanEntry(BaseModel):
@@ -204,6 +206,164 @@ class ConversationResearchPlan(BaseModel):
     suggested_search_keywords: list[str] = Field(min_length=1, max_length=8)
     pending_items: list[ResearchPlanEntry] = Field(default_factory=list)
     provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class ResearchMindMapSource(BaseModel):
+    """One traceable source attached to a mind-map evidence node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=500)
+    url: str = Field(min_length=1, max_length=2000)
+    accessed_at: datetime
+
+
+class ResearchMindMapNode(BaseModel):
+    """A display-safe research concept with an explicit epistemic status."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=500)
+    status: MindMapNodeStatus
+    detail: str = Field(min_length=1, max_length=1000)
+    sources: list[ResearchMindMapSource] = Field(default_factory=list, max_length=6)
+
+
+class ResearchMindMapEdge(BaseModel):
+    """A directed, explainable relationship between two mind-map nodes."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_id: str = Field(min_length=1, max_length=100)
+    target_id: str = Field(min_length=1, max_length=100)
+    relation: str = Field(min_length=1, max_length=200)
+
+
+class ResearchMindMap(BaseModel):
+    """Offline node-and-edge graph derived from a profile, plan, and saved evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["research-mindmap.v1"] = "research-mindmap.v1"
+    root_node_id: str = Field(min_length=1, max_length=100)
+    nodes: list[ResearchMindMapNode] = Field(min_length=1, max_length=40)
+    edges: list[ResearchMindMapEdge] = Field(default_factory=list, max_length=80)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+AnalysisClassification = Literal["fact", "inference", "to_verify"]
+
+
+class ResearchAnalysisItem(BaseModel):
+    """One scoped difficulty observation with its epistemic boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    area: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=1000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+    source_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+
+
+class TopicDifficultyAnalysis(BaseModel):
+    """Rules-only direction analysis; it does not claim paper-specific findings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["topic-difficulty-analysis.v1"] = "topic-difficulty-analysis.v1"
+    title: str = Field(min_length=1, max_length=500)
+    information_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+    items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+
+
+class PaperAnalysis(BaseModel):
+    """Metadata/abstract-only paper analysis returned for an explicitly selected paper."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-analysis.v1"] = "paper-analysis.v1"
+    title: str = Field(min_length=1, max_length=1000)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    information_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+    abstract_available: bool
+    items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+
+
+class ExperimentDesign(BaseModel):
+    """Offline experiment suggestions derived from a rules research plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment-design.v1"] = "experiment-design.v1"
+    hypothesis: ResearchPlanEntry
+    variables: list[ResearchPlanEntry] = Field(min_length=1, max_length=6)
+    data_sources: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    baselines: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    metrics: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    steps: list[ResearchPlanEntry] = Field(min_length=1, max_length=6)
+    resources: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    risks: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    advisor_confirmation_items: list[ResearchPlanEntry] = Field(min_length=1, max_length=4)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+
+
+class ExperimentCodeDraftFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    path: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=10000)
+
+
+class ExperimentCodeDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment-code-draft.v1"] = "experiment-code-draft.v1"
+    title: str = Field(min_length=1, max_length=500)
+    directory_tree: list[str] = Field(min_length=1, max_length=20)
+    dependencies: list[str] = Field(default_factory=list, max_length=10)
+    files: list[ExperimentCodeDraftFile] = Field(min_length=1, max_length=10)
+    run_instructions: list[str] = Field(min_length=1, max_length=6)
+    assumptions: list[str] = Field(min_length=1, max_length=8)
+    to_verify_items: list[str] = Field(min_length=1, max_length=8)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+
+
+class CreateExperimentCodeDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_confirmed: Literal[True]
+
+
+class GenerateResearchArtifactRequest(BaseModel):
+    """Require an explicit user action before an optional model call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_confirmed: Literal[True]
+
+
+class AnalyzeConversationPaperRequest(BaseModel):
+    """Identify a paper already stored in the current conversation's evidence bundles."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    paper_url: str = Field(min_length=1, max_length=2000)
 
 
 class CreateResearchConversationRequest(BaseModel):
@@ -249,6 +409,9 @@ class ResearchConversationResponse(BaseModel):
     stage: Literal["exploring", "focusing", "ready_for_plan"]
     ready_for_plan: bool
     research_plan: ConversationResearchPlan | None = None
+    research_mindmap: ResearchMindMap
+    topic_difficulty_analysis: TopicDifficultyAnalysis
+    experiment_design: ExperimentDesign | None = None
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
     recommended_action: Literal[

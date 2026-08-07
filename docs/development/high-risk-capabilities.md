@@ -9,6 +9,7 @@
 3. 本机配置可以写入已忽略的 `.code-navi/provider.env`；状态接口不返回密钥，浏览器也不持久化密钥。
 4. `PUT /api/v1/research/provider/configuration` 与 `POST /api/v1/research/provider/test` 默认禁用，只有显式设置 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=true` 且请求来自 loopback 时可用；公开部署不得启用。
 5. 发送敏感内容或费用边界不清楚时，调用前取得用户确认。
+6. 科研难点、实验方案和代码草案个性化不得随创建、发送消息或恢复会话自动调用；只接受独立的显式确认请求，并记录 Runtime Event。模型不得替换服务端维护的可执行代码模板。
 
 模型调用的 Runtime 与审计边界统一见 [系统架构](../architecture/system.md)，本文件不重复。
 

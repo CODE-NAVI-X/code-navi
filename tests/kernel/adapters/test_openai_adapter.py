@@ -131,6 +131,15 @@ def test_request_translation_is_stateless_non_strict_and_sdk_retry_free() -> Non
     assert result.metadata["request_id"] == "req-text"
 
 
+def test_adapter_passes_timeout_to_sdk_transport() -> None:
+    client = FakeClient([native_text("done")])
+
+    adapter = OpenAIResponsesAdapter("explicit-model", client=client, timeout=2.5)
+    adapter.complete([text_message("bounded")])
+
+    assert client.options == [{"max_retries": 0, "timeout": 2.5}]
+
+
 def test_official_sdk_serializes_recorded_request_and_parses_response() -> None:
     captured: list[dict] = []
 

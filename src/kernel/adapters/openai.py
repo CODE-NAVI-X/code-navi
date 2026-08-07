@@ -39,11 +39,14 @@ class OpenAIResponsesAdapter:
         client: Any | None = None,
         max_output_tokens: int | None = None,
         max_context: int | None = None,
+        timeout: float | None = None,
     ) -> None:
         if not model.strip():
             raise ValueError("model is required")
         if max_output_tokens is not None and max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be None or positive")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be None or positive")
         self.model = model
         self.max_output_tokens = max_output_tokens
         self.capabilities = ProviderCapabilities(
@@ -52,8 +55,13 @@ class OpenAIResponsesAdapter:
             max_context=max_context,
             unsupported_content_blocks=frozenset({"image_ref", "artifact_ref"}),
         )
+        client_options: dict[str, Any] = {"max_retries": 0}
+        if timeout is not None:
+            client_options["timeout"] = timeout
         self._client = (
-            openai.OpenAI(max_retries=0) if client is None else client.with_options(max_retries=0)
+            openai.OpenAI(**client_options)
+            if client is None
+            else client.with_options(**client_options)
         )
 
     def complete(

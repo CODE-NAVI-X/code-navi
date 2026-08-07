@@ -11,14 +11,22 @@ from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
 from .conversation_schemas import (
+    AnalyzeConversationPaperRequest,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
+    CreateExperimentCodeDraftRequest,
     CreateResearchConversationRequest,
+    ExperimentCodeDraft,
+    ExperimentDesign,
+    GenerateResearchArtifactRequest,
+    PaperAnalysis,
     ResearchConversationResponse,
     ResearchSearchPlan,
     SendResearchMessageRequest,
+    TopicDifficultyAnalysis,
 )
 from .conversation_search_service import (
+    ConversationPaperNotFoundError,
     ConversationSearchNotReadyError,
     ResearchConversationSearchService,
 )
@@ -197,6 +205,85 @@ def list_conversation_evidence_bundles(
     """Restore saved evidence bundles without accessing external sources."""
     try:
         return _conversation_search_service.list_bundles(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/paper-analysis",
+    response_model=PaperAnalysis,
+)
+def analyze_conversation_paper(
+    conversation_id: str,
+    request: AnalyzeConversationPaperRequest,
+    db: Session = _db_dependency,
+) -> PaperAnalysis:
+    """Analyze only metadata/abstract from a user-selected saved evidence item."""
+    try:
+        return _conversation_search_service.analyze_paper(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ConversationPaperNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Paper is not present in this conversation's saved evidence bundles.",
+        ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/topic-difficulty-analysis",
+    response_model=TopicDifficultyAnalysis,
+)
+def generate_topic_difficulty_analysis(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> TopicDifficultyAnalysis:
+    """Run one audited personalization after explicit user confirmation."""
+    del request
+    try:
+        return _conversation_service.generate_topic_difficulty_analysis(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/experiment-design",
+    response_model=ExperimentDesign,
+)
+def generate_experiment_design(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> ExperimentDesign:
+    """Run one audited experiment-design personalization after confirmation."""
+    del request
+    try:
+        design = _conversation_service.generate_experiment_design(conversation_id, db)
+        if design is None:
+            raise HTTPException(
+                status_code=409,
+                detail="当前科研画像尚未形成规则研究计划。",
+            )
+        return design
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/experiment-code-draft",
+    response_model=ExperimentCodeDraft,
+)
+def create_experiment_code_draft(
+    conversation_id: str,
+    request: CreateExperimentCodeDraftRequest,
+    db: Session = _db_dependency,
+) -> ExperimentCodeDraft:
+    """Return preview code only after the request explicitly confirms intent."""
+    try:
+        return _conversation_service.create_experiment_code_draft(conversation_id, db)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 

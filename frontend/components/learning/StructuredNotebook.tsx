@@ -83,6 +83,8 @@ function PresentationPreviewOverlay({
             generating={false}
             currentIndex={idx}
             onNavigate={setIdx}
+            generationMode={detail.generation_mode}
+            providerName={detail.provider_name}
           />
         ) : (
           <p className="py-16 text-center text-xs text-slate-400">此 PPT 无内容</p>
