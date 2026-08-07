@@ -2,9 +2,9 @@
 
 ## 1. 当前结论
 
-仓库已经有本地 FastAPI/Next 闭环、`/health`、显式 CORS allowlist、统一 500 错误边界、共享 SQLAlchemy 配置和 Alembic migrations。当前没有 Web/API 生产打包、身份授权、生产数据运维、监控或已验证回滚，因此只能标记为本地验证，不能标记为生产可用。
+仓库已经有本地 FastAPI/Next 闭环、后端与前端容器镜像、Caddy 统一入口、`/health`、显式 CORS allowlist、统一 500 错误边界、共享 SQLAlchemy 配置和 Alembic migrations。`compose.web.yaml` 使用本地标签构建镜像，并针对当前 NAS 挂载既有 TLS 证书、启用 Basic Auth 和持久化 SQLite、Provider 配置与 Event。
 
-当前 CLI Compose 同样只是本地容器验证基线，不是生产服务。
+这套配置是受限环境部署骨架，不是生产发布：应用没有用户身份和资源所有权校验，镜像未版本化，SQLite 没有已验证的备份恢复，服务没有速率限制、监控或已执行回滚。当前 CLI Compose 同样只是本地容器验证基线。
 
 ## 2. Web/API 生产阻塞项
 
@@ -12,23 +12,27 @@
 
 1. 学习笔记当前使用固定 `poc-user`，学习 `session_id` 由浏览器持有；必须改为服务端认证身份与授权查询。
 2. 科研主流程当前可凭 `conversation_id` 读取，兼容流程可凭 `session_id` 读取；两者都必须绑定所有者并验证访问权限。
-3. `localStorage` 中的标识不能作为授权凭据或多用户隔离措施。
-4. 确定生产数据库，验证连接池、迁移、备份、恢复、保留期和删除流程。
+3. 练习记录当前可凭浏览器生成的 `learner_id` 查询；必须绑定服务端身份，并为记录读取、保留和删除建立授权。
+4. `localStorage` 中的标识不能作为授权凭据或多用户隔离措施。
+5. 确定生产数据库，并把独立的练习 SQLite 纳入迁移、连接、备份、恢复、保留期和删除流程。
 
 ### 发布产物与拓扑
 
-1. 固定受支持的 Node 版本，并为 FastAPI 和 Next 分别定义版本化构建、启动命令、端口、进程管理和健康检查。
-2. 定义反向代理、TLS、公开域名和 API 地址；生产前端不得依赖 localhost 默认值。
-3. 发布流程必须先执行 Alembic upgrade，再启动依赖新 schema 的应用。
-4. 记录镜像或产物版本、配置版本和目标环境；Docker 构建与前端 npm 锁文件必须可重复。
+1. 将当前 `:local` 镜像改为可追溯的版本标签，并记录源码版本、构建参数、配置版本和目标环境。
+2. 将 NAS 绝对证书路径和固定域名从共享部署基线中参数化；明确证书更新、到期检查和失败恢复方式。
+3. 保持同源 API 拓扑；若绕过 Caddy 直接访问后端，必须为实际来源配置 CORS，并验证认证方式对应的 CSRF 边界。
+4. 保持后端启动前执行 Alembic upgrade，并验证迁移失败时不会启动依赖新 schema 的应用。
+5. 为 FastAPI、Next 和 Caddy 分别定义健康、就绪、进程管理和有界重启行为；当前 `/health` 只覆盖 FastAPI 进程。
+6. 在干净环境验证锁定依赖的镜像构建，不依赖构建机缓存或未记录文件。
 
 ### 安全与可观测性
 
-1. 为生产域配置 `CODE_NAVI_CORS_ORIGINS`；根据最终认证方式补齐 CSRF 防护。
+1. 用应用级认证和资源所有权校验保护学习、科研与练习 API；Caddy Basic Auth 只作为当前入口的额外访问门槛。
 2. 增加认证失败、授权失败、请求大小、速率限制和超时边界。
-3. 凭据通过正式密钥管理注入；日志、错误、Event 和数据库字段进行敏感信息检查。
-4. 为健康、请求失败、Provider、数据库迁移和外部检索建立必要指标、告警和负责人。
-5. 公开环境保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`，Provider 凭据只通过正式密钥管理注入。
+3. 凭据通过正式密钥管理注入；当前复制到数据卷的 `provider.env` 不作为生产密钥管理方案。
+4. 对日志、错误、Event 和数据库字段执行敏感信息检查。
+5. 为健康、请求失败、Provider、数据库迁移和外部检索建立必要指标、告警和负责人。
+6. 公开环境保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`。
 
 当前 `/health` 只证明 FastAPI 进程存活，不检查数据库或外部依赖；生产 readiness 需要覆盖实际关键依赖。
 
@@ -57,7 +61,7 @@
 
 ## 5. 高风险服务
 
-代码执行器必须与 Web/API 分开部署和授权，默认禁网并限制 CPU、内存、时间、进程、文件系统和输出；执行服务不得读取 Provider、数据库或仓库凭据。
+当前 Piston 只接入 `compose.yaml`，并以 privileged 容器运行；`compose.web.yaml` 不提供练习执行服务。生产代码执行器必须与 Web/API 分开部署和授权，移除宿主级 privileged 依赖，默认禁网并实际验证 CPU、内存、时间、进程、文件系统、临时工作区和输出限制；执行服务不得读取 Provider、数据库或仓库凭据。
 
 远程仓库写入使用独立最小权限凭据，展示仓库、分支和动作并获得确认。Web 上线不会自动授予代码执行或仓库写入权限。详细开发顺序见 [高风险能力](../development/high-risk-capabilities.md)。
 
