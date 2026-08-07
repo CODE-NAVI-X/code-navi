@@ -37,6 +37,15 @@ def test_research_skill_docs_declare_the_same_minimum_contract() -> None:
             assert heading in content, f"{skill_name} 缺少 Skill 契约：{heading}"
 
 
+def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
+    for skill_name in ("paper_draft_review", "paper_revision"):
+        content = (
+            REPOSITORY_ROOT / "docs" / "skills" / skill_name / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        for heading in REQUIRED_CONTRACT_HEADINGS:
+            assert heading in content, f"{skill_name} 文档 Skill 缺少契约：{heading}"
+
+
 def test_research_demo_docs_describe_the_closed_loop_and_non_goals() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     roadmap = (REPOSITORY_ROOT / "docs" / "product" / "roadmap.md").read_text(encoding="utf-8")
