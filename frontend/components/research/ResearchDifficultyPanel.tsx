@@ -82,6 +82,15 @@ export function ResearchDifficultyPanel({
             </div>
             <p className="mt-2 text-slate-700 dark:text-zinc-300">{item.content}</p>
             <p className="mt-1 text-[10px] text-slate-500">依据：{item.basis}</p>
+            {item.evidence_refs.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {item.evidence_refs.map((reference) => (
+                  <a key={`${reference.bundle_id}:${reference.paper_url}`} href={reference.paper_url} target="_blank" rel="noreferrer" className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-700 hover:underline dark:bg-sky-950/40 dark:text-sky-300">
+                    Evidence：{reference.title}
+                  </a>
+                ))}
+              </div>
+            )}
           </li>
         ))}
       </ul>

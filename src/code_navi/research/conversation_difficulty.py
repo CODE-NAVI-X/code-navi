@@ -5,6 +5,7 @@ from __future__ import annotations
 from .conversation_schemas import (
     ConversationEvidenceBundle,
     ConversationResearchPlan,
+    EvidenceReference,
     PaperAnalysis,
     ResearchAnalysisItem,
     ResearchProfile,
@@ -105,6 +106,17 @@ def build_topic_difficulty_analysis(
                         "classification": "inference|to_verify",
                         "basis": "string",
                         "source_scope": "profile_and_plan_only|metadata_and_abstract_only",
+                        "evidence_refs": [
+                            {
+                                "bundle_id": "saved bundle id",
+                                "paper_url": "saved paper url",
+                                "title": "saved paper title",
+                                "source_name": "saved source name",
+                                "year": "integer or null",
+                                "evidence_level": "metadata|abstract",
+                                "evidence_summary": "saved abstract excerpt or null",
+                            }
+                        ],
                     }
                 ],
                 "provenance_note": "string",
@@ -116,6 +128,7 @@ def build_topic_difficulty_analysis(
 def build_paper_analysis(
     paper: AcademicPaperResult,
     *,
+    evidence_ref: EvidenceReference | None = None,
     generator: ResearchArtifactGenerator | None = None,
     conversation_id: str | None = None,
 ) -> PaperAnalysis:
@@ -129,6 +142,7 @@ def build_paper_analysis(
             "fact",
             paper.source_name,
             "metadata_and_abstract_only",
+            evidence_refs=[evidence_ref] if evidence_ref else [],
         ),
         _item(
             "关键概念与方法难点",
@@ -136,6 +150,7 @@ def build_paper_analysis(
             "to_verify",
             "当前信息范围仅为元数据和摘要。",
             "metadata_and_abstract_only",
+            evidence_refs=[evidence_ref] if evidence_ref else [],
         ),
         _item(
             "数据与实验难点",
@@ -143,6 +158,7 @@ def build_paper_analysis(
             "to_verify",
             "当前信息范围仅为元数据和摘要。",
             "metadata_and_abstract_only",
+            evidence_refs=[evidence_ref] if evidence_ref else [],
         ),
         _item(
             "复现与资源风险",
@@ -150,6 +166,7 @@ def build_paper_analysis(
             "to_verify",
             "未下载正文、代码或数据。",
             "metadata_and_abstract_only",
+            evidence_refs=[evidence_ref] if evidence_ref else [],
         ),
     ]
     rules = PaperAnalysis(
@@ -195,6 +212,15 @@ def build_paper_analysis(
         _assert_model_analysis_boundary(enhanced.items)
         if enhanced.paper_url != paper.url or enhanced.abstract_available != bool(abstract):
             raise ValueError("model changed selected paper identity or source scope")
+        if evidence_ref is not None:
+            enhanced = enhanced.model_copy(
+                update={
+                    "items": [
+                        item.model_copy(update={"evidence_refs": [evidence_ref]})
+                        for item in enhanced.items
+                    ]
+                }
+            )
         return enhanced.model_copy(
             update={
                 "generation_mode": "llm",
@@ -228,9 +254,25 @@ def _enhance_topic_analysis(
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
     try:
         enhanced = TopicDifficultyAnalysis.model_validate_json(outcome.text)
-        _assert_model_analysis_boundary(enhanced.items)
+        allowed_refs = _context_evidence_refs(context)
+        _assert_model_analysis_boundary(enhanced.items, allowed_refs=allowed_refs)
         if enhanced.information_scope != rules.information_scope:
             raise ValueError("model changed information scope")
+        enhanced = enhanced.model_copy(
+            update={
+                "items": [
+                    item.model_copy(
+                        update={
+                            "evidence_refs": [
+                                allowed_refs[(reference.bundle_id, reference.paper_url)]
+                                for reference in item.evidence_refs
+                            ]
+                        }
+                    )
+                    for item in enhanced.items
+                ]
+            }
+        )
         return enhanced.model_copy(
             update={
                 "generation_mode": "llm",
@@ -242,9 +284,22 @@ def _enhance_topic_analysis(
         return rules.model_copy(update={"generation_mode": "rules_fallback"})
 
 
-def _assert_model_analysis_boundary(items: list[ResearchAnalysisItem]) -> None:
+def _assert_model_analysis_boundary(
+    items: list[ResearchAnalysisItem],
+    *,
+    allowed_refs: dict[tuple[str, str], EvidenceReference] | None = None,
+) -> None:
     if any(item.classification == "fact" for item in items):
         raise ValueError("model cannot introduce fact-classified analysis")
+    if allowed_refs is not None:
+        for item in items:
+            if item.source_scope == "metadata_and_abstract_only" and not item.evidence_refs:
+                raise ValueError("evidence-scoped model analysis must cite saved evidence")
+            if any(
+                (reference.bundle_id, reference.paper_url) not in allowed_refs
+                for reference in item.evidence_refs
+            ):
+                raise ValueError("model cited evidence outside the saved conversation bundles")
 
 
 def _paper_context(bundles: list[ConversationEvidenceBundle]) -> list[dict[str, object]]:
@@ -254,6 +309,17 @@ def _paper_context(bundles: list[ConversationEvidenceBundle]) -> list[dict[str, 
             "url": paper.url,
             "source": paper.source_name,
             "abstract_excerpt": paper.abstract_excerpt,
+            "evidence_ref": {
+                "bundle_id": bundle.bundle_id,
+                "paper_url": paper.url,
+                "title": paper.title,
+                "source_name": paper.source_name,
+                "year": paper.year,
+                "evidence_level": "abstract" if paper.abstract_excerpt else "metadata",
+                "evidence_summary": paper.abstract_excerpt[:1000]
+                if paper.abstract_excerpt
+                else None,
+            },
         }
         for bundle in bundles
         for paper in bundle.papers
@@ -261,7 +327,13 @@ def _paper_context(bundles: list[ConversationEvidenceBundle]) -> list[dict[str, 
 
 
 def _item(
-    area: str, content: str, classification: str, basis: str, source_scope: str
+    area: str,
+    content: str,
+    classification: str,
+    basis: str,
+    source_scope: str,
+    *,
+    evidence_refs: list[EvidenceReference] | None = None,
 ) -> ResearchAnalysisItem:
     return ResearchAnalysisItem(
         area=_bounded(area, 200),
@@ -269,7 +341,29 @@ def _item(
         classification=classification,
         basis=_bounded(basis, 1000),
         source_scope=source_scope,
+        evidence_refs=evidence_refs or [],
     )
+
+
+def _context_evidence_refs(
+    context: dict[str, object],
+) -> dict[tuple[str, str], EvidenceReference]:
+    raw_papers = context.get("saved_papers")
+    if not isinstance(raw_papers, list):
+        return {}
+    allowed: dict[tuple[str, str], EvidenceReference] = {}
+    for paper in raw_papers:
+        if not isinstance(paper, dict):
+            continue
+        reference = paper.get("evidence_ref")
+        if not isinstance(reference, dict):
+            continue
+        try:
+            canonical = EvidenceReference.model_validate(reference)
+        except ValueError:
+            continue
+        allowed[(canonical.bundle_id, canonical.paper_url)] = canonical
+    return allowed
 
 
 def _bounded(value: str, limit: int) -> str:

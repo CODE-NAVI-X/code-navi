@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,11 +12,15 @@ from code_navi.research.conversation_code_draft import build_experiment_code_dra
 from code_navi.research.conversation_difficulty import build_topic_difficulty_analysis
 from code_navi.research.conversation_experiment import build_experiment_design
 from code_navi.research.conversation_plan import build_conversation_research_plan
-from code_navi.research.conversation_schemas import ResearchProfile
+from code_navi.research.conversation_schemas import (
+    ConversationEvidenceBundle,
+    ResearchProfile,
+)
 from code_navi.research.research_artifact_llm import (
     ArtifactLlmOutcome,
     RuntimeResearchArtifactGenerator,
 )
+from code_navi.research.schemas import AcademicPaperResult, EvidenceStatement
 from kernel.core import ContentBlock, Message, ProviderCapabilities, ProviderResult
 
 
@@ -72,6 +77,85 @@ def test_difficulty_uses_validated_model_wording_without_changing_fact_boundary(
     assert generator.calls == ["topic_difficulty_analysis"]
     assert analysis.generation_mode == "llm"
     assert analysis.items[0].classification == "inference"
+
+
+def test_evidence_scoped_model_difficulty_keeps_a_saved_evidence_reference() -> None:
+    paper = AcademicPaperResult(
+        title="Traceable feedback study",
+        authors=["Example Author"],
+        year=2025,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2501.00001",
+        abstract_excerpt="A source-provided abstract about feedback.",
+        accessed_at=datetime(2026, 8, 7, tzinfo=UTC),
+        information_scope="metadata_and_abstract_only",
+        metadata_evidence=[],
+        supporting_snippets=[],
+        relevance=EvidenceStatement(
+            content="可能相关。", classification="inference", basis="关键词匹配"
+        ),
+        verification=EvidenceStatement(
+            content="需要阅读全文。", classification="to_verify", basis="只有摘要"
+        ),
+        full_text_available=False,
+    )
+    bundle = ConversationEvidenceBundle(
+        bundle_id="bundle-model-trace",
+        conversation_id="conv-test",
+        query="feedback study",
+        requested_sources=["arxiv"],
+        allowed_sources=["arxiv"],
+        queried_sources=["arxiv"],
+        source_statuses=[],
+        searched_at=datetime(2026, 8, 7, tzinfo=UTC),
+        papers=[paper],
+        source_links=[paper.url],
+        failure_reasons=[],
+        provenance_note="仅元数据和摘要。",
+    )
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "title": "证据关联难点",
+                    "information_scope": "metadata_and_abstract_only",
+                    "items": [
+                        {
+                            "area": "方法难点",
+                            "content": "建议核验摘要中描述的方法边界。",
+                            "classification": "inference",
+                            "basis": "所选论文摘要",
+                            "source_scope": "metadata_and_abstract_only",
+                            "evidence_refs": [
+                                {
+                                    "bundle_id": bundle.bundle_id,
+                                    "paper_url": paper.url,
+                                    "title": paper.title,
+                                    "source_name": paper.source_name,
+                                    "year": paper.year,
+                                    "evidence_level": "abstract",
+                                    "evidence_summary": paper.abstract_excerpt,
+                                }
+                            ],
+                        }
+                    ],
+                    "provenance_note": "建议关联到已保存摘要。",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    analysis = build_topic_difficulty_analysis(
+        _profile(),
+        plan=build_conversation_research_plan(_profile(), ready_for_plan=True),
+        evidence_bundles=[bundle],
+        generator=generator,
+        conversation_id="conv-test",
+    )
+
+    assert analysis.generation_mode == "llm"
+    assert analysis.items[0].evidence_refs[0].bundle_id == bundle.bundle_id
 
 
 def test_invalid_model_fact_claim_falls_back_to_rules() -> None:

@@ -63,7 +63,14 @@ async def list_notebook_items(
             "kind": item.item_type,
             "content": item.content,
             "timestamp": item.created_at.isoformat() if item.created_at else None,
-            "source_url": None,
+            "source_url": (
+                ((item.extra_data or {}).get("evidence_refs") or [{}])[0].get("paper_url")
+                if item.item_type == "research_note"
+                else None
+            ),
+            "research_note": (
+                item.extra_data if item.item_type == "research_note" else None
+            ),
             # Presentation items carry their deck id so the client can re-fetch
             # the full slides for review without pulling every deck in the list.
             "presentation_id": (

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from code_navi.learning.models import NotebookItemModel
 from code_navi.research.academic import AcademicSearchTool
 from code_navi.research_tools import register_research_tools
 from kernel.core import (
@@ -18,14 +20,18 @@ from kernel.core import (
 )
 
 from .conversation_difficulty import build_paper_analysis
+from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
+    EvidenceReference,
     PaperAnalysis,
     ResearchProfile,
     ResearchSearchPlan,
     ResearchSearchSource,
+    SavedResearchNotebookNote,
+    SaveResearchNotebookNoteRequest,
 )
 from .conversation_service import ConversationNotFoundError, assess_readiness
 from .models import ResearchConversationModel, ResearchEvidenceBundleModel
@@ -33,6 +39,7 @@ from .research_artifact_llm import (
     ResearchArtifactGenerator,
     RuntimeResearchArtifactGenerator,
 )
+from .schemas import AcademicPaperResult
 
 
 class ConversationSearchNotReadyError(ValueError):
@@ -159,10 +166,101 @@ class ResearchConversationSearchService:
                 if paper.url == request.paper_url:
                     return build_paper_analysis(
                         paper,
+                        evidence_ref=_evidence_reference(bundle.bundle_id, paper),
                         generator=self.artifact_generator,
                         conversation_id=conversation_id,
                     )
         raise ConversationPaperNotFoundError(request.paper_url)
+
+    def save_notebook_note(
+        self,
+        conversation_id: str,
+        bundle_id: str,
+        request: SaveResearchNotebookNoteRequest,
+        db: Session,
+    ) -> SavedResearchNotebookNote:
+        """Archive selected, verified bundle papers in the target Learning session."""
+        conversation = self._get_conversation(conversation_id, db)
+        record = (
+            db.query(ResearchEvidenceBundleModel)
+            .filter(
+                ResearchEvidenceBundleModel.id == bundle_id,
+                ResearchEvidenceBundleModel.conversation_id == conversation_id,
+            )
+            .first()
+        )
+        if record is None:
+            raise ConversationPaperNotFoundError(bundle_id)
+        bundle = ConversationEvidenceBundle.model_validate(record.bundle_data)
+        papers_by_url = {paper.url: paper for paper in bundle.papers}
+        if any(url not in papers_by_url for url in request.selected_paper_urls):
+            raise ConversationPaperNotFoundError("selected paper is not in the evidence bundle")
+
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        question = next(iter(profile.research_questions or profile.candidate_questions), None)
+        research_topic = profile.topic or bundle.query
+        research_question = question or bundle.query
+        selected_urls = sorted(request.selected_paper_urls)
+        evidence_refs = [
+            _evidence_reference(bundle_id, papers_by_url[url])
+            for url in selected_urls
+        ]
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        next_steps = (
+            [entry.content for entry in plan.two_week_mvp_plan[:3]]
+            if plan is not None
+            else ["继续完善科研画像并确认下一步研究计划。"]
+        )
+        note_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "|".join(
+                    [
+                        conversation_id,
+                        bundle_id,
+                        request.learning_session_id,
+                        *selected_urls,
+                    ]
+                ),
+            )
+        )
+        payload = SavedResearchNotebookNote(
+            notebook_item_id=note_id,
+            learning_session_id=request.learning_session_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+            research_topic=research_topic,
+            research_question=research_question,
+            evidence_refs=evidence_refs,
+            next_steps=next_steps,
+        )
+        if db.get(NotebookItemModel, note_id) is None:
+            sources = "；".join(
+                f"{item.title}（{item.source_name}{f'，{item.year}' if item.year else ''}）"
+                + (f"：{item.evidence_summary}" if item.evidence_summary else "")
+                for item in evidence_refs
+            )
+            db.add(
+                NotebookItemModel(
+                    id=note_id,
+                    user_id="poc-user",
+                    session_id=request.learning_session_id,
+                    knowledge_id=f"research:{conversation_id}"[:64],
+                    item_type="research_note",
+                    content=(
+                        f"研究主题：{research_topic}\n"
+                        f"研究问题：{research_question}\n"
+                        f"主要证据：{sources}\n"
+                        f"下一步建议：{'；'.join(next_steps)}"
+                    ),
+                    extra_data=payload.model_dump(mode="json"),
+                )
+            )
+            db.commit()
+        return payload
 
     def _cached_bundle(
         self,
@@ -198,10 +296,15 @@ class ResearchConversationSearchService:
 
     @staticmethod
     def _profile(conversation_id: str, db: Session) -> ResearchProfile:
+        conversation = ResearchConversationSearchService._get_conversation(conversation_id, db)
+        return ResearchProfile.model_validate(conversation.profile_data)
+
+    @staticmethod
+    def _get_conversation(conversation_id: str, db: Session) -> ResearchConversationModel:
         conversation = db.get(ResearchConversationModel, conversation_id)
         if conversation is None:
             raise ConversationNotFoundError(conversation_id)
-        return ResearchProfile.model_validate(conversation.profile_data)
+        return conversation
 
 
 def _profile_queries(profile: ResearchProfile) -> list[str]:
@@ -220,6 +323,18 @@ def _profile_queries(profile: ResearchProfile) -> list[str]:
 def _bounded_query(parts: list[str | None]) -> str:
     values = [" ".join(value.split()) for value in parts if value and value.strip()]
     return " ".join(dict.fromkeys(values))[:300]
+
+
+def _evidence_reference(bundle_id: str, paper: AcademicPaperResult) -> EvidenceReference:
+    return EvidenceReference(
+        bundle_id=bundle_id,
+        paper_url=paper.url,
+        title=paper.title,
+        source_name=paper.source_name,
+        year=paper.year,
+        evidence_level="abstract" if paper.abstract_excerpt else "metadata",
+        evidence_summary=paper.abstract_excerpt[:1000] if paper.abstract_excerpt else None,
+    )
 
 
 __all__ = [

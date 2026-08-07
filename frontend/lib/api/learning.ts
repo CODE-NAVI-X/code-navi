@@ -422,11 +422,34 @@ export async function fetchPresentation(
 export interface NotebookItem {
   id: string;
   session_id: string;
-  kind: "summary" | "note" | "wrong_answer" | "presentation";
+  kind: "summary" | "note" | "wrong_answer" | "presentation" | "research_note";
   content: string;
   timestamp?: string | null;
   source_url?: string | null;
   presentation_id?: string | null;
+  research_note?: ResearchNotebookNote | null;
+}
+
+export interface ResearchNotebookEvidenceReference {
+  bundle_id: string;
+  paper_url: string;
+  title: string;
+  source_name: string;
+  year: number | null;
+  evidence_level: "metadata" | "abstract" | "full_text";
+  evidence_summary: string | null;
+}
+
+export interface ResearchNotebookNote {
+  schema_version: "research-notebook-note.v1";
+  notebook_item_id: string;
+  learning_session_id: string;
+  conversation_id: string;
+  bundle_id: string;
+  research_topic: string;
+  research_question: string;
+  evidence_refs: ResearchNotebookEvidenceReference[];
+  next_steps: string[];
 }
 
 export async function fetchNotebookItems(

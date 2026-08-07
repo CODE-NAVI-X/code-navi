@@ -14,6 +14,7 @@ from code_navi.research.conversation_mindmap import build_research_mindmap
 from code_navi.research.conversation_plan import build_conversation_research_plan
 from code_navi.research.conversation_schemas import (
     ConversationEvidenceBundle,
+    EvidenceReference,
     ResearchProfile,
 )
 from code_navi.research.schemas import AcademicPaperResult, EvidenceStatement
@@ -150,6 +151,41 @@ def test_paper_analysis_without_an_abstract_returns_only_verification_gaps() -> 
     assert analysis.abstract_available is False
     assert all(item.classification == "to_verify" for item in analysis.items[1:])
     assert "不下载全文" in analysis.provenance_note
+
+
+def test_paper_analysis_keeps_the_selected_evidence_reference() -> None:
+    paper = AcademicPaperResult(
+        title="Traceable paper",
+        authors=["Example Author"],
+        year=2025,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2501.00001",
+        abstract_excerpt="A source-provided abstract.",
+        accessed_at=datetime(2026, 8, 3, tzinfo=UTC),
+        information_scope="metadata_and_abstract_only",
+        metadata_evidence=[],
+        supporting_snippets=[],
+        relevance=EvidenceStatement(
+            content="可能相关。", classification="inference", basis="关键词匹配"
+        ),
+        verification=EvidenceStatement(
+            content="需要阅读全文。", classification="to_verify", basis="只有摘要"
+        ),
+        full_text_available=False,
+    )
+    reference = EvidenceReference(
+        bundle_id="bundle-traceable",
+        paper_url=paper.url,
+        title=paper.title,
+        source_name=paper.source_name,
+        year=paper.year,
+        evidence_level="abstract",
+        evidence_summary=paper.abstract_excerpt,
+    )
+
+    analysis = build_paper_analysis(paper, evidence_ref=reference)
+
+    assert all(item.evidence_refs == [reference] for item in analysis.items)
 
 
 def test_experiment_design_is_rules_only_and_keeps_unknown_resources_to_verify() -> None:

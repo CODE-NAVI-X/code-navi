@@ -254,6 +254,20 @@ class ResearchMindMap(BaseModel):
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
+class EvidenceReference(BaseModel):
+    """Stable reference to one paper stored in a conversation evidence bundle."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    bundle_id: str = Field(min_length=1, max_length=100)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=1000)
+    source_name: str = Field(min_length=1, max_length=200)
+    year: int | None = None
+    evidence_level: Literal["metadata", "abstract", "full_text"]
+    evidence_summary: str | None = Field(default=None, max_length=1000)
+
+
 AnalysisClassification = Literal["fact", "inference", "to_verify"]
 
 
@@ -267,6 +281,7 @@ class ResearchAnalysisItem(BaseModel):
     classification: AnalysisClassification
     basis: str = Field(min_length=1, max_length=1000)
     source_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+    evidence_refs: list[EvidenceReference] = Field(default_factory=list, max_length=8)
 
 
 class TopicDifficultyAnalysis(BaseModel):
@@ -463,6 +478,37 @@ class CreateConversationEvidenceBundleRequest(BaseModel):
         min_length=1,
         max_length=3,
     )
+
+
+class SaveResearchNotebookNoteRequest(BaseModel):
+    """Save selected evidence into one explicitly chosen Learning notebook."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    learning_session_id: str = Field(min_length=1, max_length=64)
+    selected_paper_urls: list[str] = Field(min_length=1, max_length=12)
+
+    @field_validator("selected_paper_urls")
+    @classmethod
+    def normalize_selected_papers(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("selected_paper_urls must not contain blank values")
+        return list(dict.fromkeys(normalized))
+
+
+class SavedResearchNotebookNote(BaseModel):
+    """Identity and provenance for a Research note archived in Learning."""
+
+    schema_version: Literal["research-notebook-note.v1"] = "research-notebook-note.v1"
+    notebook_item_id: str
+    learning_session_id: str
+    conversation_id: str
+    bundle_id: str
+    research_topic: str
+    research_question: str
+    evidence_refs: list[EvidenceReference]
+    next_steps: list[str]
 
 
 class ConversationEvidenceBundle(BaseModel):

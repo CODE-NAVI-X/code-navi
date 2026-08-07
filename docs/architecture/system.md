@@ -64,6 +64,7 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `GET /api/v1/research/conversations/{conversation_id}/search-plan` | `conversation_id` | 不联网的 `ResearchSearchPlan` |
 | `POST /api/v1/research/conversations/{conversation_id}/evidence-bundles` | 用户确认、查询和允许来源 | OpenAlex、Crossref、arXiv 元数据与摘要组成的 `ConversationEvidenceBundle` |
 | `GET /api/v1/research/conversations/{conversation_id}/evidence-bundles` | `conversation_id` | 已保存的 evidence bundle 列表，不触发联网 |
+| `POST /api/v1/research/conversations/{conversation_id}/evidence-bundles/{bundle_id}/notebook-notes` | Learning `session_id` 与用户选择的论文 URL | 校验 Conversation、Bundle 与论文归属，幂等写入可追溯的 `research_note` |
 | `GET /api/v1/research/provider/status` | 无 | 不含密钥的 `ProviderStatusResponse` |
 | `PUT /api/v1/research/provider/configuration`、`POST /api/v1/research/provider/test` | 本机显式配置或测试 | 默认禁用且仅允许 loopback 的 Provider 状态或测试结果 |
 | `/api/v1/research/sessions...` | 原五字段 session 请求 | 兼容 `ResearchSessionResponse` 和 legacy evidence bundle |
@@ -72,6 +73,8 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 请求 schema 不合法返回 422；科研对话或兼容会话不存在返回 404；画像尚未达到检索条件时返回 409；未处理异常返回不暴露内部细节的 500 和 `error_id`。调用方不得把这些状态映射为成功或空结果。
 
 动态研究画像维护主题、动机、问题、上下文、方法、数据需求、证据偏好、时间范围、限制、预期产出、假设和不确定性，并以 `research-conversation.v1` 返回。画像达到计划准备度后，纯规则生成器派生 `research-plan.v1`；它不调用模型或网络，只使用已校验画像，结构化条目只允许 `inference` 或 `to_verify`。检索计划和证据分别使用 `research-search-plan.v1`、`academic-evidence.v1`。原五字段规则只属于兼容流程；这些业务状态都不进入 Kernel 契约。
+
+Evidence 引用使用 Bundle ID、论文 URL、标题、来源平台、年份、证据级别和可用摘要片段。论文分析固定关联用户选中的 Evidence；模型生成的方向分析只有引用当前 Conversation 已保存的 Evidence 时，才可声明使用了元数据或摘要范围。
 
 由跨模块确认创建的科研会话额外返回 `context_provenance`，完整保存服务端来源引用、确认时间和用户最终确认内容。科研对话服务在每轮消息处理时从会话记录加载该快照：Runtime 请求通过 `confirmed_learning_context` 接收完整背景，离线规则也识别其存在并只追问画像中尚未明确的研究选择。来源快照不随后续对话修改，普通科研会话的该字段为 `null`。
 
@@ -118,6 +121,8 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 | 兼容科研 `session_id` | 恢复原五字段澄清状态与 turns | 当前科研页面主流程 |
 
 浏览器将学习 `session_id`、科研 `conversation_id` 和练习 `learner_id` 存入 `localStorage`，只提供同一浏览器内恢复，不提供身份绑定或授权。
+
+研究笔记仍由学习 `session_id` 隔离；其 `extra_data` 保存 `research-notebook-note.v1`，包括来源 Conversation、Bundle、选中 Evidence 和下一步建议。当前字符串 `item_type` 与 JSON 扩展列可直接承载该类型，不新增数据库列。
 
 业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。当前业务表包括 `notebook_items`、`context_transfers`、`research_sessions`、`research_conversations` 和 `research_evidence_bundles`。Runtime Event 单独写入 JSONL，不作为业务数据库。
 

@@ -2,10 +2,12 @@
 
 import {
   BookOpenCheck,
+  CheckCircle2,
   CircleAlert,
   ExternalLink,
   Loader2,
   Search,
+  Save,
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -20,7 +22,9 @@ import {
   ResearchApiError,
   type ResearchSearchPlan,
   searchResearchEvidence,
+  saveResearchNotebookNote,
 } from "@/lib/api/research";
+import { getLearningSessionId } from "@/lib/api/learning";
 
 function searchErrorMessage(error: unknown): string {
   if (error instanceof ResearchApiError) {
@@ -39,6 +43,9 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
   const [phase, setPhase] = useState<"planning" | "ready" | "searching">("planning");
   const [error, setError] = useState<string | null>(null);
   const [paperAnalysis, setPaperAnalysis] = useState<PaperAnalysis | null>(null);
+  const [selectedPaperUrls, setSelectedPaperUrls] = useState<string[]>([]);
+  const [savingNote, setSavingNote] = useState(false);
+  const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -71,10 +78,31 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
     setBundle(null);
     try {
       setBundle(await searchResearchEvidence(conversationId, query.trim(), selectedSources));
+      setSelectedPaperUrls([]);
+      setSavedNoteId(null);
     } catch (requestError) {
       setError(searchErrorMessage(requestError));
     } finally {
       setPhase("ready");
+    }
+  }
+
+  async function saveSelectedEvidence() {
+    if (!bundle || !selectedPaperUrls.length || savingNote) return;
+    setSavingNote(true);
+    setError(null);
+    try {
+      const saved = await saveResearchNotebookNote(
+        conversationId,
+        bundle.bundle_id,
+        getLearningSessionId(),
+        selectedPaperUrls,
+      );
+      setSavedNoteId(saved.notebook_item_id);
+    } catch (requestError) {
+      setError(searchErrorMessage(requestError));
+    } finally {
+      setSavingNote(false);
     }
   }
 
@@ -191,16 +219,33 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
             {bundle.papers.length ? (
               bundle.papers.map((paper) => (
                 <article key={paper.url} className="rounded-xl border border-slate-200 p-3 dark:border-zinc-700">
-                  <a href={paper.url} target="_blank" rel="noreferrer" className="flex items-start gap-2 text-sm font-bold leading-6 text-sky-700 hover:underline dark:text-sky-300">
-                    <span className="min-w-0 flex-1">{paper.title}</span>
-                    <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0" />
-                  </a>
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择证据：${paper.title}`}
+                      checked={selectedPaperUrls.includes(paper.url)}
+                      onChange={(event) => setSelectedPaperUrls((current) => event.target.checked ? [...current, paper.url] : current.filter((url) => url !== paper.url))}
+                      className="mt-1.5 h-4 w-4 shrink-0 accent-emerald-600"
+                    />
+                    <a href={paper.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-start gap-2 text-sm font-bold leading-6 text-sky-700 hover:underline dark:text-sky-300">
+                      <span className="min-w-0 flex-1">{paper.title}</span>
+                      <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0" />
+                    </a>
+                  </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
                     {[paper.authors.slice(0, 4).join("、"), paper.year, paper.source_name].filter(Boolean).join(" · ")}
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-semibold">
+                    <span className="rounded-full bg-sky-50 px-2 py-1 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">平台：{paper.source_name}</span>
+                    <span className="rounded-full bg-violet-50 px-2 py-1 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">证据：{paper.abstract_excerpt ? "摘要级" : "元数据级"}</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300">摘要：{paper.abstract_excerpt ? "可用" : "不可用"}</span>
+                    <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">全文：{paper.full_text_available ? "可用" : "不可用"}</span>
+                    <span className="rounded-full bg-orange-50 px-2 py-1 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300">相关性：{paper.relevance.classification === "inference" ? "规则推断，待人工核验" : paper.relevance.classification}</span>
+                  </div>
                   {paper.abstract_excerpt && (
                     <p className="mt-2 line-clamp-4 text-xs leading-5 text-slate-600 dark:text-zinc-300">{paper.abstract_excerpt}</p>
                   )}
+                  <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{paper.relevance.content}</p>
                   <button type="button" onClick={() => void analyzePaper(paper.url)} className="mt-3 rounded-lg border border-orange-200 px-2 py-1 text-[11px] font-semibold text-orange-800 hover:bg-orange-50 dark:border-orange-900 dark:text-orange-300 dark:hover:bg-orange-950/30">分析元数据/摘要难点</button>
                 </article>
               ))
@@ -209,11 +254,25 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                 本次没有可展示的论文。{bundle.failure_reasons.join("；") || "可以调整检索词后重试。"}
               </p>
             )}
+            {bundle.papers.length > 0 && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+                <button
+                  type="button"
+                  onClick={() => void saveSelectedEvidence()}
+                  disabled={!selectedPaperUrls.length || savingNote}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingNote ? <Loader2 className="h-4 w-4 animate-spin" /> : savedNoteId ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                  {savedNoteId ? "已保存为研究笔记" : `保存所选证据到 Notebook（${selectedPaperUrls.length}）`}
+                </button>
+                <p className="mt-2 text-[11px] leading-5 text-emerald-800 dark:text-emerald-300">保存内容包括研究主题、问题、所选 Evidence 来源和下一步建议，并保留当前 Research Conversation。</p>
+              </div>
+            )}
             {paperAnalysis && (
               <article className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 text-xs leading-5 dark:border-orange-900/60 dark:bg-orange-950/20">
                 <p className="font-bold text-orange-900 dark:text-orange-200">论文/方向难点分析：{paperAnalysis.title}</p>
                 <p className="mt-1 text-[11px] text-orange-800 dark:text-orange-300">{paperAnalysis.generation_mode === "llm" ? "模型个性化建议" : paperAnalysis.generation_mode === "rules_fallback" ? "模型失败后的规则降级" : "基础规则"}；仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
-                <ul className="mt-2 space-y-2">{paperAnalysis.items.map((item) => <li key={item.area}><span className="font-semibold">{item.area}：</span>{item.content}</li>)}</ul>
+                <ul className="mt-2 space-y-2">{paperAnalysis.items.map((item) => <li key={item.area}><span className="font-semibold">{item.area}：</span>{item.content}{item.evidence_refs.map((reference) => <a key={`${reference.bundle_id}:${reference.paper_url}`} href={reference.paper_url} target="_blank" rel="noreferrer" className="ml-2 font-semibold text-sky-700 underline dark:text-sky-300">查看所用 Evidence</a>)}</li>)}</ul>
               </article>
             )}
           </div>
