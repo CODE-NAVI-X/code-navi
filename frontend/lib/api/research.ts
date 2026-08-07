@@ -382,6 +382,30 @@ export interface PaperBlueprint {
   event_count: number;
 }
 
+export interface PaperSection { section_id: string; heading: string; content: string; order: number; }
+export interface PaperDraft {
+  schema_version: "paper-draft.v1"; draft_id: string; conversation_id: string; title: string;
+  content: string; format: "markdown" | "plain_text"; version: number; sections: PaperSection[];
+  created_at: string; source_scope: "user_pasted_local_session";
+}
+export type ReviewSeverity = "blocker" | "major" | "minor" | "suggestion";
+export interface ReviewFinding {
+  id: string; severity: ReviewSeverity; section: string; issue: string; why_it_matters: string;
+  recommended_action: string; classification: AnalysisClassification; basis: string;
+  source_scope: string; related_blueprint_item: string | null; can_auto_suggest: boolean;
+}
+export interface RevisionTask { task_id: string; finding_id: string; status: "pending" | "accepted" | "skipped" | "completed"; finding: ReviewFinding; created_at: string; updated_at: string; }
+export interface PaperReview {
+  schema_version: "paper-review.v1"; review_id: string; draft_id: string; conversation_id: string;
+  findings: ReviewFinding[]; revision_tasks: RevisionTask[]; provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback"; run_id: string | null; event_count: number; created_at: string;
+}
+export interface PaperRevision {
+  schema_version: "paper-revision.v1"; revision_id: string; parent_draft_id: string; review_id: string;
+  version: number; content: string; applied_task_ids: string[]; change_summary: string[];
+  diff_preview: string; created_at: string; source_scope: "user_pasted_draft_plus_accepted_suggestions";
+}
+
 export class ResearchApiError extends Error {
   constructor(
     public readonly status: number,
@@ -542,6 +566,28 @@ export async function generatePaperBlueprint(conversationId: string): Promise<Pa
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-blueprint`,
     { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
   );
+}
+
+export async function createPaperDraft(conversationId: string, payload: { title: string; content: string; format: "markdown" | "plain_text" }): Promise<PaperDraft> {
+  return request<PaperDraft>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-drafts`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function listPaperDrafts(conversationId: string): Promise<PaperDraft[]> {
+  return request<PaperDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-drafts`);
+}
+export async function createPaperReview(draftId: string): Promise<PaperReview> {
+  return request<PaperReview>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/reviews`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) }, MODEL_TURN_TIMEOUT_MS);
+}
+export async function listPaperReviews(draftId: string): Promise<PaperReview[]> {
+  return request<PaperReview[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/reviews`);
+}
+export async function updatePaperRevisionTask(reviewId: string, taskId: string, status: "accepted" | "skipped"): Promise<PaperReview> {
+  return request<PaperReview>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+export async function createPaperRevision(reviewId: string): Promise<PaperRevision> {
+  return request<PaperRevision>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revisions`, { method: "POST" });
+}
+export async function listPaperRevisions(draftId: string): Promise<PaperRevision[]> {
+  return request<PaperRevision[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/revisions`);
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {
