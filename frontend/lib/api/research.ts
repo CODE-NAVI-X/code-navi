@@ -405,6 +405,19 @@ export interface PaperRevision {
   version: number; content: string; applied_task_ids: string[]; change_summary: string[];
   diff_preview: string; created_at: string; source_scope: "user_pasted_draft_plus_accepted_suggestions";
 }
+export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
+export interface SubmissionReadinessItem {
+  id: string; category: string; message: string; classification: AnalysisClassification;
+  basis: string; source_scope: string;
+}
+export interface SubmissionReadinessCheck {
+  schema_version: "submission-readiness.v1"; check_id: string; draft_id: string;
+  revision_id: string | null; conversation_id: string; readiness_status: SubmissionReadinessStatus;
+  blockers: SubmissionReadinessItem[]; warnings: SubmissionReadinessItem[];
+  manual_checks: SubmissionReadinessItem[]; fact_boundary_notes: SubmissionReadinessItem[];
+  recommended_next_actions: SubmissionReadinessItem[]; created_at: string;
+  source_scope: "local_saved_research_artifacts";
+}
 
 export class ResearchApiError extends Error {
   constructor(
@@ -588,6 +601,12 @@ export async function createPaperRevision(reviewId: string): Promise<PaperRevisi
 }
 export async function listPaperRevisions(draftId: string): Promise<PaperRevision[]> {
   return request<PaperRevision[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/revisions`);
+}
+export async function createSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck> {
+  return request<SubmissionReadinessCheck>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
+}
+export async function listSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck[]> {
+  return request<SubmissionReadinessCheck[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`);
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {

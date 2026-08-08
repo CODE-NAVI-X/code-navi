@@ -1,16 +1,23 @@
 "use client";
 
-import { Check, Clipboard, FilePenLine, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clipboard, FileCheck2, FilePenLine, Loader2, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
-  createPaperDraft, createPaperReview, createPaperRevision, listPaperDrafts, listPaperReviews,
-  listPaperRevisions, updatePaperRevisionTask, type PaperDraft, type PaperReview, type PaperRevision,
-  type ReviewSeverity,
+  createPaperDraft, createPaperReview, createPaperRevision, createSubmissionReadiness,
+  listPaperDrafts, listPaperReviews, listPaperRevisions, listSubmissionReadiness,
+  updatePaperRevisionTask, type PaperDraft, type PaperReview, type PaperRevision,
+  type ReviewSeverity, type SubmissionReadinessCheck, type SubmissionReadinessItem,
 } from "@/lib/api/research";
 
 const severityLabel: Record<ReviewSeverity, string> = { blocker: "阻塞", major: "重要", minor: "一般", suggestion: "建议" };
 const severityClass: Record<ReviewSeverity, string> = { blocker: "text-rose-700 dark:text-rose-300", major: "text-orange-700 dark:text-orange-300", minor: "text-amber-700 dark:text-amber-300", suggestion: "text-sky-700 dark:text-sky-300" };
+const readinessLabel = { not_ready: "尚未就绪", needs_review: "需要人工复核", checklist_complete: "检查清单已完成" } as const;
+const readinessClass = { not_ready: "text-rose-700 dark:text-rose-300", needs_review: "text-amber-700 dark:text-amber-300", checklist_complete: "text-emerald-700 dark:text-emerald-300" } as const;
+
+function ReadinessItems({ items }: { items: SubmissionReadinessItem[] }) {
+  return <ul className="mt-1 space-y-1">{items.map((item) => <li key={item.id} className="rounded bg-slate-50 p-2 dark:bg-zinc-950"><p>{item.message}</p><p className="mt-1 text-[10px] text-slate-500">{item.classification} · 依据：{item.basis}</p></li>)}</ul>;
+}
 
 export function PaperDraftReviewPanel({ conversationId }: { conversationId: string }) {
   const [title, setTitle] = useState("");
@@ -20,6 +27,7 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
   const [draft, setDraft] = useState<PaperDraft | null>(null);
   const [review, setReview] = useState<PaperReview | null>(null);
   const [revision, setRevision] = useState<PaperRevision | null>(null);
+  const [readiness, setReadiness] = useState<SubmissionReadinessCheck | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,8 +39,8 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
       const latest = saved[0] ?? null;
       setDraft(latest);
       if (latest) {
-        const [reviews, revisions] = await Promise.all([listPaperReviews(latest.draft_id), listPaperRevisions(latest.draft_id)]);
-        if (active) { setReview(reviews[0] ?? null); setRevision(revisions[0] ?? null); }
+        const [reviews, revisions, checks] = await Promise.all([listPaperReviews(latest.draft_id), listPaperRevisions(latest.draft_id), listSubmissionReadiness(latest.draft_id)]);
+        if (active) { setReview(reviews[0] ?? null); setRevision(revisions[0] ?? null); setReadiness(checks[0] ?? null); }
       }
     }).catch((value: unknown) => active && setError(value instanceof Error ? value.message : "无法恢复本地初稿。"));
     return () => { active = false; };
@@ -43,7 +51,7 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
     setBusy(true); setError(null);
     try {
       const saved = await createPaperDraft(conversationId, { title, content, format });
-      setDraft(saved); setDrafts((current) => [saved, ...current]); setReview(null); setRevision(null);
+      setDraft(saved); setDrafts((current) => [saved, ...current]); setReview(null); setRevision(null); setReadiness(null);
     } catch (value) { setError(value instanceof Error ? value.message : "保存初稿失败。请重试。"); } finally { setBusy(false); }
   }
   async function runReview() {
@@ -69,6 +77,12 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
     try { await navigator.clipboard.writeText(revision.content); }
     catch { setError("复制失败，请手动选择文本复制。"); }
   }
+  async function runSubmissionReadiness() {
+    if (!draft) return;
+    setBusy(true); setError(null);
+    try { setReadiness(await createSubmissionReadiness(draft.draft_id)); }
+    catch (value) { setError(value instanceof Error ? value.message : "投稿前检查失败。请重试。"); } finally { setBusy(false); }
+  }
 
   return <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm dark:border-violet-900/70 dark:bg-zinc-900/80">
     <div className="flex items-center gap-3"><span className="rounded-xl bg-violet-100 p-2 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300"><FilePenLine className="h-4 w-4" /></span><div><p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-700 dark:text-violet-300">Local draft review</p><h2 className="mt-1 text-sm font-bold">论文初稿与结构化审稿</h2></div></div>
@@ -78,7 +92,8 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
     {error && <p role="alert" className="mt-2 text-xs text-rose-600">{error}</p>}
     {draft && <div className="mt-4 rounded-xl border border-violet-100 p-3 text-xs dark:border-violet-950"><p className="font-semibold">已保存：{draft.title} · v{draft.version}</p><p className="mt-1 text-[10px] text-slate-500">{new Date(draft.created_at).toLocaleString()} · 仅限用户粘贴的本地会话文本</p><button type="button" onClick={() => void runReview()} disabled={busy} className="mt-2 inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"><RotateCcw className="h-3.5 w-3.5" />我确认生成结构化审稿建议</button></div>}
     {review && <div className="mt-3 space-y-2"><p className="text-[11px] text-slate-500">{review.generation_mode === "llm" ? "模型个性化解释（事实边界仍由规则控制）" : review.generation_mode === "rules_fallback" ? "模型不可用，已使用基础规则降级" : "基础规则审稿"}</p>{review.revision_tasks.map((task) => <div key={task.task_id} className="rounded-lg border border-slate-200 p-2 text-[11px] dark:border-zinc-700"><p className={`font-semibold ${severityClass[task.finding.severity]}`}>{severityLabel[task.finding.severity]} · {task.finding.section}</p><p className="mt-1">{task.finding.issue}</p><p className="mt-1 text-slate-500">依据：{task.finding.basis} · {task.finding.classification}</p><p className="mt-1">建议：{task.finding.recommended_action}</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void changeTask(task.task_id, "accepted")} disabled={busy || task.status === "accepted"} className="inline-flex items-center gap-1 text-emerald-700 disabled:opacity-50 dark:text-emerald-300"><Check className="h-3.5 w-3.5" />接受</button><button type="button" onClick={() => void changeTask(task.task_id, "skipped")} disabled={busy || task.status === "skipped"} className="inline-flex items-center gap-1 text-slate-500 disabled:opacity-50"><X className="h-3.5 w-3.5" />跳过</button><span className="text-slate-500">当前：{task.status}</span></div></div>)}<button type="button" onClick={() => void previewRevision()} disabled={busy || !review.revision_tasks.some((task) => task.status === "accepted")} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300">生成已接受任务的修订预览</button></div>}
-    {revision && <div className="mt-3 rounded-xl border border-violet-200 p-3 text-xs dark:border-violet-900"><div className="flex items-center justify-between gap-2"><p className="font-semibold">修订预览 · v{revision.version}</p><button type="button" onClick={() => void copyRevision()} className="text-violet-700 dark:text-violet-300">复制文本</button></div><p className="mt-1 text-[10px] text-slate-500">原稿不会被覆盖；以下仅含已接受任务的建议，仍需人工核对。</p><details className="mt-2"><summary className="cursor-pointer font-semibold">查看变更摘要与差异</summary><ul className="mt-1 list-disc pl-4">{revision.change_summary.map((item) => <li key={item}>{item}</li>)}</ul><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[10px] dark:bg-zinc-950">{revision.diff_preview}</pre></details><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[11px] leading-5 dark:bg-zinc-950">{revision.content}</pre></div>}
+    {revision && <div className="mt-3 rounded-xl border border-violet-200 p-3 text-xs dark:border-violet-900"><div className="flex items-center justify-between gap-2"><p className="font-semibold">修订预览 · v{revision.version}</p><button type="button" onClick={() => void copyRevision()} className="text-violet-700 dark:text-violet-300">复制文本</button></div><p className="mt-1 text-[10px] text-slate-500">原稿不会被覆盖；以下仅含已接受任务的建议，仍需人工核对。</p><details className="mt-2"><summary className="cursor-pointer font-semibold">查看变更摘要与差异</summary><ul className="mt-1 list-disc pl-4">{revision.change_summary.map((item) => <li key={item}>{item}</li>)}</ul><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[10px] dark:bg-zinc-950">{revision.diff_preview}</pre></details><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[11px] leading-5 dark:bg-zinc-950">{revision.content}</pre><button type="button" onClick={() => void runSubmissionReadiness()} disabled={busy} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300"><FileCheck2 className="h-3.5 w-3.5" />我确认执行投稿前检查</button></div>}
+    {readiness && <div className="mt-3 rounded-xl border border-amber-200 p-3 text-xs dark:border-amber-900"><p className={`font-semibold ${readinessClass[readiness.readiness_status]}`}>投稿前检查：{readinessLabel[readiness.readiness_status]}</p><p className="mt-1 text-[10px] text-slate-500">只检查本地已保存的草稿、修订预览和证据状态；不联网、不投稿，也不代表可被接收。</p>{readiness.blockers.length > 0 && <details className="mt-2" open><summary className="cursor-pointer font-semibold text-rose-700 dark:text-rose-300">阻塞项（{readiness.blockers.length}）</summary><ReadinessItems items={readiness.blockers} /></details>}{readiness.warnings.length > 0 && <details className="mt-2"><summary className="cursor-pointer font-semibold">警告（{readiness.warnings.length}）</summary><ReadinessItems items={readiness.warnings} /></details>}<details className="mt-2"><summary className="cursor-pointer font-semibold">人工核验项（{readiness.manual_checks.length}）</summary><ReadinessItems items={readiness.manual_checks} /></details></div>}
     {drafts.length > 1 && <p className="mt-3 text-[10px] text-slate-500">已恢复 {drafts.length} 个本地初稿版本；当前展示最近版本。</p>}
   </section>;
 }

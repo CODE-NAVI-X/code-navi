@@ -30,6 +30,7 @@ from .conversation_schemas import (
     ResearchConversationResponse,
     ResearchSearchPlan,
     SendResearchMessageRequest,
+    SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
 )
@@ -430,6 +431,37 @@ def create_paper_revision(review_id: str, db: Session = _db_dependency) -> Paper
 def list_paper_revisions(draft_id: str, db: Session = _db_dependency) -> list[PaperRevision]:
     try:
         return _conversation_service.list_paper_revisions(draft_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper draft not found.") from error
+
+
+@router.post(
+    "/paper-drafts/{draft_id}/submission-readiness",
+    response_model=SubmissionReadinessCheck,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_submission_readiness(
+    draft_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> SubmissionReadinessCheck:
+    """Run local rules only after an explicit user request; it never submits a paper."""
+    del request
+    try:
+        return _conversation_service.create_submission_readiness(draft_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper draft not found.") from error
+
+
+@router.get(
+    "/paper-drafts/{draft_id}/submission-readiness",
+    response_model=list[SubmissionReadinessCheck],
+)
+def list_submission_readiness(
+    draft_id: str, db: Session = _db_dependency
+) -> list[SubmissionReadinessCheck]:
+    try:
+        return _conversation_service.list_submission_readiness(draft_id, db)
     except LookupError as error:
         raise HTTPException(status_code=404, detail="Paper draft not found.") from error
 

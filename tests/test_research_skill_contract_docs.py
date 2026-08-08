@@ -26,6 +26,7 @@ SKILL_NAMES = (
     "paper-blueprint",
     "paper-draft-review",
     "paper-revision",
+    "submission-readiness",
     "research-mindmap",
 )
 
@@ -38,10 +39,10 @@ def test_research_skill_docs_declare_the_same_minimum_contract() -> None:
 
 
 def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
-    for skill_name in ("paper_draft_review", "paper_revision"):
-        content = (
-            REPOSITORY_ROOT / "docs" / "skills" / skill_name / "SKILL.md"
-        ).read_text(encoding="utf-8")
+    for skill_name in ("paper_draft_review", "paper_revision", "submission_readiness"):
+        content = (REPOSITORY_ROOT / "docs" / "skills" / skill_name / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
         for heading in REQUIRED_CONTRACT_HEADINGS:
             assert heading in content, f"{skill_name} 文档 Skill 缺少契约：{heading}"
 
@@ -65,20 +66,21 @@ def test_research_demo_docs_describe_the_closed_loop_and_non_goals() -> None:
             "论文蓝图",
             "结构化审稿",
             "修订任务",
+            "投稿前检查",
         ):
             assert phrase in document
 
 
 def test_external_skill_evaluation_records_adoption_boundaries() -> None:
-    evaluation = (
-        REPOSITORY_ROOT / "docs" / "research-skill-evaluation.md"
-    ).read_text(encoding="utf-8")
+    evaluation = (REPOSITORY_ROOT / "docs" / "research-skill-evaluation.md").read_text(
+        encoding="utf-8"
+    )
     evo_notes = (
         REPOSITORY_ROOT / "docs" / "references" / "evo_scientist_experiment_notes.md"
     ).read_text(encoding="utf-8")
-    clarification_skill = (
-        SKILL_ROOT / "research-clarification" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    clarification_skill = (SKILL_ROOT / "research-clarification" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
 
     for phrase in (
         "qinyan-academic-skills",

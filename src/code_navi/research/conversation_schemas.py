@@ -725,3 +725,47 @@ class PaperRevision(BaseModel):
     source_scope: Literal["user_pasted_draft_plus_accepted_suggestions"] = (
         "user_pasted_draft_plus_accepted_suggestions"
     )
+
+
+SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
+SubmissionSourceScope = Literal[
+    "draft_text",
+    "revision_preview",
+    "paper_review",
+    "experiment_evidence",
+    "academic_metadata_abstract",
+    "manual_confirmation",
+]
+
+
+class SubmissionReadinessItem(BaseModel):
+    """One rules-based check; it is never a publication or acceptance verdict."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str
+    category: str = Field(min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=1500)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+    source_scope: SubmissionSourceScope
+
+
+class SubmissionReadinessCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["submission-readiness.v1"] = "submission-readiness.v1"
+    check_id: str
+    draft_id: str
+    revision_id: str | None = None
+    conversation_id: str
+    readiness_status: SubmissionReadinessStatus
+    blockers: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
+    warnings: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
+    manual_checks: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
+    fact_boundary_notes: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=20)
+    recommended_next_actions: list[SubmissionReadinessItem] = Field(
+        default_factory=list, max_length=20
+    )
+    created_at: datetime
+    source_scope: Literal["local_saved_research_artifacts"] = "local_saved_research_artifacts"

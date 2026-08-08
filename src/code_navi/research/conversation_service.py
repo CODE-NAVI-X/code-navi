@@ -44,9 +44,11 @@ from .conversation_schemas import (
     ResearchProfilePatch,
     ResearchReadiness,
     SendResearchMessageRequest,
+    SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
 )
+from .conversation_submission import build_submission_readiness
 from .models import (
     ResearchConversationModel,
     ResearchEvidenceBundleModel,
@@ -54,6 +56,7 @@ from .models import (
     ResearchPaperDraftModel,
     ResearchPaperReviewModel,
     ResearchPaperRevisionModel,
+    ResearchSubmissionReadinessModel,
 )
 from .research_artifact_llm import (
     ResearchArtifactGenerator,
@@ -429,6 +432,44 @@ class ResearchConversationService:
         )
         return [PaperRevision.model_validate(record.revision_data) for record in records]
 
+    def create_submission_readiness(self, draft_id: str, db: Session) -> SubmissionReadinessCheck:
+        """Persist an explicit, rules-only checklist without evaluating acceptance."""
+        draft = self._get_paper_draft(draft_id, db)
+        review = self._latest_paper_review(draft_id, db)
+        revision = self._latest_paper_revision(draft_id, db)
+        check = build_submission_readiness(
+            draft,
+            review,
+            revision,
+            has_academic_evidence=bool(self._evidence_bundles(draft.conversation_id, db)),
+            has_experiment_evidence=bool(
+                self._experiment_evidence_bundles(draft.conversation_id, db)
+            ),
+        )
+        db.add(
+            ResearchSubmissionReadinessModel(
+                id=check.check_id,
+                draft_id=draft_id,
+                conversation_id=draft.conversation_id,
+                check_data=check.model_dump(mode="json"),
+                created_at=check.created_at,
+            )
+        )
+        db.commit()
+        return check
+
+    def list_submission_readiness(
+        self, draft_id: str, db: Session
+    ) -> list[SubmissionReadinessCheck]:
+        self._get_paper_draft(draft_id, db)
+        records = (
+            db.query(ResearchSubmissionReadinessModel)
+            .filter(ResearchSubmissionReadinessModel.draft_id == draft_id)
+            .order_by(ResearchSubmissionReadinessModel.created_at.desc())
+            .all()
+        )
+        return [SubmissionReadinessCheck.model_validate(record.check_data) for record in records]
+
     @staticmethod
     def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:
         record = db.get(ResearchPaperDraftModel, draft_id)
@@ -442,6 +483,26 @@ class ResearchConversationService:
         if record is None:
             raise LookupError(review_id)
         return record
+
+    @staticmethod
+    def _latest_paper_review(draft_id: str, db: Session) -> PaperReview | None:
+        record = (
+            db.query(ResearchPaperReviewModel)
+            .filter(ResearchPaperReviewModel.draft_id == draft_id)
+            .order_by(ResearchPaperReviewModel.created_at.desc())
+            .first()
+        )
+        return PaperReview.model_validate(record.review_data) if record is not None else None
+
+    @staticmethod
+    def _latest_paper_revision(draft_id: str, db: Session) -> PaperRevision | None:
+        record = (
+            db.query(ResearchPaperRevisionModel)
+            .filter(ResearchPaperRevisionModel.parent_draft_id == draft_id)
+            .order_by(ResearchPaperRevisionModel.created_at.desc())
+            .first()
+        )
+        return PaperRevision.model_validate(record.revision_data) if record is not None else None
 
     @staticmethod
     def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:
