@@ -12,6 +12,7 @@ from code_navi.providers import ProviderConfigurationError
 
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
+    ApplyRevisionSuggestionRequest,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
@@ -30,6 +31,7 @@ from .conversation_schemas import (
     PaperRevision,
     ResearchConversationResponse,
     ResearchSearchPlan,
+    RevisionSuggestion,
     SavedResearchNotebookNote,
     SaveResearchNotebookNoteRequest,
     SendResearchMessageRequest,
@@ -336,9 +338,7 @@ def create_experiment_evidence_bundle(
 ) -> ExperimentEvidenceBundle:
     """Save explicit text evidence only; no model, file access, or network call occurs."""
     try:
-        return _conversation_service.create_experiment_evidence_bundle(
-            conversation_id, request, db
-        )
+        return _conversation_service.create_experiment_evidence_bundle(conversation_id, request, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -440,18 +440,72 @@ def update_revision_task(
 
 
 @router.post(
+    "/paper-reviews/{review_id}/revision-tasks/{task_id}/suggestions",
+    response_model=RevisionSuggestion,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_revision_suggestion(
+    review_id: str,
+    task_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> RevisionSuggestion:
+    """Generate one candidate only after the user accepted its revision task."""
+    del request
+    try:
+        return _conversation_service.create_revision_suggestion(review_id, task_id, db)
+    except LookupError as error:
+        raise HTTPException(
+            status_code=404, detail="Paper review or revision task not found."
+        ) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get(
+    "/paper-reviews/{review_id}/revision-tasks/{task_id}/suggestions",
+    response_model=list[RevisionSuggestion],
+)
+def list_revision_suggestions(
+    review_id: str, task_id: str, db: Session = _db_dependency
+) -> list[RevisionSuggestion]:
+    try:
+        return _conversation_service.list_revision_suggestions(review_id, task_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper review not found.") from error
+
+
+@router.post(
+    "/revision-suggestions/{suggestion_id}/apply",
+    response_model=PaperRevision | None,
+    status_code=status.HTTP_201_CREATED,
+)
+def apply_revision_suggestion(
+    suggestion_id: str,
+    request: ApplyRevisionSuggestionRequest,
+    db: Session = _db_dependency,
+) -> PaperRevision | None:
+    """Create a new immutable version only after an explicit candidate decision."""
+    try:
+        return _conversation_service.apply_revision_suggestion(suggestion_id, request, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Revision suggestion not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post(
     "/paper-reviews/{review_id}/revisions",
     response_model=PaperRevision,
     status_code=status.HTTP_201_CREATED,
 )
 def create_paper_revision(review_id: str, db: Session = _db_dependency) -> PaperRevision:
-    """Create a preview only for accepted tasks, preserving every original version."""
-    try:
-        return _conversation_service.create_paper_revision(review_id, db)
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail="Paper review not found.") from error
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+    """Retire the former bulk-preview endpoint in favor of explicit paragraph candidates."""
+    del review_id, db
+    raise HTTPException(
+        status_code=409,
+        detail="不再支持一次性生成多任务修订预览；请先接受任务，再逐段生成并确认候选改写。",
+    )
 
 
 @router.get("/paper-drafts/{draft_id}/revisions", response_model=list[PaperRevision])

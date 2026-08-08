@@ -437,6 +437,12 @@ export interface ReviewFinding {
   source_scope: string; related_blueprint_item: string | null; can_auto_suggest: boolean;
 }
 export interface RevisionTask { task_id: string; finding_id: string; status: "pending" | "accepted" | "skipped" | "completed"; finding: ReviewFinding; created_at: string; updated_at: string; }
+export interface RevisionSuggestion {
+  schema_version: "revision-suggestion.v1"; suggestion_id: string; revision_task_id: string; draft_id: string;
+  section_heading: string; paragraph_anchor: string; original_excerpt: string; candidate_text: string;
+  rationale: string; classification: AnalysisClassification; basis: string; source_scope: string;
+  to_verify_items: string[]; generation_mode: "llm" | "rules" | "rules_fallback"; run_id: string | null; created_at: string;
+}
 export interface PaperReview {
   schema_version: "paper-review.v1"; review_id: string; draft_id: string; conversation_id: string;
   findings: ReviewFinding[]; revision_tasks: RevisionTask[]; provenance_note: string;
@@ -444,7 +450,9 @@ export interface PaperReview {
 }
 export interface PaperRevision {
   schema_version: "paper-revision.v1"; revision_id: string; parent_draft_id: string; review_id: string;
+  parent_revision_id: string | null;
   version: number; content: string; applied_task_ids: string[]; change_summary: string[];
+  applied_suggestion_ids: string[];
   diff_preview: string; created_at: string; source_scope: "user_pasted_draft_plus_accepted_suggestions";
 }
 export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
@@ -675,8 +683,14 @@ export async function listPaperReviews(draftId: string): Promise<PaperReview[]> 
 export async function updatePaperRevisionTask(reviewId: string, taskId: string, status: "accepted" | "skipped"): Promise<PaperReview> {
   return request<PaperReview>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
 }
-export async function createPaperRevision(reviewId: string): Promise<PaperRevision> {
-  return request<PaperRevision>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revisions`, { method: "POST" });
+export async function createRevisionSuggestion(reviewId: string, taskId: string): Promise<RevisionSuggestion> {
+  return request<RevisionSuggestion>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}/suggestions`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) }, MODEL_TURN_TIMEOUT_MS);
+}
+export async function listRevisionSuggestions(reviewId: string, taskId: string): Promise<RevisionSuggestion[]> {
+  return request<RevisionSuggestion[]>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}/suggestions`);
+}
+export async function applyRevisionSuggestion(suggestionId: string, action: "accepted" | "skipped", candidateText?: string): Promise<PaperRevision | null> {
+  return request<PaperRevision | null>(`/api/v1/research/revision-suggestions/${encodeURIComponent(suggestionId)}/apply`, { method: "POST", body: JSON.stringify({ action, candidate_text: candidateText || null }) });
 }
 export async function listPaperRevisions(draftId: string): Promise<PaperRevision[]> {
   return request<PaperRevision[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/revisions`);

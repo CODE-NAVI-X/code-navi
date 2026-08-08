@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Kernel 与 CLI | 本地可运行 | `code-navi ask`、`code-navi shell` 经 `AgentRuntime` 使用 Mock、OpenAI 或 DeepSeek Provider，并保存 Event JSONL |
 | 知识点学习 | 本地闭环已实现 | FastAPI 与 Next 页面可提交知识点；模型调用经 Runtime；结果写入按学习会话隔离的 SQLite 笔记 |
-| 科研助手 | 本地闭环已实现 | 动态研究对话、画像/会话恢复、规则研究计划、用户主动的 OpenAlex/Crossref/arXiv 元数据与摘要检索和 EvidenceBundle、难点分析、实验方案、用户确认后的代码草案、实验结果证据包、论文蓝图、结构化审稿、人工确认修订任务与版本预览、投稿前检查、用户主动受控导出与可追溯思维导图；也可加载用户确认的学习背景；模型不可用时回退到规则 |
+| 科研助手 | 本地闭环已实现 | 动态研究对话、画像/会话恢复、规则研究计划、用户主动的 OpenAlex/Crossref/arXiv 元数据与摘要检索和 EvidenceBundle、难点分析、实验方案、用户确认后的代码草案、实验结果证据包、论文蓝图、结构化审稿、人工确认修订任务、逐段候选改写与可回退版本管理、投稿前检查、用户主动受控导出与可追溯思维导图；也可加载用户确认的学习背景；模型不可用时回退到规则 |
 | 代码测试练习 | 本地原型已实现 | Python 3.12 代码通过本机 Piston 执行；支持自由运行、服务端题目判定、规则反馈、可选 AI 指导和匿名学习记录 |
 | 跨模块上下文 | Learning → Research 接收恢复闭环 | 用户确认后原子创建带来源记录的科研会话；Research 展示并在每轮澄清中加载已确认学习背景，来源、画像、消息和规则研究计划均可恢复；Learning → Practice 仍使用进程内 `FlowPayload` |
 | Web/API 宿主 | 本地与受限容器可用 | Next 前端、FastAPI、本地启动脚本，以及由 Caddy 统一入口的 Web Compose 已存在；`/health` 仅检查后端进程存活 |

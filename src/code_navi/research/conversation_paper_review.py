@@ -20,6 +20,7 @@ from .conversation_schemas import (
     PaperSection,
     ResearchProfile,
     ReviewFinding,
+    RevisionSuggestion,
     RevisionTask,
 )
 from .research_artifact_llm import ResearchArtifactGenerator
@@ -40,6 +41,14 @@ class _ReviewExplanationPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     explanations: list[_ReviewExplanation] = Field(max_length=40)
+
+
+class _RevisionSuggestionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    candidate_text: str = Field(min_length=1, max_length=8000)
+    rationale: str = Field(min_length=1, max_length=2000)
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
 
 
 def parse_paper_sections(content: str, *, format: str) -> list[PaperSection]:
@@ -210,38 +219,187 @@ def build_rules_paper_review(
     )
 
 
-def build_revision_preview(
-    review: PaperReview, draft: PaperDraft, *, version: int
-) -> PaperRevision:
-    accepted = [task for task in review.revision_tasks if task.status == "accepted"]
-    if not accepted:
-        raise ValueError("请先明确接受至少一项修订任务；系统不会自动批量改稿。")
-    additions = "\n\n## 人工确认的修订建议（未自动覆盖原稿）\n" + "\n".join(
-        f"- [{task.finding.section}] {task.finding.recommended_action}"
-        f"（依据：{task.finding.basis}；边界：{task.finding.classification}）"
-        for task in accepted
+def build_revision_suggestion(
+    review: PaperReview,
+    draft: PaperDraft,
+    task_id: str,
+    *,
+    generator: ResearchArtifactGenerator | None = None,
+    conversation_id: str | None = None,
+) -> RevisionSuggestion:
+    """Create one bounded candidate for an already accepted task, never a whole-draft rewrite."""
+    task = next((item for item in review.revision_tasks if item.task_id == task_id), None)
+    if task is None:
+        raise LookupError(task_id)
+    if task.status != "accepted":
+        raise ValueError("请先明确接受该修订任务；系统不会为未接受任务生成改写。")
+    section, original = _locate_revision_paragraph(draft, task.finding)
+    candidate = _rules_candidate(original, task.finding)
+    rules = RevisionSuggestion(
+        suggestion_id=str(uuid.uuid4()),
+        revision_task_id=task.task_id,
+        draft_id=draft.draft_id,
+        section_heading=section.heading,
+        paragraph_anchor=f"{section.section_id}:paragraph-1",
+        original_excerpt=original,
+        candidate_text=candidate,
+        rationale=task.finding.recommended_action,
+        classification=task.finding.classification,
+        basis=task.finding.basis,
+        source_scope=task.finding.source_scope,
+        to_verify_items=["候选改写仅是建议；请核对实验、引用与方法边界。"],
+        created_at=datetime.now(UTC),
     )
-    content = draft.content.rstrip() + additions + "\n"
+    return _enhance_revision_suggestion(
+        rules,
+        generator=generator,
+        conversation_id=conversation_id,
+        finding=task.finding,
+    )
+
+
+def build_revision_from_suggestion(
+    review: PaperReview,
+    draft: PaperDraft,
+    suggestion: RevisionSuggestion,
+    *,
+    version: int,
+    parent_revision_id: str | None,
+    base_content: str,
+    candidate_text: str | None,
+) -> PaperRevision:
+    """Apply exactly one user-confirmed candidate to a preserved draft or revision snapshot."""
+    task = next(
+        (item for item in review.revision_tasks if item.task_id == suggestion.revision_task_id),
+        None,
+    )
+    if task is None or task.status != "accepted":
+        raise ValueError("修订任务尚未被接受，不能创建新版本。")
+    text = candidate_text or suggestion.candidate_text
+    _validate_candidate_text(text, suggestion.classification)
+    if suggestion.original_excerpt not in base_content:
+        raise ValueError("候选改写无法定位到父版本中的原文段落；请重新生成候选。")
+    content = base_content.replace(suggestion.original_excerpt, text, 1)
     diff = "\n".join(
         difflib.unified_diff(
-            draft.content.splitlines(),
+            base_content.splitlines(),
             content.splitlines(),
-            fromfile=f"draft-v{draft.version}",
+            fromfile=f"revision-parent-v{version - 1}",
             tofile=f"revision-v{version}",
             lineterm="",
         )
     )
+    manual = candidate_text is not None and candidate_text != suggestion.candidate_text
     return PaperRevision(
         revision_id=str(uuid.uuid4()),
         parent_draft_id=draft.draft_id,
+        parent_revision_id=parent_revision_id,
         review_id=review.review_id,
         version=version,
         content=content,
-        applied_task_ids=[task.task_id for task in accepted],
-        change_summary=[f"{task.finding.section}：{task.finding.issue}" for task in accepted],
+        applied_task_ids=[task.task_id],
+        applied_suggestion_ids=[suggestion.suggestion_id],
+        change_summary=[
+            f"{task.finding.section}：{'用户手动编辑并接受' if manual else '接受候选改写'}"
+        ],
         diff_preview=diff or "[未产生文本差异]",
         created_at=datetime.now(UTC),
     )
+
+
+def _target_section(sections: list[PaperSection], finding_section: str) -> PaperSection:
+    tokens = [token for token in re.split(r"[/、或 ]+", finding_section) if token]
+    for section in sections:
+        if any(token in section.heading for token in tokens):
+            return section
+    return sections[-1]
+
+
+def _locate_revision_paragraph(
+    draft: PaperDraft, finding: ReviewFinding
+) -> tuple[PaperSection, str]:
+    """Return a real user-pasted paragraph; placeholders are never replace anchors."""
+    section = _target_section(draft.sections, finding.section)
+    candidates = [section, *reversed(draft.sections)]
+    for candidate_section in candidates:
+        if candidate_section.content not in draft.content:
+            continue
+        paragraphs = [
+            value.strip()
+            for value in re.split(r"\n\s*\n", candidate_section.content)
+            if value.strip()
+        ]
+        if finding.id.startswith("unsupported-claim"):
+            matched = next((value for value in paragraphs if _CLAIM_PATTERN.search(value)), None)
+            if matched:
+                return candidate_section, matched
+        if paragraphs:
+            return candidate_section, paragraphs[0]
+    raise ValueError("无法定位用户原稿中的真实段落；请补充初稿内容后重新生成候选。")
+
+
+def _rules_candidate(original: str, finding: ReviewFinding) -> str:
+    if finding.id.startswith("unsupported-claim"):
+        candidate = _CLAIM_PATTERN.sub("[待补充实验结果]", original)
+        return candidate if candidate != original else "[待补充实验结果]"
+    return (
+        original.rstrip()
+        + f"\n\n【待验证修订建议】{finding.recommended_action}\n"
+        + "[待导师确认方法边界]"
+    )
+
+
+def _validate_candidate_text(value: str, classification: str) -> None:
+    lowered = value.casefold()
+    if any(token in lowered for token in ("api_key=", "api_key =", "sk-")):
+        raise ValueError("候选改写不得包含密钥。")
+    if re.search(r"[a-z]:\\(?:users|home|private)\\", lowered):
+        raise ValueError("候选改写不得包含私有本地路径。")
+    if classification != "fact" and _CLAIM_PATTERN.search(value):
+        raise ValueError("证据不足的候选改写不得写成效果或证明性事实。")
+
+
+def _enhance_revision_suggestion(
+    rules: RevisionSuggestion,
+    *,
+    generator: ResearchArtifactGenerator | None,
+    conversation_id: str | None,
+    finding: ReviewFinding,
+) -> RevisionSuggestion:
+    if generator is None or conversation_id is None:
+        return rules
+    outcome = generator.generate(
+        kind="revision_suggestion",
+        conversation_id=conversation_id,
+        context={
+            "finding": finding.model_dump(mode="json"),
+            "original_excerpt": rules.original_excerpt,
+            "rules_candidate": rules.candidate_text,
+            "required_json_shape": {
+                "candidate_text": "string",
+                "rationale": "string",
+                "to_verify_items": ["string"],
+            },
+        },
+    )
+    if outcome.status == "unavailable":
+        return rules
+    if outcome.status != "generated" or outcome.text is None:
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+    try:
+        payload = _RevisionSuggestionPayload.model_validate_json(outcome.text)
+        _validate_candidate_text(payload.candidate_text, rules.classification)
+        return rules.model_copy(
+            update={
+                "candidate_text": payload.candidate_text,
+                "rationale": payload.rationale,
+                "to_verify_items": payload.to_verify_items,
+                "generation_mode": "llm",
+                "run_id": outcome.run_id,
+            }
+        )
+    except (ValueError, json.JSONDecodeError):
+        return rules.model_copy(update={"generation_mode": "rules_fallback"})
 
 
 def _finding(

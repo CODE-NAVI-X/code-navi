@@ -96,13 +96,27 @@ def _review_and_revision(client: TestClient) -> tuple[dict[str, object], dict[st
         f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
         json={"user_confirmed": True},
     ).json()
-    task = review["revision_tasks"][0]
+    task = next(
+        item
+        for item in review["revision_tasks"]
+        if item["finding_id"].startswith("unsupported-claim")
+    )
     accepted = client.patch(
         f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}",
         json={"status": "accepted"},
     )
     assert accepted.status_code == 200
-    revision = client.post(f"/api/v1/research/paper-reviews/{review['review_id']}/revisions").json()
+    suggestion = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    )
+    assert suggestion.status_code == 201
+    revision_response = client.post(
+        f"/api/v1/research/revision-suggestions/{suggestion.json()['suggestion_id']}/apply",
+        json={"action": "accepted"},
+    )
+    assert revision_response.status_code == 201
+    revision = revision_response.json()
     return draft, revision
 
 

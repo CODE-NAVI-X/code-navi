@@ -183,7 +183,9 @@ def test_valid_model_only_enhances_existing_rule_explanations(client: TestClient
     assert claim["recommended_action"] == "保留待补充结果占位符。"
 
 
-def test_only_accepted_tasks_create_immutable_revision_preview(client: TestClient) -> None:
+def test_bulk_revision_preview_is_retired_in_favor_of_confirmed_candidates(
+    client: TestClient,
+) -> None:
     conversation_id = _conversation(client)
     draft = client.post(
         f"/api/v1/research/conversations/{conversation_id}/paper-drafts", json=_draft()
@@ -203,10 +205,181 @@ def test_only_accepted_tasks_create_immutable_revision_preview(client: TestClien
 
     assert blocked.status_code == 409
     assert accepted.status_code == 200
-    assert revision.status_code == 201
-    body = revision.json()
-    assert body["parent_draft_id"] == draft["draft_id"]
-    assert body["version"] == 2
-    assert draft["content"] in body["content"]
-    assert task["task_id"] in body["applied_task_ids"]
-    assert "api_key" not in body["content"].casefold()
+    assert revision.status_code == 409
+    assert "逐段生成并确认候选改写" in revision.json()["detail"]
+
+
+def test_accepted_task_creates_a_persisted_paragraph_suggestion_and_manual_version(
+    client: TestClient,
+) -> None:
+    conversation_id = _conversation(client)
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts", json=_draft()
+    ).json()
+    review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    ).json()
+    task = next(
+        item for item in review["revision_tasks"] if item["finding_id"] == "unsupported-claim-1"
+    )
+
+    blocked = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    )
+    client.patch(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}",
+        json={"status": "accepted"},
+    )
+    suggestion = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    )
+
+    assert blocked.status_code == 409
+    assert suggestion.status_code == 201
+    candidate = suggestion.json()
+    assert candidate["original_excerpt"] in draft["content"]
+    assert candidate["classification"] == "to_verify"
+    assert "[待补充实验结果]" in candidate["candidate_text"]
+
+    revised = client.post(
+        f"/api/v1/research/revision-suggestions/{candidate['suggestion_id']}/apply",
+        json={"action": "accepted", "candidate_text": "[待补充实验结果：需人工核对]"},
+    )
+    restored = client.get(f"/api/v1/research/paper-drafts/{draft['draft_id']}/revisions")
+
+    assert revised.status_code == 201
+    assert revised.json()["content"] != draft["content"]
+    assert revised.json()["parent_revision_id"] is None
+    assert revised.json()["applied_suggestion_ids"] == [candidate["suggestion_id"]]
+    assert "用户手动编辑" in revised.json()["change_summary"][0]
+    assert restored.json()[0]["revision_id"] == revised.json()["revision_id"]
+    persisted_review = client.get(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews"
+    ).json()[0]
+    assert (
+        next(
+            item
+            for item in persisted_review["revision_tasks"]
+            if item["task_id"] == task["task_id"]
+        )["status"]
+        == "completed"
+    )
+
+
+def test_invalid_model_suggestion_falls_back_without_promoting_claim_to_fact(
+    client: TestClient,
+) -> None:
+    _conversation_service.artifact_generator = StaticArtifactGenerator(
+        ArtifactLlmOutcome.generated('{"candidate_text":"实验显著提升且证明有效"}')
+    )
+    conversation_id = _conversation(client)
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts", json=_draft()
+    ).json()
+    review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    ).json()
+    task = next(
+        item for item in review["revision_tasks"] if item["finding_id"] == "unsupported-claim-1"
+    )
+    client.patch(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}",
+        json={"status": "accepted"},
+    )
+
+    suggestion = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    )
+
+    assert suggestion.status_code == 201
+    assert suggestion.json()["generation_mode"] == "rules_fallback"
+    assert suggestion.json()["classification"] == "to_verify"
+    assert "[待补充实验结果]" in suggestion.json()["candidate_text"]
+
+
+def test_valid_model_candidate_is_restorable_without_changing_rule_boundary(
+    client: TestClient,
+) -> None:
+    _conversation_service.artifact_generator = StaticArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            '{"candidate_text":"[待补充实验结果]",'
+            '"rationale":"先补充已保存的对照与指标记录。",'
+            '"to_verify_items":["差异需统计检验"]}'
+        )
+    )
+    conversation_id = _conversation(client)
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts", json=_draft()
+    ).json()
+    review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    ).json()
+    task = next(
+        item for item in review["revision_tasks"] if item["finding_id"] == "unsupported-claim-1"
+    )
+    client.patch(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}",
+        json={"status": "accepted"},
+    )
+
+    created = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    )
+    restored = client.get(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions"
+    )
+
+    assert created.status_code == 201
+    assert created.json()["generation_mode"] == "llm"
+    assert created.json()["classification"] == "to_verify"
+    assert restored.json()[0]["suggestion_id"] == created.json()["suggestion_id"]
+
+
+def test_skipping_candidate_persists_task_decision_without_creating_revision(
+    client: TestClient,
+) -> None:
+    conversation_id = _conversation(client)
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts", json=_draft()
+    ).json()
+    review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    ).json()
+    task = next(
+        task for task in review["revision_tasks"] if task["finding_id"] == "unsupported-claim-1"
+    )
+    client.patch(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}",
+        json={"status": "accepted"},
+    )
+    suggestion = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    ).json()
+
+    skipped = client.post(
+        f"/api/v1/research/revision-suggestions/{suggestion['suggestion_id']}/apply",
+        json={"action": "skipped"},
+    )
+    updated = client.get(f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews")
+    revisions = client.get(f"/api/v1/research/paper-drafts/{draft['draft_id']}/revisions")
+
+    assert skipped.status_code == 201
+    assert skipped.json() is None
+    assert (
+        next(
+            item
+            for item in updated.json()[0]["revision_tasks"]
+            if item["task_id"] == task["task_id"]
+        )["status"]
+        == "skipped"
+    )
+    assert revisions.json() == []

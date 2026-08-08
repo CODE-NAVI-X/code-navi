@@ -21,12 +21,14 @@ from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
 from .conversation_paper_blueprint import build_paper_blueprint
 from .conversation_paper_review import (
-    build_revision_preview,
+    build_revision_from_suggestion,
+    build_revision_suggestion,
     build_rules_paper_review,
     parse_paper_sections,
 )
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
+    ApplyRevisionSuggestionRequest,
     ConversationEvidenceBundle,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
@@ -46,6 +48,7 @@ from .conversation_schemas import (
     ResearchProfile,
     ResearchProfilePatch,
     ResearchReadiness,
+    RevisionSuggestion,
     SendResearchMessageRequest,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
@@ -59,6 +62,7 @@ from .models import (
     ResearchPaperDraftModel,
     ResearchPaperReviewModel,
     ResearchPaperRevisionModel,
+    ResearchRevisionSuggestionModel,
     ResearchSubmissionReadinessModel,
 )
 from .research_artifact_llm import (
@@ -460,25 +464,107 @@ class ResearchConversationService:
         db.commit()
         return updated
 
-    def create_paper_revision(self, review_id: str, db: Session) -> PaperRevision:
+    def create_revision_suggestion(
+        self, review_id: str, task_id: str, db: Session
+    ) -> RevisionSuggestion:
         record = self._get_paper_review_record(review_id, db)
         review = PaperReview.model_validate(record.review_data)
         draft = self._get_paper_draft(review.draft_id, db)
+        suggestion = build_revision_suggestion(
+            review,
+            draft,
+            task_id,
+            generator=self.artifact_generator,
+            conversation_id=draft.conversation_id,
+        )
+        db.add(
+            ResearchRevisionSuggestionModel(
+                id=suggestion.suggestion_id,
+                draft_id=draft.draft_id,
+                review_id=review_id,
+                revision_task_id=task_id,
+                suggestion_data=suggestion.model_dump(mode="json"),
+                created_at=suggestion.created_at,
+            )
+        )
+        db.commit()
+        return suggestion
+
+    def list_revision_suggestions(
+        self, review_id: str, task_id: str, db: Session
+    ) -> list[RevisionSuggestion]:
+        self._get_paper_review_record(review_id, db)
+        records = (
+            db.query(ResearchRevisionSuggestionModel)
+            .filter(
+                ResearchRevisionSuggestionModel.review_id == review_id,
+                ResearchRevisionSuggestionModel.revision_task_id == task_id,
+            )
+            .order_by(ResearchRevisionSuggestionModel.created_at.desc())
+            .all()
+        )
+        return [RevisionSuggestion.model_validate(item.suggestion_data) for item in records]
+
+    def apply_revision_suggestion(
+        self, suggestion_id: str, request: ApplyRevisionSuggestionRequest, db: Session
+    ) -> PaperRevision | None:
+        record = db.get(ResearchRevisionSuggestionModel, suggestion_id)
+        if record is None:
+            raise LookupError(suggestion_id)
+        suggestion = RevisionSuggestion.model_validate(record.suggestion_data)
+        if request.action == "skipped":
+            review_record = self._get_paper_review_record(record.review_id, db)
+            review = PaperReview.model_validate(review_record.review_data)
+            now = datetime.now(UTC)
+            tasks = [
+                task.model_copy(update={"status": "skipped", "updated_at": now})
+                if task.task_id == suggestion.revision_task_id
+                else task
+                for task in review.revision_tasks
+            ]
+            review_record.review_data = review.model_copy(
+                update={"revision_tasks": tasks}
+            ).model_dump(mode="json")
+            db.commit()
+            return None
+        review_record = self._get_paper_review_record(record.review_id, db)
+        review = PaperReview.model_validate(review_record.review_data)
+        draft = self._get_paper_draft(suggestion.draft_id, db)
+        latest = self._latest_paper_revision(draft.draft_id, db)
         existing = (
             db.query(ResearchPaperRevisionModel)
             .filter(ResearchPaperRevisionModel.parent_draft_id == draft.draft_id)
             .count()
         )
-        revision = build_revision_preview(review, draft, version=draft.version + existing + 1)
+        revision = build_revision_from_suggestion(
+            review,
+            draft,
+            suggestion,
+            version=draft.version + existing + 1,
+            parent_revision_id=latest.revision_id if latest else None,
+            base_content=latest.content if latest else draft.content,
+            candidate_text=request.candidate_text,
+        )
         db.add(
             ResearchPaperRevisionModel(
                 id=revision.revision_id,
                 parent_draft_id=draft.draft_id,
-                review_id=review_id,
+                review_id=review.review_id,
                 revision_data=revision.model_dump(mode="json"),
                 created_at=revision.created_at,
             )
         )
+        now = datetime.now(UTC)
+        review_record.review_data = review.model_copy(
+            update={
+                "revision_tasks": [
+                    task.model_copy(update={"status": "completed", "updated_at": now})
+                    if task.task_id == suggestion.revision_task_id
+                    else task
+                    for task in review.revision_tasks
+                ]
+            }
+        ).model_dump(mode="json")
         db.commit()
         return revision
 

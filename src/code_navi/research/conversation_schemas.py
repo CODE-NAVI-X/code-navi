@@ -758,16 +758,48 @@ class UpdateRevisionTaskRequest(BaseModel):
     status: Literal["accepted", "skipped"]
 
 
+class RevisionSuggestion(BaseModel):
+    """One user-confirmable paragraph-level suggestion; it never alters a draft by itself."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["revision-suggestion.v1"] = "revision-suggestion.v1"
+    suggestion_id: str
+    revision_task_id: str
+    draft_id: str
+    section_heading: str = Field(min_length=1, max_length=300)
+    paragraph_anchor: str = Field(min_length=1, max_length=300)
+    original_excerpt: str = Field(min_length=1, max_length=8000)
+    candidate_text: str = Field(min_length=1, max_length=8000)
+    rationale: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+    source_scope: ReviewSourceScope
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    created_at: datetime
+
+
+class ApplyRevisionSuggestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["accepted", "skipped"]
+    candidate_text: str | None = Field(default=None, min_length=1, max_length=8000)
+
+
 class PaperRevision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["paper-revision.v1"] = "paper-revision.v1"
     revision_id: str
     parent_draft_id: str
+    parent_revision_id: str | None = None
     review_id: str
     version: int = Field(ge=2)
     content: str
     applied_task_ids: list[str] = Field(min_length=1, max_length=40)
+    applied_suggestion_ids: list[str] = Field(default_factory=list, max_length=40)
     change_summary: list[str] = Field(min_length=1, max_length=40)
     diff_preview: str = Field(min_length=1, max_length=30000)
     created_at: datetime
