@@ -27,14 +27,19 @@ def test_research_page_uses_conversation_api_instead_of_fixed_sessions() -> None
 def test_research_workspace_is_chat_first_and_restorable() -> None:
     page_source = PAGE.read_text(encoding="utf-8")
     workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
 
     assert "ResearchConversation" in page_source
-    assert "code-navi.research.conversation-id" in workspace_source
+    assert "RESEARCH_CONVERSATION_STORAGE_KEY" in workspace_source
+    assert "code-navi.research.conversation-id" in api_source
     assert "本轮处理过程" in workspace_source
     assert "正在理解并整理研究画像" in workspace_source
     assert "基础规则（非模型）" in workspace_source
     assert "需求确认 Skill" in workspace_source
     assert "信息源检索 Skill" in workspace_source
+    assert "context_provenance" in workspace_source
+    assert "本会话来自已确认的 Learning 上下文" in workspace_source
+    assert "查看保留的学习内容" in workspace_source
     assert "五字段" not in workspace_source
     assert "missing_fields" not in workspace_source
 

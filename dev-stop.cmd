@@ -6,13 +6,17 @@ echo   Code Navi - Stop Dev
 echo ============================================
 echo.
 
-echo [1/2] Stopping backend (port 8000) ...
+echo [1/3] Stopping backend (port 8000) ...
 taskkill /FI "WINDOWTITLE eq Backend :8000*" /T /F >nul 2>&1
 if %errorlevel%==0 (echo   Backend stopped.) else (echo   Backend window not found.)
 
-echo [2/2] Stopping frontend (port 3000) ...
+echo [2/3] Stopping frontend (port 3000) ...
 taskkill /FI "WINDOWTITLE eq Frontend :3000*" /T /F >nul 2>&1
 if %errorlevel%==0 (echo   Frontend stopped.) else (echo   Frontend window not found.)
+
+echo [3/3] Stopping Piston execution service ...
+docker compose stop piston >nul 2>&1
+if %errorlevel%==0 (echo   Piston stopped.) else (echo   Piston was not running.)
 
 echo.
 echo ============================================

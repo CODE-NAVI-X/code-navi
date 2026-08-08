@@ -52,3 +52,14 @@ def test_deepseek_provider_is_kernel_routed(monkeypatch: pytest.MonkeyPatch) -> 
 def test_unsupported_provider_is_rejected() -> None:
     with pytest.raises(ProviderConfigurationError, match="unsupported provider: anthropic"):
         create_provider(ProviderSettings("anthropic", "some-model"))
+
+
+def test_openai_provider_receives_shared_output_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    provider = create_provider(ProviderSettings("openai", "gpt-test", max_tokens=700))
+
+    assert provider.max_output_tokens == 700

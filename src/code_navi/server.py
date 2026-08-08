@@ -11,9 +11,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .context_transfer import models as context_transfer_models  # noqa: F401
+from .context_transfer.router import router as context_transfer_router
 from .db import DATABASE_URL, Base, engine
 from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
+from .online_compiler.router import router as compiler_router
 from .provider_config import load_local_provider_config
 from .research import models as research_models  # noqa: F401  (register tables)
 from .research.router import router as research_router
@@ -32,7 +35,7 @@ def _cors_origins() -> list[str]:
 CORS_ORIGINS = _cors_origins()
 
 # ---------------------------------------------------------------------------
-# Lifespan — ensure database tables exist on startup
+# Lifespan - ensure database tables exist on startup
 # ---------------------------------------------------------------------------
 
 
@@ -64,9 +67,11 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 app.include_router(learning_router)
 app.include_router(research_router)
+app.include_router(compiler_router)
+app.include_router(context_transfer_router)
 
 # ---------------------------------------------------------------------------
-# CORS — explicit origin allowlist.
+# CORS - explicit origin allowlist.
 #
 # A wildcard cannot be combined with credentials: browsers reject
 # ``Access-Control-Allow-Origin: *`` on credentialed requests, so the previous
@@ -85,7 +90,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Global exception handler — ensures all error responses carry CORS headers
+# Global exception handler - ensures all error responses carry CORS headers
 # ---------------------------------------------------------------------------
 
 
@@ -106,5 +111,5 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health", status_code=200)
 async def health_check() -> dict[str, str]:
-    """Basic liveness probe — returns 200 when the server is running."""
+    """Basic liveness probe - returns 200 when the server is running."""
     return {"status": "ok"}

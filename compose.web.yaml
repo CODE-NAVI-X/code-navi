@@ -1,12 +1,12 @@
 name: code-navi-web
 
-# Code Navi — web stack base for NAS / LAN deployment.
+# Code Navi — current NAS web stack.
 #
 #   docker compose -f compose.web.yaml up -d --build
 #
-# LAN:  http://<nas-ip>:25000
-# Public (later): point a DDNS domain at this host, uncomment the public block
-# in Caddyfile, and map ports 80/443 — Caddy issues a Let's Encrypt cert.
+# Entry: https://91666.icu:25000
+# Caddy uses the existing certificate mounted from the NAS host and requires
+# BASIC_AUTH_USER / BASIC_AUTH_HASH from the deployment environment.
 #
 # Data layout — one named volume keeps the app usable across rebuilds:
 #   /data/code-navi.db   SQLite database      (CODE_NAVI_DATABASE_URL)

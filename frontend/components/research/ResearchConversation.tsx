@@ -30,6 +30,7 @@ import {
 import {
   createResearchConversation,
   getResearchConversation,
+  RESEARCH_CONVERSATION_STORAGE_KEY,
   ResearchApiError,
   type ResearchConversationMessage,
   type ResearchConversationResponse,
@@ -47,7 +48,6 @@ import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
 import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
 
-const STORAGE_KEY = "code-navi.research.conversation-id";
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
 
 type RequestPhase = "initializing" | "idle" | "thinking";
@@ -165,7 +165,7 @@ export function ResearchConversation() {
     setError(null);
     setFailedMessage(null);
     try {
-      const savedId = window.localStorage.getItem(STORAGE_KEY);
+      const savedId = window.localStorage.getItem(RESEARCH_CONVERSATION_STORAGE_KEY);
       if (savedId) {
         try {
           const restored = await getResearchConversation(savedId);
@@ -175,11 +175,14 @@ export function ResearchConversation() {
           if (!(requestError instanceof ResearchApiError) || requestError.status !== 404) {
             throw requestError;
           }
-          window.localStorage.removeItem(STORAGE_KEY);
+          window.localStorage.removeItem(RESEARCH_CONVERSATION_STORAGE_KEY);
         }
       }
       const created = await createResearchConversation();
-      window.localStorage.setItem(STORAGE_KEY, created.conversation_id);
+      window.localStorage.setItem(
+        RESEARCH_CONVERSATION_STORAGE_KEY,
+        created.conversation_id,
+      );
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       setConversation(created);
     } catch (requestError) {
@@ -242,7 +245,10 @@ export function ResearchConversation() {
     setDraft("");
     try {
       const created = await createResearchConversation();
-      window.localStorage.setItem(STORAGE_KEY, created.conversation_id);
+      window.localStorage.setItem(
+        RESEARCH_CONVERSATION_STORAGE_KEY,
+        created.conversation_id,
+      );
       setConversation(created);
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -324,6 +330,42 @@ export function ResearchConversation() {
             </button>
           </div>
         </header>
+
+        {conversation.context_provenance && (
+          <aside className="mb-4 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100">
+            <p className="font-semibold">本会话来自已确认的 Learning 上下文</p>
+            <p className="mt-1 leading-6">
+              主题：{conversation.context_provenance.topic} · 来源记录：
+              <span className="font-mono text-xs">
+                {conversation.context_provenance.source_object.id}
+              </span>
+            </p>
+            <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap rounded-xl bg-white/60 px-3 py-2 text-xs leading-5 dark:bg-zinc-950/30">
+              {conversation.context_provenance.summary}
+            </p>
+            {conversation.context_provenance.selected_content.length > 0 && (
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer font-medium">
+                  查看保留的学习内容（
+                  {conversation.context_provenance.selected_content.length} 项）
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {conversation.context_provenance.selected_content.map((item) => (
+                    <section
+                      key={item.kind}
+                      className="rounded-xl bg-white/60 px-3 py-2 dark:bg-zinc-950/30"
+                    >
+                      <p className="font-semibold">{item.label}</p>
+                      <p className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap leading-5">
+                        {item.content}
+                      </p>
+                    </section>
+                  ))}
+                </div>
+              </details>
+            )}
+          </aside>
+        )}
 
         <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
           <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70">

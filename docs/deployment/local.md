@@ -1,37 +1,41 @@
-# 本地运行与 CLI Docker
+# 本地运行与容器基线
 
 ## 1. 当前可运行范围
 
-仓库有三种本地运行入口：
+仓库有四种本地或受限环境运行入口：
 
 | 方式 | 覆盖范围 | 当前定位 |
 | --- | --- | --- |
-| `python scripts/dev.py` | FastAPI、Next 与依赖检查 | 跨平台本地 Web/API 开发闭环；迁移需先单独执行 |
-| Windows `dev-start.cmd` | FastAPI、Next、迁移与依赖检查 | Windows 本地开发入口 |
-| Docker Compose | `code-navi` CLI、Provider、Kernel 和 Event volume | CLI 容器验证基线 |
+| `python scripts/dev.py` | FastAPI、Next 与依赖检查 | 跨平台本地 Web/API 开发闭环；迁移需先执行，不启动 Piston |
+| Windows `dev-start.cmd` | 迁移、Piston runtime、FastAPI 与 Next | 当前包含 Python 练习的 Windows 本地入口 |
+| `compose.yaml` | `code-navi` CLI、Piston、runtime 初始化和数据卷 | CLI 与代码执行服务容器基线 |
+| `compose.web.yaml` | FastAPI、Next standalone、Caddy 和持久化数据卷 | 当前 NAS 配置对应的受限 Web 容器基线 |
 
-当前 Compose 不构建或暴露 Web/API，也不提供代码执行沙箱、远程仓库写入、身份系统或生产数据库。
+两套 Compose 相互独立。`compose.yaml` 不暴露 Code Navi Web/API，但会启动 privileged Piston 并把其 API 绑定到宿主 loopback；`compose.web.yaml` 构建 Web/API 镜像并由 Caddy 提供统一 HTTPS 入口，但尚未接入 Piston。两者都不提供远程仓库写入、应用身份系统或生产数据库。
 
 ## 2. 本地 Web/API
 
-先安装 Python 3.11+、Node 20.9+、后端可编辑依赖和前端依赖，命令见 [开发流程](../development/workflow.md)。从仓库根目录跨平台启动：
+先安装 Python 3.11+、Node 20.19+、后端可编辑依赖和前端依赖，命令见 [开发流程](../development/workflow.md)。从仓库根目录跨平台启动：
 
 ```powershell
 .venv\Scripts\python.exe -m alembic upgrade head
 python scripts/dev.py
 ```
 
-Windows 也可启动：
+该入口不启动 Piston，学习与科研模块可用，练习页面的执行请求会返回执行服务不可用。
+
+Windows 需要练习执行服务时使用：
 
 ```powershell
 .\dev-start.cmd
 ```
 
-脚本执行：
+`dev-start.cmd` 执行：
 
 1. `.venv\Scripts\python.exe -m alembic upgrade head`；
-2. 启动 FastAPI `http://127.0.0.1:8000`；
-3. 启动 Next `http://localhost:3000`。
+2. 通过 Compose 启动 Piston；
+3. 检查并安装固定 Python 3.12 runtime；
+4. 启动 FastAPI `http://127.0.0.1:8000` 和 Next `http://localhost:3000`。
 
 检查：
 
@@ -41,9 +45,9 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 预期返回 `{"status":"ok"}`。API 文档位于 `http://127.0.0.1:8000/docs`。
 
-默认数据库为 `.code-navi/learning_poc.db`，学习 Runtime Event 默认写入 `var/runs`。新配置使用 `CODE_NAVI_DATABASE_URL` 和 `CODE_NAVI_EVENTS_DIR`；`LEARNING_DATABASE_URL` 仅为数据库兼容项。前端 API 地址使用 `NEXT_PUBLIC_CODE_NAVI_API_URL`，默认指向 `http://127.0.0.1:8000`。
+默认业务数据库为 `.code-navi/learning_poc.db`，学习 Runtime Event 默认写入 `var/runs`。练习记录默认写入 `var/learning-records.sqlite3`，可用 `COMPILER_DATABASE_PATH` 调整。新业务配置使用 `CODE_NAVI_DATABASE_URL` 和 `CODE_NAVI_EVENTS_DIR`；`LEARNING_DATABASE_URL` 仅为数据库兼容项。前端 API 地址使用 `NEXT_PUBLIC_CODE_NAVI_API_URL`，默认指向 `http://127.0.0.1:8000`。
 
-停止时关闭脚本打开的两个窗口。`dev-stop.cmd` 还会终止端口 8000 和 3000 上的监听进程；运行前确认这些端口没有承载其他服务。
+`dev-start.cmd` 覆盖本地 Web 产品所需的数据库迁移、FastAPI、Next、Piston 和固定 Python runtime；它不启动 CLI 容器，也不启动独立的 `compose.web.yaml` Caddy 部署。停止时运行 `dev-stop.cmd`，它会关闭该启动脚本创建的前后端窗口并停止 Piston。
 
 ## 3. 本地 Provider
 
@@ -62,7 +66,7 @@ code-navi configure-provider --provider deepseek
 
 科研 Provider 状态接口不返回密钥；网页配置和连接测试默认禁用，只能在显式设置 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=true` 且本机访问时使用。学习 API 的 DeepSeek 自动选择仍是兼容行为，不是新入口可依赖的统一规则。凭据不写入仓库、日志、Event 或前端变量。在线调用的内容和费用边界见 [高风险能力](../development/high-risk-capabilities.md)。
 
-## 4. CLI Docker
+## 4. CLI 与 Piston Compose
 
 前置检查：
 
@@ -71,6 +75,8 @@ docker version
 docker compose version
 docker compose config
 ```
+
+首次启动会拉取固定 digest 的 Piston 镜像，并由 `compiler-runtime-setup` 从 Piston 包源安装 Python 3.12 runtime；这是显式联网和本机 Docker 副作用。Piston 使用 `privileged: true`，只适合作为当前本地原型。
 
 启动交互式 CLI：
 
@@ -87,7 +93,7 @@ docker compose exec code-navi code-navi ask "这个项目的目标是什么？" 
 
 完成信号是命令返回明确状态并在 `/data/runs` 产生对应 Event；只有模型文字而没有预期 Event 不算接线通过。
 
-当前 Compose 直接支持 Mock 和 OpenAI 环境变量。启用 OpenAI：
+当前 Compose 直接支持 Mock、OpenAI 与 DeepSeek 凭据。通用 Agent 和练习 AI 复用同一组 Provider 与模型选择变量；练习执行与判题本身不依赖模型。启用 OpenAI Provider：
 
 ```powershell
 $env:CODE_NAVI_PROVIDER = "openai"
@@ -96,9 +102,45 @@ $env:OPENAI_API_KEY = "<api-key>"
 docker compose up --build
 ```
 
-DeepSeek 凭据尚未写入当前 Compose 环境白名单；不要仅设置宿主环境后假定容器已经获得该配置。
+练习 AI 复用 `CODE_NAVI_PROVIDER` 和 `CODE_NAVI_MODEL`；Provider 为 `mock` 或未配置模型时，只返回执行器、判题和规则结果。页面默认关闭 AI，用户明确开启后才会把本次源码与执行输出发送给已配置模型。
 
-## 5. 容器边界
+## 5. 受限 Web Compose
+
+`compose.web.yaml` 构建三个服务：FastAPI 后端、Next standalone 前端和 Caddy。浏览器只访问 Caddy；`/api/*`、`/docs*`、`/openapi.json` 和 `/health` 转发到后端，其余请求转发到前端。后端容器启动时先执行 `alembic upgrade head`，再启动 Uvicorn。
+
+当前配置针对仓库正在使用的 NAS 环境，不是可直接复制到任意主机的通用模板：
+
+| 配置 | 当前值与影响 |
+| --- | --- |
+| 入口 | `https://91666.icu:25000` |
+| TLS | 从宿主机 `/vol4/docker/xray/certs` 只读挂载既有证书和私钥 |
+| 入口保护 | Caddy Basic Auth；用户名和 bcrypt hash 由部署环境注入 |
+| 应用数据 | `code_navi_data` 命名卷挂载到后端 `/data` |
+| 数据库 | `sqlite:////data/code-navi.db` |
+| Provider 配置 | `/data/provider.env` |
+| Runtime Event | `/data/runs` |
+| 镜像标签 | `code-navi-backend:local`、`code-navi-frontend:local` |
+
+启动前确认部署环境已经提供 `BASIC_AUTH_USER`、`BASIC_AUTH_HASH`、证书目录和对应域名解析。然后从仓库根目录执行：
+
+```powershell
+docker compose -f compose.web.yaml config
+docker compose -f compose.web.yaml up -d --build
+docker compose -f compose.web.yaml ps
+```
+
+如需使用本机已有的 Provider 配置，明确复制到持久化卷并重启后端：
+
+```powershell
+docker compose -f compose.web.yaml cp .code-navi/provider.env backend:/data/provider.env
+docker compose -f compose.web.yaml restart backend
+```
+
+未复制 Provider 配置时，后端使用离线 Mock。Basic Auth 只保护当前 Caddy 入口，不替代应用级用户身份、资源所有权和 API 授权；公网服务条件见 [生产准入](production.md)。
+
+## 6. 容器边界
+
+### CLI 容器
 
 | 项目 | 当前设置 |
 | --- | --- |
@@ -111,9 +153,22 @@ DeepSeek 凭据尚未写入当前 Compose 环境白名单；不要仅设置宿�
 | 网络端口 | 不开放端口 |
 | 入口 | `code-navi shell --project /workspace --events-dir /data/runs` |
 
-修改这些边界时同步更新 Dockerfile、Compose、运行验证和相关安全测试。
+同一 Compose 中的 Piston API 绑定到宿主 `127.0.0.1:2000`，runtime 包保存在 `code-navi-piston-packages` volume。Piston 容器为 privileged；Code Navi 容器本身仍保持上表的只读根文件系统、capability 丢弃和 `no-new-privileges`。
 
-## 6. 排查与清理
+### Web 容器
+
+| 项目 | 当前设置 |
+| --- | --- |
+| 后端基础镜像 | `python:3.11-slim`；非 root UID/GID `10001` |
+| 前端基础镜像 | `node:22-alpine`；Next standalone 产物由 `node server.js` 启动 |
+| 内部端口 | 后端 `8000`、前端 `3000`，只在 Compose 网络中暴露 |
+| 外部端口 | Caddy `25000` |
+| 持久化 | 后端 `/data` 与 Caddy 的 data/config 命名卷 |
+| API 地址 | 前端使用同源相对路径，由 Caddy 分流 |
+
+修改任一容器边界时同步更新对应 Dockerfile、Compose、运行验证和相关安全测试。
+
+## 7. 排查与清理
 
 ```bash
 docker compose ps
@@ -121,16 +176,26 @@ docker compose logs code-navi
 docker compose config
 ```
 
-依次检查构建、容器状态、Provider 配置、CLI 结果、Event 和只读权限错误。停止并保留 Event：
+CLI/Piston Compose 依次检查构建、Piston 健康与 runtime、Provider 配置、CLI 结果、练习记录、Event 和只读权限错误。停止并保留数据卷：
 
 ```bash
 docker compose down
 ```
 
-删除容器和 Event volume：
+删除容器、Event/练习记录 volume 和 Piston runtime volume：
 
 ```bash
 docker compose down --volumes
 ```
 
-`--volumes` 会永久删除 volume 内的 Event。执行前确认数据不再需要。当前 Compose 没有版本化镜像、Web/API 产物或生产回滚命令，不能作为生产发布流程。
+`--volumes` 会永久删除 Event、练习记录和已安装的 Piston runtime。执行前确认数据不再需要。该 Compose 不包含 Web/API 产物，也没有版本化镜像或生产回滚命令。
+
+Web Compose 使用独立项目名和数据卷，排查命令必须显式指定文件：
+
+```powershell
+docker compose -f compose.web.yaml ps
+docker compose -f compose.web.yaml logs backend frontend caddy
+docker compose -f compose.web.yaml down
+```
+
+不要在需要保留 SQLite、Provider 配置或 Event 时对 Web Compose 使用 `down --volumes`。当前 Web 镜像使用本地标签，没有版本化发布或已验证回滚流程。

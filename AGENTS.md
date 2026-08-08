@@ -25,7 +25,7 @@
 | 产品 | [docs/product/scope.md](docs/product/scope.md) 定义稳定范围、模块和非目标；[docs/product/roadmap.md](docs/product/roadmap.md) 记录易变的状态、优先级和里程碑 |
 | 架构 | [docs/architecture/system.md](docs/architecture/system.md) 定义公共系统边界与跨组件接口；[docs/architecture/kernel.md](docs/architecture/kernel.md) 只管 Kernel 内部；[docs/architecture/frontend.md](docs/architecture/frontend.md) 只管 Web 与前端 |
 | 开发 | [docs/development/workflow.md](docs/development/workflow.md) 负责日常实现与贡献；[docs/development/testing.md](docs/development/testing.md) 负责测试；[docs/development/high-risk-capabilities.md](docs/development/high-risk-capabilities.md) 负责高风险能力 |
-| 部署 | [docs/deployment/local.md](docs/deployment/local.md) 负责当前 CLI、Docker 和本地 Web/API 运行；[docs/deployment/production.md](docs/deployment/production.md) 负责正式发布和生产准入 |
+| 部署 | [docs/deployment/local.md](docs/deployment/local.md) 负责当前 CLI、本地 Web/API、CLI Compose 和受限 Web 容器运行；[docs/deployment/production.md](docs/deployment/production.md) 负责公网服务、正式发布和生产准入 |
 
 ### USE WHEN：按任务路由（优先）
 
@@ -37,6 +37,7 @@
 | --- | --- | --- |
 | 普通模块、Workflow 或 Skill 功能 | `docs/product/scope.md`、`docs/development/workflow.md` | 改变系统边界时加 `docs/architecture/system.md`；新增或修改测试时加 `docs/development/testing.md` |
 | 产品范围、模块行为或非目标 | `docs/product/scope.md` | 涉及优先级、状态或阶段验收时加 `docs/product/roadmap.md` |
+| Learning、Practice 与 Research 跨模块上下文 | `docs/product/scope.md`、`docs/architecture/system.md`、`docs/architecture/frontend.md` | 改持久化时加 `docs/development/workflow.md`、`docs/development/testing.md` |
 | 缺陷诊断与修复 | `docs/development/workflow.md`、`docs/development/testing.md` | 改变产品行为时加 `docs/product/scope.md`；触及架构边界时加 `docs/architecture/system.md` |
 | Kernel 修改或同步 | `docs/architecture/system.md`、`docs/architecture/kernel.md`、`docs/development/workflow.md`、`docs/development/testing.md` | 改变产品可见行为时加 `docs/product/scope.md` |
 | Web 页面或前端交互 | `docs/product/scope.md`、`docs/architecture/frontend.md`、`docs/development/workflow.md` | 改 API 契约时加 `docs/architecture/system.md`；测试任务加 `docs/development/testing.md`；上线任务加 `docs/deployment/production.md` |
@@ -44,7 +45,7 @@
 | 纯测试、测试失败或合并检查 | `docs/development/testing.md` | 需要修改实现时加 `docs/development/workflow.md`；Kernel 测试加 `docs/architecture/system.md`、`docs/architecture/kernel.md` |
 | 数据模型、SQLAlchemy、Alembic 或迁移 | `docs/architecture/system.md`、`docs/development/workflow.md`、`docs/development/testing.md` | 涉及生产数据库时加 `docs/deployment/production.md` |
 | 代码执行、在线 Provider、真实联网写入或远程仓库操作 | `docs/architecture/system.md`、`docs/development/high-risk-capabilities.md`、`docs/development/testing.md` | 修改普通实现时加 `docs/development/workflow.md`；部署真实能力时加 `docs/deployment/production.md` |
-| 当前 CLI/Docker、本地 Web/API 启停、Provider 配置、数据库或 Event | `docs/deployment/local.md` | 改镜像或应用实现时加 `docs/development/workflow.md`；正式发布时加 `docs/deployment/production.md` |
+| 当前 CLI/Docker、本地或受限环境 Web/API 启停、Provider 配置、数据库或 Event | `docs/deployment/local.md` | 改镜像或应用实现时加 `docs/development/workflow.md`；公网服务或正式发布时加 `docs/deployment/production.md` |
 | 生产发布、Web/API 上线、受限服务或生产回滚 | `docs/deployment/production.md` | 同时读取被部署组件对应的架构和开发文档 |
 | 仅修改文档 | 目标文档 | 只有修改内容涉及其他领域事实时，才读取该领域文档；不因文档任务加载完整开发或测试手册 |
 

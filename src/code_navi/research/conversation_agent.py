@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from code_navi.context_transfer.schemas import ConfirmedContextProvenance
 from code_navi.providers import ProviderSettings, create_provider
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
@@ -87,6 +88,7 @@ class RuntimeConversationDecisionGenerator:
         messages: Sequence[ResearchConversationMessage | Mapping[str, object]],
         user_message: str,
         conversation_id: str,
+        confirmed_context: ConfirmedContextProvenance | None = None,
     ) -> ConversationDecisionOutcome:
         """Return a validated decision or a safe status for application fallback."""
         try:
@@ -94,7 +96,12 @@ class RuntimeConversationDecisionGenerator:
             if provider is None:
                 return ConversationDecisionOutcome.unavailable()
             request = RuntimeRequest(
-                self._runtime_input(profile, messages, user_message),
+                self._runtime_input(
+                    profile,
+                    messages,
+                    user_message,
+                    confirmed_context,
+                ),
                 session_id=conversation_id,
                 metadata={
                     "interface": "research_conversation",
@@ -141,6 +148,7 @@ class RuntimeConversationDecisionGenerator:
         profile: ResearchProfile | Mapping[str, object],
         messages: Sequence[ResearchConversationMessage | Mapping[str, object]],
         user_message: str,
+        confirmed_context: ConfirmedContextProvenance | None = None,
     ) -> str:
         normalized_profile = (
             profile.model_dump(mode="json")
@@ -159,6 +167,13 @@ class RuntimeConversationDecisionGenerator:
             )
         payload = {
             "task": "根据本轮消息更新科研画像并决定下一步对话",
+            "confirmed_learning_context": (
+                confirmed_context.model_dump(mode="json") if confirmed_context else None
+            ),
+            "confirmed_context_policy": (
+                "将已确认学习上下文作为背景事实；不要重复询问其中已经明确的信息，"
+                "也不要把一般知识内容改写成用户尚未表达的研究选择。"
+            ),
             "current_profile": normalized_profile,
             "recent_messages": normalized_messages,
             "latest_user_message": user_message,

@@ -27,7 +27,7 @@ def _venv_python() -> Path:
 def _npm_command() -> str:
     command = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if command is None:
-        raise FileNotFoundError("npm is missing. Install Node.js 20.9 or newer.")
+        raise FileNotFoundError("npm is missing. Install Node.js 20.19 or newer.")
     if not (FRONTEND_ROOT / "node_modules").is_dir():
         raise FileNotFoundError("Frontend dependencies are missing. Run: cd frontend && npm ci")
     return command

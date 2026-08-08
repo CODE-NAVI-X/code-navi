@@ -1,4 +1,59 @@
 services:
+  piston:
+    image: ghcr.io/engineer-man/piston@sha256:2f66b7456189c4d713aa986d98eccd0b6ee16d26c7ec5f21b30e942756fd127a
+    privileged: true
+    restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 512
+    environment:
+      PISTON_DISABLE_NETWORKING: "true"
+      PISTON_MAX_PROCESS_COUNT: "64"
+      PISTON_MAX_OPEN_FILES: "64"
+      PISTON_MAX_FILE_SIZE: "1048576"
+      PISTON_OUTPUT_MAX_SIZE: "65536"
+      PISTON_MAX_CONCURRENT_JOBS: "4"
+      PISTON_COMPILE_TIMEOUT: "2000"
+      PISTON_RUN_TIMEOUT: "2000"
+      PISTON_COMPILE_CPU_TIME: "2000"
+      PISTON_RUN_CPU_TIME: "2000"
+      PISTON_COMPILE_MEMORY_LIMIT: "134217728"
+      PISTON_RUN_MEMORY_LIMIT: "134217728"
+    ports:
+      - "127.0.0.1:2000:2000"
+    volumes:
+      - type: volume
+        source: piston_packages
+        target: /piston/packages
+    tmpfs:
+      - /tmp:exec,nosuid,size=256m
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('http').get('http://127.0.0.1:2000/api/v2/runtimes',
+          r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  compiler-runtime-setup:
+    build:
+      context: .
+    image: code-navi:local
+    environment:
+      PISTON_BASE_URL: http://piston:2000
+      PISTON_PYTHON_VERSION: ${PISTON_PYTHON_VERSION:-3.12.0}
+    entrypoint: []
+    command: ["python", "-m", "code_navi.online_compiler.runtime_setup"]
+    depends_on:
+      piston:
+        condition: service_healthy
+    restart: "no"
+
   code-navi:
     build:
       context: .
@@ -11,6 +66,11 @@ services:
       CODE_NAVI_PROVIDER: ${CODE_NAVI_PROVIDER:-mock}
       CODE_NAVI_MODEL: ${CODE_NAVI_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      PISTON_BASE_URL: http://piston:2000
+      PISTON_PYTHON_VERSION: ${PISTON_PYTHON_VERSION:-3.12.0}
+      COMPILER_DATABASE_PATH: /data/compiler-learning-records.sqlite3
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
     volumes:
       - type: bind
         source: .
@@ -25,6 +85,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    depends_on:
+      compiler-runtime-setup:
+        condition: service_completed_successfully
 
 volumes:
   code_navi_runs:
+  piston_packages:
+    name: code-navi-piston-packages

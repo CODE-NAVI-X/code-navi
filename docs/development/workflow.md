@@ -27,11 +27,13 @@ npm ci
 | --- | --- |
 | CLI 问答 | `src/code_navi/cli.py`、`application.py`、`context.py` |
 | 学习 API | `src/code_navi/learning/`、`frontend/lib/api/learning.ts`、学习页面 |
+| 跨模块上下文 | `src/code_navi/context_transfer/`、`frontend/lib/api/context-transfers.ts`、来源页面和目标确认页面 |
+| Python 练习与判题 | `src/code_navi/online_compiler/`、`frontend/lib/api/compiler.ts`、练习页面、`tests/online_compiler/` |
 | 科研对话与检索 | `src/code_navi/research/conversation_agent.py`、`conversation_service.py`、`conversation_search_service.py`、`academic.py`、科研页面 |
 | Provider | `src/code_navi/providers.py` 与 `src/kernel/adapters/` |
 | Kernel | `src/kernel/` 与 `tests/kernel/` |
 | 数据库 | `src/code_navi/db.py`、模块 ORM、`migrations/` |
-| 本地 Web/API | `src/code_navi/server.py`、`frontend/`、`scripts/dev.py`、`dev-start.cmd` |
+| 本地 Web/API | `src/code_navi/server.py`、`frontend/`、`scripts/dev.py`、`dev-start.cmd`、`dev-stop.cmd` |
 
 开始修改前确认仓库根目录、分支和工作树状态，找到真实入口及最接近的测试，并从同一工作树运行最小闭环。不要按尚不存在的目标目录重新组织实现。
 

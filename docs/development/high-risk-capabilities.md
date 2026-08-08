@@ -21,7 +21,17 @@
 
 ## 3. 代码执行
 
-`src/kernel/tools/bash.py` 的存在不表示产品已启用练习执行器。接收不受信任代码前必须具备：
+当前练习原型通过 `src/code_navi/online_compiler/` 调用独立 Piston 服务，不使用 Kernel Bash 工具。只支持固定 Python 3.12 runtime，源代码与标准输入默认各限制 64 KiB，墙钟和 CPU 时间各 2 秒，内存 128 MiB，输出 64 KiB。执行、服务端判题、规则分类和可选模型建议分别返回；模型不能改变执行器结果或测试判定。
+
+当前边界：
+
+1. `compose.yaml` 将 Piston API 只绑定到宿主 loopback；Piston 按官方 Isolate 运行方式使用 `privileged: true`，同时显式关闭作业网络并限制进程、文件、输出、并发和容器总资源；
+2. 服务端请求限制已有 Mock/适配器测试，`tests/online_compiler/test_piston_live.py` 提供真实 Piston 的网络、工作区清理、仓库隔离和进程/文件限制检查；该显式测试取得通过结果后才满足真实执行隔离的合并准入；
+3. Piston runtime 安装需要访问其包源，属于显式部署联网动作；
+4. 练习记录使用浏览器 UUID 和独立 SQLite，只保存代码哈希与摘要，不保存原始代码或标准输入，但没有应用身份授权、迁移和删除流程；
+5. `compose.web.yaml` 尚未接入 Piston，当前 Web 容器部署不提供练习执行服务。
+
+在扩大运行范围或公开服务前必须具备：
 
 1. 独立执行服务或等价隔离边界；
 2. CPU、内存、时间、进程、网络、文件系统和输出限制；
@@ -29,6 +39,8 @@
 4. 编译错误、运行错误、超时、资源超限和系统错误的结构化结果；
 5. 对 Provider、数据库和仓库凭据的隔离；
 6. 由执行器结果产生的运行与测试状态。
+
+`src/kernel/tools/bash.py` 的存在仍不表示产品可以绕过 Piston 执行学生代码。新增语言、开放 Piston API、取消 loopback 限制或改变 privileged 状态时，必须重新验证上述边界。
 
 ## 4. 远程仓库写入
 

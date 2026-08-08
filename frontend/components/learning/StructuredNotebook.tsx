@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   fetchNotebookItems,
   fetchPresentation,
   type NotebookItem,
   type PresentationDetail,
 } from "@/lib/api/learning";
+import { createLearningToResearchContext } from "@/lib/api/context-transfers";
 import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
 import {
   Bookmark,
@@ -19,9 +21,11 @@ import {
   ExternalLink,
   Presentation,
   Loader2,
+  GraduationCap,
+  Microscope,
 } from "lucide-react";
 
-type TabId = "summary" | "note" | "wrong_answer" | "presentation";
+type TabId = "summary" | "note" | "research_note" | "wrong_answer" | "presentation";
 
 interface StructuredNotebookProps {
   open: boolean;
@@ -99,12 +103,14 @@ export function StructuredNotebook({
   onDismiss,
   sessionId,
 }: StructuredNotebookProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>("summary");
   const [items, setItems] = useState<NotebookItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PresentationDetail | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [transferringItemId, setTransferringItemId] = useState<string | null>(null);
 
   const loadItems = useCallback(async () => {
     if (!sessionId) return;
@@ -146,10 +152,24 @@ export function StructuredNotebook({
     }
   }
 
+  async function continueToResearch(item: NotebookItem) {
+    if (!sessionId) return;
+    setTransferringItemId(item.id);
+    setError(null);
+    try {
+      const context = await createLearningToResearchContext(item.id, sessionId);
+      router.push(`/research/confirm/${encodeURIComponent(context.id)}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "创建待传递上下文失败");
+      setTransferringItemId(null);
+    }
+  }
+
   if (!open) return null;
 
   const summaryItems = items.filter((i) => i.kind === "summary");
   const noteItems = items.filter((i) => i.kind === "note");
+  const researchNoteItems = items.filter((i) => i.kind === "research_note");
   const wrongAnswerItems = items.filter((i) => i.kind === "wrong_answer");
   const presentationItems = items.filter((i) => i.kind === "presentation");
 
@@ -158,6 +178,8 @@ export function StructuredNotebook({
       ? summaryItems
       : activeTab === "note"
       ? noteItems
+      : activeTab === "research_note"
+      ? researchNoteItems
       : activeTab === "wrong_answer"
       ? wrongAnswerItems
       : presentationItems;
@@ -165,6 +187,7 @@ export function StructuredNotebook({
   const tabs: { id: TabId; label: string; icon: typeof Sparkles; count: number }[] = [
     { id: "summary", label: "AI 客观摘要", icon: Sparkles, count: summaryItems.length },
     { id: "note", label: "时间戳手记", icon: FileText, count: noteItems.length },
+    { id: "research_note", label: "研究笔记", icon: Microscope, count: researchNoteItems.length },
     { id: "wrong_answer", label: "错题本", icon: AlertTriangle, count: wrongAnswerItems.length },
     { id: "presentation", label: "PPT 课件", icon: Presentation, count: presentationItems.length },
   ];
@@ -205,7 +228,7 @@ export function StructuredNotebook({
 
         {/* Tab triggers - Shadcn Standard Segmented Control */}
         <div className="p-4 border-b border-slate-100 dark:border-zinc-800/80">
-          <div className="grid grid-cols-4 rounded-xl bg-slate-100/90 p-1 dark:bg-zinc-800/80 border border-slate-200/50 dark:border-zinc-700/40">
+          <div className="grid grid-cols-5 rounded-xl bg-slate-100/90 p-1 dark:bg-zinc-800/80 border border-slate-200/50 dark:border-zinc-700/40">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -256,13 +279,9 @@ export function StructuredNotebook({
           ) : (
             <div className="space-y-3">
               {currentTabItems.map((item) => (
-                <button
+                <article
                   key={item.id}
-                  type="button"
-                  onClick={() => item.kind === "presentation" && openPresentation(item)}
-                  className={`block w-full cursor-pointer rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 text-left dark:border-zinc-800 dark:bg-zinc-800/30 ${
-                    item.kind === "presentation" ? "hover:border-indigo-300 hover:bg-indigo-50/40 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/20" : ""
-                  }`}
+                  className="block w-full rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 text-left dark:border-zinc-800 dark:bg-zinc-800/30"
                 >
                   {item.timestamp && (
                     <div className="mb-2 flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-zinc-500 font-mono">
@@ -278,16 +297,75 @@ export function StructuredNotebook({
                       </span>
                     </div>
                   )}
-                  <p className="text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
-                    {item.content}
-                  </p>
+                  {item.kind === "research_note" && (
+                    <div className="mb-2 flex items-center gap-1.5">
+                      <Microscope className="h-3 w-3 text-emerald-600" strokeWidth={1.5} />
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+                        Research Conversation 研究笔记
+                      </span>
+                    </div>
+                  )}
+                  {item.kind === "research_note" && item.research_note ? (
+                    <div className="space-y-2 text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
+                      <p className="font-semibold text-slate-900 dark:text-zinc-100">{item.research_note.research_topic}</p>
+                      <p className="line-clamp-4">研究问题：{item.research_note.research_question}</p>
+                      <div>
+                        <p className="font-semibold">下一步建议</p>
+                        <ol className="mt-1 list-decimal space-y-1 pl-4">
+                          {item.research_note.next_steps.map((step) => <li key={step}>{step}</li>)}
+                        </ol>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-line text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
+                      {item.content}
+                    </p>
+                  )}
                   {item.source_url && (
-                    <span className="mt-2.5 inline-flex items-center gap-1 text-[11px] font-medium text-slate-700 hover:text-slate-900 hover:underline dark:text-zinc-300 dark:hover:text-white">
+                    <a href={item.source_url} target="_blank" rel="noreferrer" className="mt-2.5 inline-flex items-center gap-1 text-[11px] font-medium text-slate-700 hover:text-slate-900 hover:underline dark:text-zinc-300 dark:hover:text-white">
                       <span>查看原文</span>
                       <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
-                    </span>
+                    </a>
                   )}
-                </button>
+                  {item.kind === "research_note" && item.research_note && (
+                    <div className="mt-3 space-y-2 border-t border-slate-200 pt-3 text-[11px] dark:border-zinc-700">
+                      <p className="font-semibold text-slate-700 dark:text-zinc-200">Evidence 来源</p>
+                      {item.research_note.evidence_refs.map((reference) => (
+                        <a key={`${reference.bundle_id}:${reference.paper_url}`} href={reference.paper_url} target="_blank" rel="noreferrer" className="flex items-start justify-between gap-2 text-sky-700 hover:underline dark:text-sky-300">
+                          <span>{reference.title}{reference.evidence_summary ? <span className="mt-1 line-clamp-3 font-normal text-slate-500 dark:text-zinc-400">{reference.evidence_summary}</span> : null}</span>
+                          <span className="shrink-0 text-slate-400">{reference.source_name} · {reference.evidence_level === "abstract" ? "摘要级" : "元数据级"}</span>
+                        </a>
+                      ))}
+                      <p className="text-slate-500 dark:text-zinc-400">Conversation：{item.research_note.conversation_id}</p>
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.kind === "presentation" && (
+                      <button
+                        type="button"
+                        onClick={() => void openPresentation(item)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:bg-zinc-900 dark:text-indigo-300"
+                      >
+                        <Presentation className="h-3 w-3" /> 预览课件
+                      </button>
+                    )}
+                    {item.kind === "summary" && (
+                      <button
+                        type="button"
+                        onClick={() => void continueToResearch(item)}
+                        disabled={transferringItemId !== null}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                      >
+                        {transferringItemId === item.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <GraduationCap className="h-3 w-3" />
+                        )}
+                        继续研究
+                      </button>
+                    )}
+                  </div>
+                </article>
               ))}
             </div>
           )}

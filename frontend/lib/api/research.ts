@@ -1,6 +1,8 @@
 /** Browser client for the versioned conversational research API. */
 
 export const RESEARCH_CONVERSATION_SCHEMA = "research-conversation.v1" as const;
+export const RESEARCH_CONVERSATION_STORAGE_KEY =
+  "code-navi.research.conversation-id";
 
 export type ResearchStage = "exploring" | "focusing" | "ready_for_plan";
 export type GenerationMode = "agent" | "rules" | "rules_fallback";
@@ -95,12 +97,23 @@ export interface ResearchMindMap {
 
 export type AnalysisClassification = "fact" | "inference" | "to_verify";
 
+export interface EvidenceReference {
+  bundle_id: string;
+  paper_url: string;
+  title: string;
+  source_name: string;
+  year: number | null;
+  evidence_level: "metadata" | "abstract" | "full_text";
+  evidence_summary: string | null;
+}
+
 export interface ResearchAnalysisItem {
   area: string;
   content: string;
   classification: AnalysisClassification;
   basis: string;
   source_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+  evidence_refs: EvidenceReference[];
 }
 
 export interface TopicDifficultyAnalysis {
@@ -175,6 +188,23 @@ export interface ResearchConversationMessage {
   recommended_action: RecommendedAction | null;
 }
 
+export interface ConfirmedContextProvenance {
+  schema_version: "context-provenance.v1";
+  transfer_id: string;
+  source_module: "learning";
+  source_object: { type: "notebook_item"; id: string };
+  source_scope_id: string;
+  target_module: "research";
+  topic: string;
+  summary: string;
+  selected_content: Array<{
+    kind: "summary" | "detail";
+    label: string;
+    content: string;
+  }>;
+  confirmed_at: string;
+}
+
 export interface ResearchConversationResponse {
   schema_version: typeof RESEARCH_CONVERSATION_SCHEMA;
   active_skill: "research-clarification";
@@ -196,6 +226,7 @@ export interface ResearchConversationResponse {
   candidate_questions: string[];
   messages: ResearchConversationMessage[];
   last_run_id: string | null;
+  context_provenance: ConfirmedContextProvenance | null;
 }
 
 export interface ProviderStatusResponse {
@@ -264,6 +295,17 @@ export interface AcademicPaperResult {
   abstract_excerpt: string | null;
   information_scope: "metadata_and_abstract_only";
   full_text_available: false;
+  metadata_evidence: EvidenceStatement[];
+  supporting_snippets: EvidenceStatement[];
+  relevance: EvidenceStatement;
+  verification: EvidenceStatement;
+}
+
+export interface EvidenceStatement {
+  content: string;
+  classification: "fact" | "inference" | "to_verify";
+  source_url: string | null;
+  basis: string;
 }
 
 export interface AcademicSourceStatus {
@@ -426,6 +468,18 @@ export interface PaperExportPackage {
   readiness_check_id: string; files: PaperExportFile[]; provenance_note: string;
 }
 
+export interface SavedResearchNotebookNote {
+  schema_version: "research-notebook-note.v1";
+  notebook_item_id: string;
+  learning_session_id: string;
+  conversation_id: string;
+  bundle_id: string;
+  research_topic: string;
+  research_question: string;
+  evidence_refs: EvidenceReference[];
+  next_steps: string[];
+}
+
 export class ResearchApiError extends Error {
   constructor(
     public readonly status: number,
@@ -523,6 +577,24 @@ export async function listResearchEvidence(
 ): Promise<ConversationEvidenceBundle[]> {
   return request<ConversationEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles`,
+  );
+}
+
+export async function saveResearchNotebookNote(
+  conversationId: string,
+  bundleId: string,
+  learningSessionId: string,
+  selectedPaperUrls: string[],
+): Promise<SavedResearchNotebookNote> {
+  return request<SavedResearchNotebookNote>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/evidence-bundles/${encodeURIComponent(bundleId)}/notebook-notes`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        learning_session_id: learningSessionId,
+        selected_paper_urls: selectedPaperUrls,
+      }),
+    },
   );
 }
 

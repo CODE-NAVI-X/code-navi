@@ -1,6 +1,6 @@
 # Code Navi
 
-Code Navi（智教码航）面向学生自主学习、代码练习和项目科研。当前仓库已经具备 Kernel 与 CLI、知识点学习，以及科研对话、离线规则研究计划和受限检索的本地闭环；代码练习仍是占位能力。
+Code Navi（智教码航）面向学生自主学习、代码练习和项目科研。当前仓库已经具备 Kernel 与 CLI、知识点学习、科研对话、离线规则研究计划和受限检索的本地闭环，以及基于本机 Piston 的 Python 练习原型。
 
 ## 本地开发
 
@@ -34,6 +34,8 @@ python scripts/dev.py
 - 已完成隔离的外部 Skill 选型试用：仅将 Socratic 的“一次一问、证据/替代解释/可行性”作为本地模型追问策略参考；未接入外部 Prompt、脚本、完整框架或运行时依赖。详见[外部科研 Skill 评估](docs/research-skill-evaluation.md)和 [EvoScientist 设计笔记](docs/references/evo_scientist_experiment_notes.md)。
 
 当前**尚未实现**论文全文下载与精读、DOCX/PDF 导入、期刊模板适配、引用格式自动校验、ZIP/DOCX/PDF/LaTeX 最终投稿包导出、自动投稿、自动检索、自动实验、自动写入项目、自动安装依赖、自动执行代码，以及多 Agent/MCP；不能把建议或摘要范围外的信息表述为已验证事实。
+
+Windows 使用 `dev-start.cmd` 时会额外启动 Piston 并准备固定 Python runtime；直接运行 `scripts/dev.py` 不启动代码执行服务。练习模块的隔离边界与具体限制见本地部署和高风险能力文档。
 
 ## 文档入口
 

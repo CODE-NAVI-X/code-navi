@@ -30,6 +30,8 @@ from .conversation_schemas import (
     PaperRevision,
     ResearchConversationResponse,
     ResearchSearchPlan,
+    SavedResearchNotebookNote,
+    SaveResearchNotebookNoteRequest,
     SendResearchMessageRequest,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
@@ -217,6 +219,30 @@ def list_conversation_evidence_bundles(
         return _conversation_search_service.list_bundles(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/evidence-bundles/{bundle_id}/notebook-notes",
+    response_model=SavedResearchNotebookNote,
+)
+def save_conversation_evidence_as_notebook_note(
+    conversation_id: str,
+    bundle_id: str,
+    request: SaveResearchNotebookNoteRequest,
+    db: Session = _db_dependency,
+) -> SavedResearchNotebookNote:
+    """Save user-selected evidence as a traceable Learning research note."""
+    try:
+        return _conversation_search_service.save_notebook_note(
+            conversation_id, bundle_id, request, db
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ConversationPaperNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Evidence bundle or selected paper was not found in this conversation.",
+        ) from error
 
 
 @router.post(
