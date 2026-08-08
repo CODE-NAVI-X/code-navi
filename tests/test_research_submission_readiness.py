@@ -123,3 +123,32 @@ def test_submission_readiness_is_explicit_and_flags_unverified_claims(
     assert any(item["classification"] == "to_verify" for item in body["blockers"])
     assert any("venue" in item["message"].casefold() for item in body["manual_checks"])
     assert len(restored.json()) == 1
+
+
+def test_export_requires_explicit_confirmation_and_redacts_sensitive_text(
+    client: TestClient,
+) -> None:
+    draft, _revision = _review_and_revision(client)
+    readiness = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+    assert readiness.status_code == 201
+
+    blocked = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/export-package",
+        json={"user_confirmed": False},
+    )
+    exported = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/export-package",
+        json={"user_confirmed": True},
+    )
+
+    assert blocked.status_code == 422
+    assert exported.status_code == 200
+    files = exported.json()["files"]
+    assert {item["filename"].rsplit(".", 1)[-1] for item in files} == {"md", "json"}
+    joined = "\n".join(item["content"] for item in files).casefold()
+    assert "api_key=" not in joined
+    assert "c:\\users\\" not in joined
+    assert "对话记录" not in joined

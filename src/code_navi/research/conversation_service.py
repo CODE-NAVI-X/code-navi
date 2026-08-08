@@ -35,6 +35,7 @@ from .conversation_schemas import (
     ExperimentEvidenceItem,
     PaperBlueprint,
     PaperDraft,
+    PaperExportPackage,
     PaperReview,
     PaperRevision,
     ResearchConversationDecision,
@@ -48,7 +49,7 @@ from .conversation_schemas import (
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
 )
-from .conversation_submission import build_submission_readiness
+from .conversation_submission import build_paper_export_package, build_submission_readiness
 from .models import (
     ResearchConversationModel,
     ResearchEvidenceBundleModel,
@@ -469,6 +470,18 @@ class ResearchConversationService:
             .all()
         )
         return [SubmissionReadinessCheck.model_validate(record.check_data) for record in records]
+
+    def create_paper_export_package(self, draft_id: str, db: Session) -> PaperExportPackage:
+        """Return sanitized text only after the user separately created all prerequisites."""
+        draft = self._get_paper_draft(draft_id, db)
+        review = self._latest_paper_review(draft_id, db)
+        revision = self._latest_paper_revision(draft_id, db)
+        checks = self.list_submission_readiness(draft_id, db)
+        if review is None or revision is None or not checks:
+            raise ValueError(
+                "Create a review, a revision preview, and an explicit submission checklist first."
+            )
+        return build_paper_export_package(draft, review, revision, checks[0])
 
     @staticmethod
     def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:

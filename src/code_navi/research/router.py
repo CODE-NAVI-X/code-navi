@@ -25,6 +25,7 @@ from .conversation_schemas import (
     PaperAnalysis,
     PaperBlueprint,
     PaperDraft,
+    PaperExportPackage,
     PaperReview,
     PaperRevision,
     ResearchConversationResponse,
@@ -464,6 +465,22 @@ def list_submission_readiness(
         return _conversation_service.list_submission_readiness(draft_id, db)
     except LookupError as error:
         raise HTTPException(status_code=404, detail="Paper draft not found.") from error
+
+
+@router.post("/paper-drafts/{draft_id}/export-package", response_model=PaperExportPackage)
+def create_paper_export_package(
+    draft_id: str,
+    request: GenerateResearchArtifactRequest,
+    db: Session = _db_dependency,
+) -> PaperExportPackage:
+    """Return safe local text; the browser download remains a separate user action."""
+    del request
+    try:
+        return _conversation_service.create_paper_export_package(draft_id, db)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Paper draft not found.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post(

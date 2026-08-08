@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from datetime import UTC, datetime
 
 from .conversation_schemas import (
     PaperDraft,
+    PaperExportFile,
+    PaperExportPackage,
     PaperReview,
     PaperRevision,
     SubmissionReadinessCheck,
@@ -232,4 +235,84 @@ def build_submission_readiness(
         fact_boundary_notes=fact_boundary_notes,
         recommended_next_actions=recommended_next_actions,
         created_at=datetime.now(UTC),
+    )
+
+
+def _redact_export_text(value: str) -> str:
+    value = re.sub(r"(?i)(api[_ -]?key\s*[:=]\s*)\S+", r"\1[已隐藏]", value)
+    value = re.sub(r"(?i)sk-[a-z0-9_-]+", "[已隐藏]", value)
+    return _LOCAL_PATH_PATTERN.sub("[已隐藏本地路径]", value)
+
+
+def build_paper_export_package(
+    draft: PaperDraft,
+    review: PaperReview,
+    revision: PaperRevision,
+    readiness: SubmissionReadinessCheck,
+) -> PaperExportPackage:
+    """Build two browser-downloadable text files without ZIP, network access, or writes."""
+    review_lines = "\n".join(
+        "\n".join(
+            (
+                f"- [{item.severity}/{item.classification}] {item.section}：{item.issue}",
+                f"  - 依据：{item.basis}",
+                f"  - 建议：{item.recommended_action}",
+            )
+        )
+        for item in review.findings
+    )
+    check_lines = "\n".join(
+        f"- [{item.classification}] {item.category}：{item.message}\n  - 依据：{item.basis}"
+        for group in (
+            readiness.blockers,
+            readiness.warnings,
+            readiness.manual_checks,
+            readiness.fact_boundary_notes,
+            readiness.recommended_next_actions,
+        )
+        for item in group
+    )
+    markdown = _redact_export_text(
+        "# 本地论文辅助包（非最终投稿格式）\n\n"
+        "仅由用户明确导出；不包含会话历史、数据库、论文全文缓存或项目文件。"
+        "建议和待验证项不等于已验证实验结论、导师结论或投稿资格。\n\n"
+        f"## 初稿：{draft.title}\n\n{draft.content}\n\n"
+        f"## 修订稿预览（v{revision.version}）\n\n{revision.content}\n\n"
+        "## 已接受任务对应的修改说明\n\n"
+        + "\n".join(f"- {summary}" for summary in revision.change_summary)
+        + "\n\n## 结构化审稿意见\n\n"
+        + review_lines
+        + f"\n\n## 投稿前检查：{readiness.readiness_status}\n\n"
+        + check_lines
+    )
+    check_json = _redact_export_text(
+        json.dumps(
+            {
+                "review": review.model_dump(mode="json"),
+                "submission_readiness": readiness.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return PaperExportPackage(
+        draft_id=draft.draft_id,
+        revision_id=revision.revision_id,
+        readiness_check_id=readiness.check_id,
+        files=[
+            PaperExportFile(
+                filename="paper-assistant-package.md",
+                content_type="text/markdown",
+                content=markdown,
+            ),
+            PaperExportFile(
+                filename="paper-assistant-checks.json",
+                content_type="application/json",
+                content=check_json,
+            ),
+        ],
+        provenance_note=(
+            "仅包含当前本地保存的初稿、修订预览、审稿意见与投稿前检查；"
+            "浏览器下载仍需要用户主动点击。"
+        ),
     )

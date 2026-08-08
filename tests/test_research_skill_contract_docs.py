@@ -26,6 +26,7 @@ SKILL_NAMES = (
     "paper-blueprint",
     "paper-draft-review",
     "paper-revision",
+    "paper-export",
     "submission-readiness",
     "research-mindmap",
 )
@@ -39,7 +40,12 @@ def test_research_skill_docs_declare_the_same_minimum_contract() -> None:
 
 
 def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
-    for skill_name in ("paper_draft_review", "paper_revision", "submission_readiness"):
+    for skill_name in (
+        "paper_draft_review",
+        "paper_revision",
+        "submission_readiness",
+        "paper_export",
+    ):
         content = (REPOSITORY_ROOT / "docs" / "skills" / skill_name / "SKILL.md").read_text(
             encoding="utf-8"
         )
@@ -67,6 +73,7 @@ def test_research_demo_docs_describe_the_closed_loop_and_non_goals() -> None:
             "结构化审稿",
             "修订任务",
             "投稿前检查",
+            "受控导出",
         ):
             assert phrase in document
 

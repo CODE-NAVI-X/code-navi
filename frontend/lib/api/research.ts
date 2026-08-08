@@ -418,6 +418,13 @@ export interface SubmissionReadinessCheck {
   recommended_next_actions: SubmissionReadinessItem[]; created_at: string;
   source_scope: "local_saved_research_artifacts";
 }
+export interface PaperExportFile {
+  filename: string; content_type: "text/markdown" | "application/json"; content: string;
+}
+export interface PaperExportPackage {
+  schema_version: "paper-export.v1"; draft_id: string; revision_id: string;
+  readiness_check_id: string; files: PaperExportFile[]; provenance_note: string;
+}
 
 export class ResearchApiError extends Error {
   constructor(
@@ -607,6 +614,9 @@ export async function createSubmissionReadiness(draftId: string): Promise<Submis
 }
 export async function listSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck[]> {
   return request<SubmissionReadinessCheck[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`);
+}
+export async function createPaperExportPackage(draftId: string): Promise<PaperExportPackage> {
+  return request<PaperExportPackage>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/export-package`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {

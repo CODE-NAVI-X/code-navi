@@ -769,3 +769,24 @@ class SubmissionReadinessCheck(BaseModel):
     )
     created_at: datetime
     source_scope: Literal["local_saved_research_artifacts"] = "local_saved_research_artifacts"
+
+
+class PaperExportFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,120}$")
+    content_type: Literal["text/markdown", "application/json"]
+    content: str = Field(min_length=1, max_length=180000)
+
+
+class PaperExportPackage(BaseModel):
+    """Text returned only after an explicit export request; the server never writes files."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-export.v1"] = "paper-export.v1"
+    draft_id: str
+    revision_id: str
+    readiness_check_id: str
+    files: list[PaperExportFile] = Field(min_length=2, max_length=2)
+    provenance_note: str = Field(min_length=1, max_length=1000)
