@@ -1,7 +1,7 @@
 """Persist user-submitted experiment evidence bundles.
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: research_experiment_evidence_v1
+Revises: 0005
 Create Date: 2026-08-07
 """
 
@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0004"
-down_revision: str | None = "0003"
+revision: str = "research_experiment_evidence_v1"
+down_revision: str | None = "0005"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

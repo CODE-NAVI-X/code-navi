@@ -1,7 +1,7 @@
 """Persist local rules-based submission-readiness checks.
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: research_submission_readiness_v1
+Revises: research_paper_workflow_v1
 Create Date: 2026-08-08
 """
 
@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0006"
-down_revision: str | None = "0005"
+revision: str = "research_submission_readiness_v1"
+down_revision: str | None = "research_paper_workflow_v1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
