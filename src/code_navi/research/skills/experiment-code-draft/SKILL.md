@@ -1,6 +1,39 @@
 ---
 name: experiment-code-draft
-description: Create a user-confirmed preview-only experiment code draft from a ready rules plan; model wording is optional and bounded.
+description: 在用户明确确认后生成仅供浏览器预览、复制或下载的实验代码草案，不写入或执行。
 ---
 
-Return schema-validated preview text only after explicit user confirmation. Rules control confirmation and safety validation. Do not write files, install dependencies, run commands, use real keys, assume local paths, download data, or treat the preview as an executable experiment.
+# 实验代码草案
+
+## 版本与用途
+
+- 版本：`0.2.0`
+- 用途：输出 `experiment-code-draft.v1` 的 Python 草案（README、依赖清单、数据加载/基线/评测模板与说明），用于学生审阅而非运行。
+
+## 输入与输出
+
+- 输入：已确认 `ResearchProfile`、已生成实验方案、明确的 `user_confirmed: true` 及已确认数据约束。
+- 输出：标题、目录树、依赖、文件预览、运行说明、假设、待验证项和来源说明；前端仅复制或下载已生成文本。
+
+## 规则层与模型层边界
+
+- 规则层唯一决定确认门槛、默认合成数据、安全模板、路径/密钥/命令校验及是否允许生成。
+- 可选模型只能返回经校验的 JSON 草案，不能写文件、安装依赖、自动下载、自动执行或绕过确认。
+
+## 权限、来源与副作用
+
+- 不联网，不访问论文全文或本地私有路径。
+- 不写用户项目、不安装依赖、不执行代码/命令；浏览器复制和下载是用户显式操作，仅导出内存文本。
+
+## 失败与规则降级
+
+未确认时拒绝生成。无模型/密钥、超时、网络错误、非法 JSON、缺字段、密钥/私有路径/自动安装或执行内容时，返回安全规则模板或明确拒绝。
+
+## 测试样例
+
+- `tests/test_research_artifact_llm.py`：模型草案校验与安全降级。
+- `tests/test_research_mindmap.py`：确认门槛和草案预览回归。
+
+## 外部参考与许可证
+
+本地试用过 `qinyan-academic-skills` 中标注 `BSD-3-Clause` 的 scikit-learn 指导资料，仅参考“README、数据模板、基线、评测、待验证项”的结构检查清单；不复制示例代码、不安装其依赖、不运行训练脚本。完整选择记录见 [外部 Skill 评估](../../../../../docs/research-skill-evaluation.md)。

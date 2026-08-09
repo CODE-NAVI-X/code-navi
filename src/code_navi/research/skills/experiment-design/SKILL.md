@@ -1,6 +1,39 @@
 ---
 name: experiment-design
-description: Propose a bounded experiment design from a validated research plan; model wording is optional and never executes work or asserts unprovided resources.
+description: 在已确认研究计划的约束下给出可审阅的实验建议；模型表达是可选且受规则限制的。
 ---
 
-Return only schema-validated inference and to_verify suggestions. Rules own the profile, plan, confirmations, permissions and failure fallback. A model may only organize supplied context into JSON; do not browse, write, install, execute, or claim that data, equipment, approvals, or results exist.
+# 实验方案
+
+## 版本与用途
+
+- 版本：`0.2.0`
+- 用途：输出 `experiment-design.v1`，包含假设、变量/对照、候选基线、指标、两周 MVP、资源、风险与导师确认项。
+
+## 输入与输出
+
+- 输入：已确认的 `ResearchProfile`、规则研究计划、可用 EvidenceBundle 和用户确认状态。
+- 输出：每项附 `classification` 与 `basis` 的结构化实验建议，以及 `provenance_note`。
+
+## 规则层与模型层边界
+
+- 规则层控制计划是否就绪、用户确认、约束、事实标签和降级。
+- 可选模型仅将受限上下文整理为 JSON；不得假设未确认的数据、GPU、样本、经费、许可或实验结果。
+
+## 权限、来源与副作用
+
+- 不联网；只读取会话中已保存的画像、计划和证据摘要范围。
+- 不写项目、不安装依赖、不运行代码或命令。
+
+## 失败与规则降级
+
+无模型、无密钥、超时、网络错误、非法 JSON、过长或越界输出时，返回规则方案；未知条件仍是 `to_verify`，不伪造可行性。
+
+## 测试样例
+
+- `tests/test_research_artifact_llm.py`：结构化模型结果和失败回退。
+- `tests/test_research_mindmap.py`：规则方案的建议/待确认字段。
+
+## 外部参考与许可证
+
+只采用项目内 schema 和规则模板；未复制外部实验框架或训练代码，也未新增运行时依赖。

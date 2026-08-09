@@ -343,6 +343,160 @@ export interface ConversationEvidenceBundle {
   cache_hit: boolean;
 }
 
+export type ExperimentEvidenceCategory =
+  | "data_or_sample"
+  | "setup"
+  | "baseline_or_control"
+  | "random_seed_or_reason"
+  | "metric_or_result"
+  | "result_table"
+  | "chart_description"
+  | "failure_or_limitation"
+  | "ethics_or_data_governance"
+  | "pending_item";
+
+export interface ExperimentEvidenceItem {
+  category: ExperimentEvidenceCategory;
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+  source_scope: "user_submitted_text";
+  related_plan_item: string | null;
+  related_evidence_urls: string[];
+}
+
+export interface ExperimentEvidenceBundle {
+  schema_version: "experiment-evidence.v1";
+  bundle_id: string;
+  conversation_id: string;
+  experiment_name: ExperimentEvidenceItem;
+  goal: ExperimentEvidenceItem;
+  items: ExperimentEvidenceItem[];
+  submitted_at: string;
+  provenance_note: string;
+}
+
+export interface CreateExperimentEvidenceBundleRequest {
+  experiment_name: string;
+  goal: string;
+  items: Array<Pick<ExperimentEvidenceItem, "category" | "content" | "classification"> & {
+    related_plan_item?: string | null;
+    related_evidence_urls?: string[];
+  }>;
+}
+
+export interface PaperBlueprintReference {
+  source_type: "research_profile" | "research_plan" | "academic_evidence" | "experiment_evidence";
+  bundle_id: string | null;
+  label: string;
+  classification: AnalysisClassification;
+  source_url: string | null;
+  information_scope: string;
+}
+
+export interface PaperBlueprintEntry {
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+}
+
+export interface PaperBlueprintSection {
+  section: "引言" | "相关工作" | "方法" | "实验" | "讨论" | "结论";
+  writing_goal: PaperBlueprintEntry;
+  evidence_references: PaperBlueprintReference[];
+  missing_evidence: PaperBlueprintEntry[];
+  forbidden_claims: string[];
+  citation_placeholders: PaperBlueprintReference[];
+}
+
+export interface PaperBlueprint {
+  schema_version: "paper-blueprint.v1";
+  conversation_id: string;
+  candidate_titles: PaperBlueprintEntry[];
+  target_submission_direction: PaperBlueprintEntry;
+  abstract_requirements: PaperBlueprintEntry[];
+  sections: PaperBlueprintSection[];
+  submission_readiness: PaperBlueprintEntry;
+  gaps: PaperBlueprintEntry[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
+export interface PaperSection { section_id: string; heading: string; content: string; order: number; }
+export interface PaperDraft {
+  schema_version: "paper-draft.v1"; draft_id: string; conversation_id: string; title: string;
+  content: string; format: "markdown" | "plain_text"; version: number; sections: PaperSection[];
+  created_at: string; source_scope: "user_pasted_local_session";
+}
+export type ReviewSeverity = "blocker" | "major" | "minor" | "suggestion";
+export interface ReviewFinding {
+  id: string; severity: ReviewSeverity; section: string; issue: string; why_it_matters: string;
+  recommended_action: string; classification: AnalysisClassification; basis: string;
+  source_scope: string; related_blueprint_item: string | null; can_auto_suggest: boolean;
+}
+export interface RevisionTask { task_id: string; finding_id: string; status: "pending" | "accepted" | "skipped" | "completed"; finding: ReviewFinding; created_at: string; updated_at: string; }
+export interface RevisionSuggestion {
+  schema_version: "revision-suggestion.v1"; suggestion_id: string; revision_task_id: string; draft_id: string;
+  section_heading: string; paragraph_anchor: string; original_excerpt: string; candidate_text: string;
+  rationale: string; classification: AnalysisClassification; basis: string; source_scope: string;
+  to_verify_items: string[]; generation_mode: "llm" | "rules" | "rules_fallback"; run_id: string | null; created_at: string;
+}
+export interface PaperReview {
+  schema_version: "paper-review.v1"; review_id: string; draft_id: string; conversation_id: string;
+  findings: ReviewFinding[]; revision_tasks: RevisionTask[]; provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback"; run_id: string | null; event_count: number; created_at: string;
+}
+export interface PaperRevision {
+  schema_version: "paper-revision.v1"; revision_id: string; parent_draft_id: string; review_id: string;
+  parent_revision_id: string | null;
+  version: number; content: string; applied_task_ids: string[]; change_summary: string[];
+  applied_suggestion_ids: string[];
+  diff_preview: string; created_at: string; source_scope: "user_pasted_draft_plus_accepted_suggestions";
+}
+export type CitationTargetDocument = "paper_draft" | "paper_revision" | "paper_blueprint";
+export type SelectedCitationStatus = "selected" | "inserted" | "skipped";
+export interface CitationCandidate {
+  schema_version: "citation-candidate.v1"; citation_id: string; conversation_id: string;
+  evidence_bundle_id: string; paper_title: string; authors: string[]; year: number | null;
+  source_name: string | null; url: string; doi: string | null; arxiv_id: string | null;
+  abstract_scope: "metadata_only" | "metadata_and_abstract";
+  metadata_completeness: "complete" | "partial"; classification: AnalysisClassification;
+  source_scope: "metadata_and_abstract_only"; created_at: string;
+}
+export interface ReferenceEntryDraft {
+  reference_id: string; selected_citation_id: string; display_text: string; citation_key: string;
+  metadata_fields: Record<string, string | number | null>; classification: AnalysisClassification;
+  to_verify_items: string[]; source_scope: "metadata_and_abstract_only";
+}
+export interface SelectedCitation {
+  schema_version: "selected-citation.v1"; selected_citation_id: string; session_id: string;
+  citation: CitationCandidate; target_document: CitationTargetDocument; target_section: string;
+  paragraph_anchor: string; citation_placeholder: string; user_note: string | null;
+  status: SelectedCitationStatus; reference_entry: ReferenceEntryDraft; created_at: string;
+}
+export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
+export interface SubmissionReadinessItem {
+  id: string; category: string; message: string; classification: AnalysisClassification;
+  basis: string; source_scope: string;
+}
+export interface SubmissionReadinessCheck {
+  schema_version: "submission-readiness.v1"; check_id: string; draft_id: string;
+  revision_id: string | null; conversation_id: string; readiness_status: SubmissionReadinessStatus;
+  blockers: SubmissionReadinessItem[]; warnings: SubmissionReadinessItem[];
+  manual_checks: SubmissionReadinessItem[]; fact_boundary_notes: SubmissionReadinessItem[];
+  recommended_next_actions: SubmissionReadinessItem[]; created_at: string;
+  source_scope: "local_saved_research_artifacts";
+}
+export interface PaperExportFile {
+  filename: string; content_type: "text/markdown" | "application/json"; content: string;
+}
+export interface PaperExportPackage {
+  schema_version: "paper-export.v1"; draft_id: string; revision_id: string;
+  readiness_check_id: string; files: PaperExportFile[]; provenance_note: string;
+}
+
 export interface SavedResearchNotebookNote {
   schema_version: "research-notebook-note.v1";
   notebook_item_id: string;
@@ -508,6 +662,86 @@ export async function createExperimentCodeDraft(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`,
     { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
   );
+}
+
+export async function createExperimentEvidenceBundle(
+  conversationId: string,
+  payload: CreateExperimentEvidenceBundleRequest,
+): Promise<ExperimentEvidenceBundle> {
+  return request<ExperimentEvidenceBundle>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listExperimentEvidenceBundles(
+  conversationId: string,
+): Promise<ExperimentEvidenceBundle[]> {
+  return request<ExperimentEvidenceBundle[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+  );
+}
+
+export async function generatePaperBlueprint(conversationId: string): Promise<PaperBlueprint> {
+  return request<PaperBlueprint>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-blueprint`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function createPaperDraft(conversationId: string, payload: { title: string; content: string; format: "markdown" | "plain_text" }): Promise<PaperDraft> {
+  return request<PaperDraft>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-drafts`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function listPaperDrafts(conversationId: string): Promise<PaperDraft[]> {
+  return request<PaperDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-drafts`);
+}
+export async function createPaperReview(draftId: string): Promise<PaperReview> {
+  return request<PaperReview>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/reviews`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) }, MODEL_TURN_TIMEOUT_MS);
+}
+export async function listPaperReviews(draftId: string): Promise<PaperReview[]> {
+  return request<PaperReview[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/reviews`);
+}
+export async function updatePaperRevisionTask(reviewId: string, taskId: string, status: "accepted" | "skipped"): Promise<PaperReview> {
+  return request<PaperReview>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+export async function createRevisionSuggestion(reviewId: string, taskId: string): Promise<RevisionSuggestion> {
+  return request<RevisionSuggestion>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}/suggestions`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) }, MODEL_TURN_TIMEOUT_MS);
+}
+export async function listRevisionSuggestions(reviewId: string, taskId: string): Promise<RevisionSuggestion[]> {
+  return request<RevisionSuggestion[]>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}/suggestions`);
+}
+export async function applyRevisionSuggestion(suggestionId: string, action: "accepted" | "skipped", candidateText?: string): Promise<PaperRevision | null> {
+  return request<PaperRevision | null>(`/api/v1/research/revision-suggestions/${encodeURIComponent(suggestionId)}/apply`, { method: "POST", body: JSON.stringify({ action, candidate_text: candidateText || null }) });
+}
+export async function listPaperRevisions(draftId: string): Promise<PaperRevision[]> {
+  return request<PaperRevision[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/revisions`);
+}
+export async function listCitationCandidates(conversationId: string): Promise<CitationCandidate[]> {
+  return request<CitationCandidate[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-candidates`);
+}
+export async function createSelectedCitation(conversationId: string, payload: {
+  evidence_bundle_id: string; paper_url: string; target_document: CitationTargetDocument;
+  target_section: string; paragraph_anchor: string; user_note?: string | null;
+}): Promise<SelectedCitation> {
+  return request<SelectedCitation>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/selected-citations`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function listSelectedCitations(conversationId: string): Promise<SelectedCitation[]> {
+  return request<SelectedCitation[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/selected-citations`);
+}
+export async function updateSelectedCitation(selectedCitationId: string, status: "inserted" | "skipped"): Promise<SelectedCitation> {
+  return request<SelectedCitation>(`/api/v1/research/selected-citations/${encodeURIComponent(selectedCitationId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+export async function listReferenceEntryDrafts(conversationId: string): Promise<ReferenceEntryDraft[]> {
+  return request<ReferenceEntryDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-entry-drafts`);
+}
+export async function createSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck> {
+  return request<SubmissionReadinessCheck>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
+}
+export async function listSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck[]> {
+  return request<SubmissionReadinessCheck[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`);
+}
+export async function createPaperExportPackage(draftId: string): Promise<PaperExportPackage> {
+  return request<PaperExportPackage>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/export-package`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {

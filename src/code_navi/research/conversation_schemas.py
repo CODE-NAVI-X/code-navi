@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 
@@ -529,3 +530,424 @@ class ConversationEvidenceBundle(BaseModel):
     provenance_note: str
     tool_audit: dict[str, object] | None = None
     cache_hit: bool = False
+
+
+ExperimentEvidenceCategory = Literal[
+    "data_or_sample",
+    "setup",
+    "baseline_or_control",
+    "random_seed_or_reason",
+    "metric_or_result",
+    "result_table",
+    "chart_description",
+    "failure_or_limitation",
+    "ethics_or_data_governance",
+    "pending_item",
+]
+
+
+class ExperimentEvidenceItem(BaseModel):
+    """One bounded, user-submitted experiment statement and its evidence boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    category: ExperimentEvidenceCategory
+    content: str = Field(min_length=1, max_length=4000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+    source_scope: Literal["user_submitted_text"] = "user_submitted_text"
+    related_plan_item: str | None = Field(default=None, max_length=500)
+    related_evidence_urls: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CreateExperimentEvidenceItem(BaseModel):
+    """Raw user text. Classification is a reporting boundary, not a system verification."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    category: ExperimentEvidenceCategory
+    content: str = Field(min_length=1, max_length=4000)
+    classification: AnalysisClassification = "fact"
+    related_plan_item: str | None = Field(default=None, max_length=500)
+    related_evidence_urls: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CreateExperimentEvidenceBundleRequest(BaseModel):
+    """Explicit, text-only result submission. No local file is read or uploaded."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    experiment_name: str = Field(min_length=1, max_length=500)
+    goal: str = Field(min_length=1, max_length=1000)
+    items: list[CreateExperimentEvidenceItem] = Field(min_length=1, max_length=30)
+
+
+class ExperimentEvidenceBundle(BaseModel):
+    """Restorable user-reported experimental evidence; it is not independently verified."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment-evidence.v1"] = "experiment-evidence.v1"
+    bundle_id: str
+    conversation_id: str
+    experiment_name: ExperimentEvidenceItem
+    goal: ExperimentEvidenceItem
+    items: list[ExperimentEvidenceItem] = Field(min_length=1, max_length=30)
+    submitted_at: datetime
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class PaperBlueprintReference(BaseModel):
+    """A traceable reference to an already stored local research artefact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal[
+        "research_profile",
+        "research_plan",
+        "academic_evidence",
+        "experiment_evidence",
+    ]
+    bundle_id: str | None = None
+    label: str = Field(min_length=1, max_length=1000)
+    classification: AnalysisClassification
+    source_url: str | None = Field(default=None, max_length=2000)
+    information_scope: str = Field(min_length=1, max_length=200)
+
+
+class PaperBlueprintEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+
+
+class PaperBlueprintSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section: Literal["引言", "相关工作", "方法", "实验", "讨论", "结论"]
+    writing_goal: PaperBlueprintEntry
+    evidence_references: list[PaperBlueprintReference] = Field(default_factory=list, max_length=24)
+    missing_evidence: list[PaperBlueprintEntry] = Field(default_factory=list, max_length=12)
+    forbidden_claims: list[str] = Field(default_factory=list, max_length=12)
+    citation_placeholders: list[PaperBlueprintReference] = Field(
+        default_factory=list, max_length=24
+    )
+
+
+class PaperBlueprint(BaseModel):
+    """A rule-governed writing outline, never a claim that a paper is ready to submit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-blueprint.v1"] = "paper-blueprint.v1"
+    conversation_id: str
+    candidate_titles: list[PaperBlueprintEntry] = Field(min_length=1, max_length=3)
+    target_submission_direction: PaperBlueprintEntry
+    abstract_requirements: list[PaperBlueprintEntry] = Field(min_length=4, max_length=8)
+    sections: list[PaperBlueprintSection] = Field(min_length=6, max_length=6)
+    submission_readiness: PaperBlueprintEntry
+    gaps: list[PaperBlueprintEntry] = Field(min_length=1, max_length=12)
+    provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+
+
+class PaperSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    section_id: str
+    heading: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=20000)
+    order: int = Field(ge=1, le=100)
+
+
+class CreatePaperDraftRequest(BaseModel):
+    """A user-pasted local draft; file import is intentionally not supported."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=60000)
+    format: Literal["markdown", "plain_text"]
+
+    @field_validator("content")
+    @classmethod
+    def reject_secrets_and_local_paths(cls, value: str) -> str:
+        lowered = value.casefold()
+        if any(marker in lowered for marker in ("api_key=", "api_key =", "sk-")):
+            raise ValueError("draft content must not include API keys")
+        if re.search(r"[a-z]:\\(?:users|home|private)\\", lowered):
+            raise ValueError("draft content must not include a local private path")
+        return value
+
+
+class PaperDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-draft.v1"] = "paper-draft.v1"
+    draft_id: str
+    conversation_id: str
+    title: str
+    content: str
+    format: Literal["markdown", "plain_text"]
+    version: int = Field(ge=1)
+    sections: list[PaperSection] = Field(default_factory=list, max_length=100)
+    created_at: datetime
+    source_scope: Literal["user_pasted_local_session"] = "user_pasted_local_session"
+
+
+ReviewSeverity = Literal["blocker", "major", "minor", "suggestion"]
+ReviewSourceScope = Literal[
+    "draft_text",
+    "research_profile",
+    "research_plan",
+    "academic_metadata_abstract",
+    "experiment_evidence",
+]
+
+
+class ReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str
+    severity: ReviewSeverity
+    section: str = Field(min_length=1, max_length=300)
+    issue: str = Field(min_length=1, max_length=1500)
+    why_it_matters: str = Field(min_length=1, max_length=2000)
+    recommended_action: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+    source_scope: ReviewSourceScope
+    related_blueprint_item: str | None = Field(default=None, max_length=500)
+    can_auto_suggest: bool = False
+
+
+class RevisionTask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    finding_id: str
+    status: Literal["pending", "accepted", "skipped", "completed"] = "pending"
+    finding: ReviewFinding
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaperReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-review.v1"] = "paper-review.v1"
+    review_id: str
+    draft_id: str
+    conversation_id: str
+    findings: list[ReviewFinding] = Field(min_length=1, max_length=40)
+    revision_tasks: list[RevisionTask] = Field(min_length=1, max_length=40)
+    provenance_note: str = Field(min_length=1, max_length=1500)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+    created_at: datetime
+
+
+class UpdateRevisionTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["accepted", "skipped"]
+
+
+class RevisionSuggestion(BaseModel):
+    """One user-confirmable paragraph-level suggestion; it never alters a draft by itself."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["revision-suggestion.v1"] = "revision-suggestion.v1"
+    suggestion_id: str
+    revision_task_id: str
+    draft_id: str
+    section_heading: str = Field(min_length=1, max_length=300)
+    paragraph_anchor: str = Field(min_length=1, max_length=300)
+    original_excerpt: str = Field(min_length=1, max_length=8000)
+    candidate_text: str = Field(min_length=1, max_length=8000)
+    rationale: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+    source_scope: ReviewSourceScope
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    created_at: datetime
+
+
+class ApplyRevisionSuggestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["accepted", "skipped"]
+    candidate_text: str | None = Field(default=None, min_length=1, max_length=8000)
+
+
+class PaperRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-revision.v1"] = "paper-revision.v1"
+    revision_id: str
+    parent_draft_id: str
+    parent_revision_id: str | None = None
+    review_id: str
+    version: int = Field(ge=2)
+    content: str
+    applied_task_ids: list[str] = Field(min_length=1, max_length=40)
+    applied_suggestion_ids: list[str] = Field(default_factory=list, max_length=40)
+    change_summary: list[str] = Field(min_length=1, max_length=40)
+    diff_preview: str = Field(min_length=1, max_length=30000)
+    created_at: datetime
+    source_scope: Literal["user_pasted_draft_plus_accepted_suggestions"] = (
+        "user_pasted_draft_plus_accepted_suggestions"
+    )
+
+
+CitationTargetDocument = Literal["paper_draft", "paper_revision", "paper_blueprint"]
+SelectedCitationStatus = Literal["selected", "inserted", "skipped"]
+
+
+class CitationCandidate(BaseModel):
+    """A deterministic, local view of one paper in a saved evidence bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["citation-candidate.v1"] = "citation-candidate.v1"
+    citation_id: str = Field(min_length=1, max_length=100)
+    conversation_id: str = Field(min_length=1, max_length=100)
+    evidence_bundle_id: str = Field(min_length=1, max_length=100)
+    paper_title: str = Field(min_length=1, max_length=1000)
+    authors: list[str] = Field(default_factory=list, max_length=32)
+    year: int | None = None
+    source_name: str | None = Field(default=None, max_length=200)
+    url: str = Field(min_length=1, max_length=2000)
+    doi: str | None = Field(default=None, max_length=300)
+    arxiv_id: str | None = Field(default=None, max_length=300)
+    abstract_scope: Literal["metadata_only", "metadata_and_abstract"]
+    metadata_completeness: Literal["complete", "partial"]
+    classification: AnalysisClassification
+    source_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+    created_at: datetime
+
+
+class ReferenceEntryDraft(BaseModel):
+    """A human-readable draft, explicitly not a publication-style citation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference_id: str = Field(min_length=1, max_length=100)
+    selected_citation_id: str = Field(min_length=1, max_length=100)
+    display_text: str = Field(min_length=1, max_length=3000)
+    citation_key: str = Field(min_length=1, max_length=160)
+    metadata_fields: dict[str, str | int | None]
+    classification: AnalysisClassification
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
+    source_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+
+
+class CreateSelectedCitationRequest(BaseModel):
+    """An explicit user choice of a saved source and a suggested local position."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    evidence_bundle_id: str = Field(min_length=1, max_length=100)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    target_document: CitationTargetDocument
+    target_section: str = Field(min_length=1, max_length=300)
+    paragraph_anchor: str = Field(min_length=1, max_length=300)
+    user_note: str | None = Field(default=None, max_length=1000)
+
+
+class UpdateSelectedCitationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["inserted", "skipped"]
+
+
+class SelectedCitation(BaseModel):
+    """A persisted selection. It never mutates the draft or revision text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["selected-citation.v1"] = "selected-citation.v1"
+    selected_citation_id: str
+    session_id: str
+    citation: CitationCandidate
+    target_document: CitationTargetDocument
+    target_section: str
+    paragraph_anchor: str
+    citation_placeholder: str
+    user_note: str | None = None
+    status: SelectedCitationStatus = "selected"
+    reference_entry: ReferenceEntryDraft
+    created_at: datetime
+
+
+SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
+SubmissionSourceScope = Literal[
+    "draft_text",
+    "revision_preview",
+    "paper_review",
+    "experiment_evidence",
+    "academic_metadata_abstract",
+    "manual_confirmation",
+]
+
+
+class SubmissionReadinessItem(BaseModel):
+    """One rules-based check; it is never a publication or acceptance verdict."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str
+    category: str = Field(min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=1500)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+    source_scope: SubmissionSourceScope
+
+
+class SubmissionReadinessCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["submission-readiness.v1"] = "submission-readiness.v1"
+    check_id: str
+    draft_id: str
+    revision_id: str | None = None
+    conversation_id: str
+    readiness_status: SubmissionReadinessStatus
+    blockers: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
+    warnings: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
+    manual_checks: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
+    fact_boundary_notes: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=20)
+    recommended_next_actions: list[SubmissionReadinessItem] = Field(
+        default_factory=list, max_length=20
+    )
+    created_at: datetime
+    source_scope: Literal["local_saved_research_artifacts"] = "local_saved_research_artifacts"
+
+
+class PaperExportFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,120}$")
+    content_type: Literal["text/markdown", "application/json"]
+    content: str = Field(min_length=1, max_length=180000)
+
+
+class PaperExportPackage(BaseModel):
+    """Text returned only after an explicit export request; the server never writes files."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["paper-export.v1"] = "paper-export.v1"
+    draft_id: str
+    revision_id: str
+    readiness_check_id: str
+    files: list[PaperExportFile] = Field(min_length=2, max_length=2)
+    provenance_note: str = Field(min_length=1, max_length=1000)
