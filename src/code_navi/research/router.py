@@ -13,12 +13,14 @@ from code_navi.providers import ProviderConfigurationError
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ApplyRevisionSuggestionRequest,
+    CitationCandidate,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
     CreateResearchConversationRequest,
+    CreateSelectedCitationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
     ExperimentEvidenceBundle,
@@ -29,15 +31,18 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReferenceEntryDraft,
     ResearchConversationResponse,
     ResearchSearchPlan,
     RevisionSuggestion,
     SavedResearchNotebookNote,
     SaveResearchNotebookNoteRequest,
+    SelectedCitation,
     SendResearchMessageRequest,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
+    UpdateSelectedCitationRequest,
 )
 from .conversation_search_service import (
     ConversationPaperNotFoundError,
@@ -45,8 +50,10 @@ from .conversation_search_service import (
     ResearchConversationSearchService,
 )
 from .conversation_service import (
+    CitationSourceNotFoundError,
     ConversationNotFoundError,
     ResearchConversationService,
+    SelectedCitationNotFoundError,
 )
 from .provider_schemas import (
     ConfigureProviderRequest,
@@ -219,6 +226,83 @@ def list_conversation_evidence_bundles(
     """Restore saved evidence bundles without accessing external sources."""
     try:
         return _conversation_search_service.list_bundles(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/citation-candidates",
+    response_model=list[CitationCandidate],
+)
+def list_citation_candidates(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[CitationCandidate]:
+    """List only already-saved, source-restricted evidence; this endpoint never searches."""
+    try:
+        return _conversation_service.list_citation_candidates(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/selected-citations",
+    response_model=SelectedCitation,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_selected_citation(
+    conversation_id: str,
+    request: CreateSelectedCitationRequest,
+    db: Session = _db_dependency,
+) -> SelectedCitation:
+    """Persist a user-selected local citation placeholder without changing draft text."""
+    try:
+        return _conversation_service.create_selected_citation(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except CitationSourceNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Evidence source is not present in this conversation's saved bundle.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/selected-citations",
+    response_model=list[SelectedCitation],
+)
+def list_selected_citations(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[SelectedCitation]:
+    """Restore local citation choices without automatic insertion or external access."""
+    try:
+        return _conversation_service.list_selected_citations(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.patch("/selected-citations/{selected_citation_id}", response_model=SelectedCitation)
+def update_selected_citation(
+    selected_citation_id: str,
+    request: UpdateSelectedCitationRequest,
+    db: Session = _db_dependency,
+) -> SelectedCitation:
+    """Track an explicit user status only; the server never inserts citation text."""
+    try:
+        return _conversation_service.update_selected_citation(selected_citation_id, request, db)
+    except SelectedCitationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Selected citation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reference-entry-drafts",
+    response_model=list[ReferenceEntryDraft],
+)
+def list_reference_entry_drafts(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[ReferenceEntryDraft]:
+    """Return readable drafts only for sources the user explicitly retained."""
+    try:
+        return _conversation_service.list_reference_entry_drafts(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 

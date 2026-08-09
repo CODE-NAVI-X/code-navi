@@ -26,6 +26,7 @@ SKILL_NAMES = (
     "paper-blueprint",
     "paper-draft-review",
     "paper-revision",
+    "citation-scaffold",
     "paper-export",
     "submission-readiness",
     "research-mindmap",
@@ -43,6 +44,7 @@ def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
     for skill_name in (
         "paper_draft_review",
         "paper_revision",
+        "citation_scaffold",
         "submission_readiness",
         "paper_export",
     ):
@@ -74,6 +76,7 @@ def test_research_demo_docs_describe_the_closed_loop_and_non_goals() -> None:
             "修订任务",
             "投稿前检查",
             "受控导出",
+            "引用占位",
         ):
             assert phrase in document
 

@@ -455,6 +455,27 @@ export interface PaperRevision {
   applied_suggestion_ids: string[];
   diff_preview: string; created_at: string; source_scope: "user_pasted_draft_plus_accepted_suggestions";
 }
+export type CitationTargetDocument = "paper_draft" | "paper_revision" | "paper_blueprint";
+export type SelectedCitationStatus = "selected" | "inserted" | "skipped";
+export interface CitationCandidate {
+  schema_version: "citation-candidate.v1"; citation_id: string; conversation_id: string;
+  evidence_bundle_id: string; paper_title: string; authors: string[]; year: number | null;
+  source_name: string | null; url: string; doi: string | null; arxiv_id: string | null;
+  abstract_scope: "metadata_only" | "metadata_and_abstract";
+  metadata_completeness: "complete" | "partial"; classification: AnalysisClassification;
+  source_scope: "metadata_and_abstract_only"; created_at: string;
+}
+export interface ReferenceEntryDraft {
+  reference_id: string; selected_citation_id: string; display_text: string; citation_key: string;
+  metadata_fields: Record<string, string | number | null>; classification: AnalysisClassification;
+  to_verify_items: string[]; source_scope: "metadata_and_abstract_only";
+}
+export interface SelectedCitation {
+  schema_version: "selected-citation.v1"; selected_citation_id: string; session_id: string;
+  citation: CitationCandidate; target_document: CitationTargetDocument; target_section: string;
+  paragraph_anchor: string; citation_placeholder: string; user_note: string | null;
+  status: SelectedCitationStatus; reference_entry: ReferenceEntryDraft; created_at: string;
+}
 export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
 export interface SubmissionReadinessItem {
   id: string; category: string; message: string; classification: AnalysisClassification;
@@ -694,6 +715,24 @@ export async function applyRevisionSuggestion(suggestionId: string, action: "acc
 }
 export async function listPaperRevisions(draftId: string): Promise<PaperRevision[]> {
   return request<PaperRevision[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/revisions`);
+}
+export async function listCitationCandidates(conversationId: string): Promise<CitationCandidate[]> {
+  return request<CitationCandidate[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-candidates`);
+}
+export async function createSelectedCitation(conversationId: string, payload: {
+  evidence_bundle_id: string; paper_url: string; target_document: CitationTargetDocument;
+  target_section: string; paragraph_anchor: string; user_note?: string | null;
+}): Promise<SelectedCitation> {
+  return request<SelectedCitation>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/selected-citations`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function listSelectedCitations(conversationId: string): Promise<SelectedCitation[]> {
+  return request<SelectedCitation[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/selected-citations`);
+}
+export async function updateSelectedCitation(selectedCitationId: string, status: "inserted" | "skipped"): Promise<SelectedCitation> {
+  return request<SelectedCitation>(`/api/v1/research/selected-citations/${encodeURIComponent(selectedCitationId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+export async function listReferenceEntryDrafts(conversationId: string): Promise<ReferenceEntryDraft[]> {
+  return request<ReferenceEntryDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-entry-drafts`);
 }
 export async function createSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck> {
   return request<SubmissionReadinessCheck>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });

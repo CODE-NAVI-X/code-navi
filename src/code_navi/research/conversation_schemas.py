@@ -808,6 +808,86 @@ class PaperRevision(BaseModel):
     )
 
 
+CitationTargetDocument = Literal["paper_draft", "paper_revision", "paper_blueprint"]
+SelectedCitationStatus = Literal["selected", "inserted", "skipped"]
+
+
+class CitationCandidate(BaseModel):
+    """A deterministic, local view of one paper in a saved evidence bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["citation-candidate.v1"] = "citation-candidate.v1"
+    citation_id: str = Field(min_length=1, max_length=100)
+    conversation_id: str = Field(min_length=1, max_length=100)
+    evidence_bundle_id: str = Field(min_length=1, max_length=100)
+    paper_title: str = Field(min_length=1, max_length=1000)
+    authors: list[str] = Field(default_factory=list, max_length=32)
+    year: int | None = None
+    source_name: str | None = Field(default=None, max_length=200)
+    url: str = Field(min_length=1, max_length=2000)
+    doi: str | None = Field(default=None, max_length=300)
+    arxiv_id: str | None = Field(default=None, max_length=300)
+    abstract_scope: Literal["metadata_only", "metadata_and_abstract"]
+    metadata_completeness: Literal["complete", "partial"]
+    classification: AnalysisClassification
+    source_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+    created_at: datetime
+
+
+class ReferenceEntryDraft(BaseModel):
+    """A human-readable draft, explicitly not a publication-style citation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference_id: str = Field(min_length=1, max_length=100)
+    selected_citation_id: str = Field(min_length=1, max_length=100)
+    display_text: str = Field(min_length=1, max_length=3000)
+    citation_key: str = Field(min_length=1, max_length=160)
+    metadata_fields: dict[str, str | int | None]
+    classification: AnalysisClassification
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
+    source_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+
+
+class CreateSelectedCitationRequest(BaseModel):
+    """An explicit user choice of a saved source and a suggested local position."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    evidence_bundle_id: str = Field(min_length=1, max_length=100)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    target_document: CitationTargetDocument
+    target_section: str = Field(min_length=1, max_length=300)
+    paragraph_anchor: str = Field(min_length=1, max_length=300)
+    user_note: str | None = Field(default=None, max_length=1000)
+
+
+class UpdateSelectedCitationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["inserted", "skipped"]
+
+
+class SelectedCitation(BaseModel):
+    """A persisted selection. It never mutates the draft or revision text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["selected-citation.v1"] = "selected-citation.v1"
+    selected_citation_id: str
+    session_id: str
+    citation: CitationCandidate
+    target_document: CitationTargetDocument
+    target_section: str
+    paragraph_anchor: str
+    citation_placeholder: str
+    user_note: str | None = None
+    status: SelectedCitationStatus = "selected"
+    reference_entry: ReferenceEntryDraft
+    created_at: datetime
+
+
 SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
 SubmissionSourceScope = Literal[
     "draft_text",

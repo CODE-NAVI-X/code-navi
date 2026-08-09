@@ -9,6 +9,7 @@ import {
   updatePaperRevisionTask, type PaperDraft, type PaperReview, type PaperRevision, type RevisionSuggestion,
   type ReviewSeverity, type SubmissionReadinessCheck, type SubmissionReadinessItem,
 } from "@/lib/api/research";
+import { CitationScaffoldPanel } from "./CitationScaffoldPanel";
 
 const severityLabel: Record<ReviewSeverity, string> = { blocker: "阻塞", major: "重要", minor: "一般", suggestion: "建议" };
 const severityClass: Record<ReviewSeverity, string> = { blocker: "text-rose-700 dark:text-rose-300", major: "text-orange-700 dark:text-orange-300", minor: "text-amber-700 dark:text-amber-300", suggestion: "text-sky-700 dark:text-sky-300" };
@@ -120,6 +121,7 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
   return <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm dark:border-violet-900/70 dark:bg-zinc-900/80">
     <div className="flex items-center gap-3"><span className="rounded-xl bg-violet-100 p-2 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300"><FilePenLine className="h-4 w-4" /></span><div><p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-700 dark:text-violet-300">Local draft review</p><h2 className="mt-1 text-sm font-bold">论文初稿与结构化审稿</h2></div></div>
     <p className="mt-3 text-[11px] leading-5 text-slate-600 dark:text-zinc-400">仅接受当前本地会话主动粘贴的 Markdown/纯文本。DOCX/PDF 导入、最终格式导出留待后续；不会联网、写入项目、自动投稿，也不能替代导师或同行评审。</p>
+    <CitationScaffoldPanel conversationId={conversationId} />
     <div className="mt-3 grid gap-2"><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={500} placeholder="初稿标题" className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950" /><select value={format} onChange={(event) => setFormat(event.target.value as "markdown" | "plain_text")} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950"><option value="markdown">Markdown</option><option value="plain_text">纯文本</option></select><textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={60000} rows={8} placeholder="粘贴你的初稿。只提交你愿意在当前本地会话中分析的文本。" className="resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 dark:border-zinc-700 dark:bg-zinc-950" /></div>
     <button type="button" onClick={() => void submitDraft()} disabled={busy} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clipboard className="h-3.5 w-3.5" />}提交本地初稿</button>
     {error && <p role="alert" className="mt-2 text-xs text-rose-600">{error}</p>}

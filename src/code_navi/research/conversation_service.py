@@ -15,6 +15,7 @@ from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
 )
+from .conversation_citation_scaffold import build_citation_candidate, build_selected_citation
 from .conversation_code_draft import build_experiment_code_draft
 from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
@@ -29,10 +30,12 @@ from .conversation_paper_review import (
 from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     ApplyRevisionSuggestionRequest,
+    CitationCandidate,
     ConversationEvidenceBundle,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
     CreateResearchConversationRequest,
+    CreateSelectedCitationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
     ExperimentEvidenceBundle,
@@ -42,6 +45,7 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReferenceEntryDraft,
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
@@ -49,10 +53,12 @@ from .conversation_schemas import (
     ResearchProfilePatch,
     ResearchReadiness,
     RevisionSuggestion,
+    SelectedCitation,
     SendResearchMessageRequest,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
+    UpdateSelectedCitationRequest,
 )
 from .conversation_submission import build_paper_export_package, build_submission_readiness
 from .models import (
@@ -63,6 +69,7 @@ from .models import (
     ResearchPaperReviewModel,
     ResearchPaperRevisionModel,
     ResearchRevisionSuggestionModel,
+    ResearchSelectedCitationModel,
     ResearchSubmissionReadinessModel,
 )
 from .research_artifact_llm import (
@@ -73,6 +80,14 @@ from .research_artifact_llm import (
 
 class ConversationNotFoundError(LookupError):
     """Raised when a requested research conversation does not exist."""
+
+
+class CitationSourceNotFoundError(LookupError):
+    """Raised when a citation request escapes the current conversation evidence."""
+
+
+class SelectedCitationNotFoundError(LookupError):
+    """Raised when a requested local citation selection does not exist."""
 
 
 class ConversationDecisionGenerator(Protocol):
@@ -396,6 +411,96 @@ class ResearchConversationService:
             .all()
         )
         return [PaperDraft.model_validate(record.draft_data) for record in records]
+
+    def list_citation_candidates(
+        self, conversation_id: str, db: Session
+    ) -> list[CitationCandidate]:
+        """Derive candidate sources from saved local evidence without any search call."""
+        self._get_model(conversation_id, db)
+        candidates: list[CitationCandidate] = []
+        for bundle in self._evidence_bundles(conversation_id, db):
+            candidates.extend(
+                build_citation_candidate(conversation_id, bundle, paper) for paper in bundle.papers
+            )
+        return candidates
+
+    def create_selected_citation(
+        self,
+        conversation_id: str,
+        request: CreateSelectedCitationRequest,
+        db: Session,
+    ) -> SelectedCitation:
+        """Persist one user choice after proving the source belongs to this conversation."""
+        self._get_model(conversation_id, db)
+        bundle_record = (
+            db.query(ResearchEvidenceBundleModel)
+            .filter(
+                ResearchEvidenceBundleModel.id == request.evidence_bundle_id,
+                ResearchEvidenceBundleModel.conversation_id == conversation_id,
+            )
+            .first()
+        )
+        if bundle_record is None:
+            raise CitationSourceNotFoundError(request.evidence_bundle_id)
+        bundle = ConversationEvidenceBundle.model_validate(bundle_record.bundle_data)
+        paper = next((item for item in bundle.papers if item.url == request.paper_url), None)
+        if paper is None:
+            raise CitationSourceNotFoundError(request.paper_url)
+        created_at = datetime.now(UTC)
+        selection_id = str(uuid.uuid4())
+        selected = build_selected_citation(
+            build_citation_candidate(conversation_id, bundle, paper),
+            request,
+            selected_citation_id=selection_id,
+            created_at=created_at,
+        )
+        db.add(
+            ResearchSelectedCitationModel(
+                id=selection_id,
+                conversation_id=conversation_id,
+                selection_data=selected.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+        return selected
+
+    def list_selected_citations(self, conversation_id: str, db: Session) -> list[SelectedCitation]:
+        """Restore explicit user selections without reading paper text or the network."""
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchSelectedCitationModel)
+            .filter(ResearchSelectedCitationModel.conversation_id == conversation_id)
+            .order_by(ResearchSelectedCitationModel.created_at.desc())
+            .all()
+        )
+        return [SelectedCitation.model_validate(record.selection_data) for record in records]
+
+    def update_selected_citation(
+        self,
+        selected_citation_id: str,
+        request: UpdateSelectedCitationRequest,
+        db: Session,
+    ) -> SelectedCitation:
+        """Record an explicit insert/skip state; it never changes a paper document."""
+        record = db.get(ResearchSelectedCitationModel, selected_citation_id)
+        if record is None:
+            raise SelectedCitationNotFoundError(selected_citation_id)
+        selected = SelectedCitation.model_validate(record.selection_data)
+        updated = selected.model_copy(update={"status": request.status})
+        record.selection_data = updated.model_dump(mode="json")
+        db.commit()
+        return updated
+
+    def list_reference_entry_drafts(
+        self, conversation_id: str, db: Session
+    ) -> list[ReferenceEntryDraft]:
+        """Return only active user choices as a locally derived, reviewable draft."""
+        return [
+            selected.reference_entry
+            for selected in self.list_selected_citations(conversation_id, db)
+            if selected.status != "skipped"
+        ]
 
     def create_paper_review(self, draft_id: str, db: Session) -> PaperReview:
         draft = self._get_paper_draft(draft_id, db)
