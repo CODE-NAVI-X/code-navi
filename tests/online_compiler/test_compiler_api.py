@@ -50,13 +50,20 @@ def test_compiler_api_execute_uses_main_fastapi_router() -> None:
             runtime = client.get("/api/v1/compiler/runtime")
             executed = client.post(
                 "/api/v1/compiler/execute",
-                json={"language": "python", "source": "print('hello')"},
+                json={"source": "print('hello')"},
             )
     finally:
         app.dependency_overrides.pop(get_compiler_application, None)
 
     assert runtime.status_code == 200
     assert runtime.json()["ready"] is True
+    assert runtime.json()["language"] == "Python"
+    assert runtime.json()["version"] == "3.12.0"
+    assert runtime.json()["limits"] == {
+        "wallTimeMs": 2_000,
+        "memoryBytes": 134_217_728,
+        "sourceBytes": 65_536,
+    }
     assert executed.status_code == 200
     assert executed.json()["outcome"] == "success"
     assert gateway.calls[0][0] == "print('hello')"

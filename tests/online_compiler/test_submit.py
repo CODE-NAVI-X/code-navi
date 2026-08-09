@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from code_navi.online_compiler.ai_evaluation import AiTutor
+from code_navi.online_compiler.ai_evaluation import AiEvaluationError, AiTutor
 from code_navi.online_compiler.application import CompilerApplication
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.piston import ExecutionLimits, ExecutionResult, RuntimeInfo
@@ -46,6 +46,11 @@ class FakeTutor(AiTutor):
         return {"reply": "先检查输入和输出的对应关系。", "strategy": "hint", "blocked": False}
 
 
+class UnavailableTutor(AiTutor):
+    def chat(self, message, context, history, learner_id):
+        raise AiEvaluationError("AI tutor unavailable")
+
+
 def test_submit_runs_server_owned_hidden_tests_and_redacts_hidden_data() -> None:
     runner = FakeRunner()
     app = CompilerApplication(runner, Settings())
@@ -79,3 +84,22 @@ def test_guidance_context_contains_public_tests_but_not_hidden_tests() -> None:
     assert tutor.context is not None
     assert len(tutor.context["publicTests"]) == 2
     assert "secret" not in str(tutor.context)
+
+
+def test_unavailable_ai_does_not_change_submission_verdict_or_score() -> None:
+    runner = FakeRunner()
+    app = CompilerApplication(runner, Settings(), tutor=UnavailableTutor(), ai_status="ready")
+    submitted = app.submit({"problemId": "palindrome", "source": "print('x')"})
+
+    guidance = app.guidance(
+        {
+            "submissionId": submitted.body["submissionId"],
+            "message": "请给我提示。",
+        }
+    )
+
+    assert submitted.status_code == 200
+    assert submitted.body["verdict"] == "wrong_answer"
+    assert submitted.body["score"] == 50.0
+    assert guidance.status_code == 503
+    assert guidance.body == {"error": "AI tutor is temporarily unavailable"}

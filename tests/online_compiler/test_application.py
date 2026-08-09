@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
-from code_navi.online_compiler.ai_evaluation import AiEvaluator
+import pytest
+
+from code_navi.online_compiler.ai_evaluation import AiEvaluationError, AiEvaluator
 from code_navi.online_compiler.application import CompilerApplication
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
-from code_navi.online_compiler.piston import ExecutionLimits, ExecutionResult, RuntimeInfo
+from code_navi.online_compiler.piston import (
+    ExecutionLimits,
+    ExecutionResult,
+    PistonUnavailableError,
+    RuntimeInfo,
+)
 
 
 class FakePistonGateway:
@@ -41,6 +49,38 @@ class FakePistonGateway:
         )
 
 
+class OutcomePistonGateway(FakePistonGateway):
+    def __init__(self, outcome: str) -> None:
+        super().__init__()
+        self.outcome = outcome
+
+    def execute_python(
+        self,
+        source: str,
+        stdin: str,
+        *,
+        version: str,
+        limits: ExecutionLimits,
+    ) -> ExecutionResult:
+        result = super().execute_python(source, stdin, version=version, limits=limits)
+        return replace(result, outcome=self.outcome)
+
+
+class UnavailablePistonGateway(FakePistonGateway):
+    def list_runtimes(self) -> tuple[RuntimeInfo, ...]:
+        raise PistonUnavailableError("Piston is unavailable")
+
+    def execute_python(
+        self,
+        source: str,
+        stdin: str,
+        *,
+        version: str,
+        limits: ExecutionLimits,
+    ) -> ExecutionResult:
+        raise PistonUnavailableError("Piston is unavailable")
+
+
 class FakeAiEvaluator(AiEvaluator):
     def __init__(self) -> None:
         self.calls = 0
@@ -58,6 +98,17 @@ class FakeAiEvaluator(AiEvaluator):
         return AiFeedback("命名清晰。", ("增加边界用例",), QualityRubric(90, 80, 70))
 
 
+class UnavailableAiEvaluator(AiEvaluator):
+    def evaluate(
+        self,
+        source: str,
+        result: ExecutionResult,
+        assessment: RuleAssessment,
+        learner_id: str | None,
+    ) -> AiFeedback:
+        raise AiEvaluationError("AI unavailable")
+
+
 def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
     app = CompilerApplication(FakePistonGateway(), Settings())
 
@@ -67,6 +118,29 @@ def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
     assert response.body["ready"] is True
     assert response.body["version"] == "3.12.0"
     assert response.body["limits"]["wallTimeMs"] == 2_000
+
+
+def test_runtime_status_reports_piston_unavailable_without_student_error() -> None:
+    app = CompilerApplication(UnavailablePistonGateway(), Settings())
+
+    response = app.runtime_status()
+
+    assert response.status_code == 503
+    assert response.body == {
+        "ready": False,
+        "message": "执行服务暂时不可用，请稍后重试。",
+    }
+
+
+def test_execute_defaults_to_python_when_language_is_missing() -> None:
+    gateway = FakePistonGateway()
+    app = CompilerApplication(gateway, Settings())
+
+    response = app.execute({"source": "print('hello')"})
+
+    assert response.status_code == 200
+    assert response.body["outcome"] == "success"
+    assert gateway.calls[0][2] == "3.12.0"
 
 
 def test_execute_rejects_unsupported_language_before_gateway_call() -> None:
@@ -96,7 +170,15 @@ def test_execute_passes_valid_source_with_server_owned_limits() -> None:
     app = CompilerApplication(gateway, Settings())
 
     response = app.execute(
-        {"language": "python", "source": "print(input())", "stdin": "hello\n"}
+        {
+            "language": "python",
+            "source": "print(input())",
+            "stdin": "hello\n",
+            "runtime": "python:2.7.18",
+            "command": "unsafe-command",
+            "args": ["--unsafe"],
+            "limits": {"wallTimeMs": 1},
+        }
     )
 
     assert response.status_code == 200
@@ -108,6 +190,54 @@ def test_execute_passes_valid_source_with_server_owned_limits() -> None:
     assert version == "3.12.0"
     assert limits.wall_time_ms == 2_000
     assert limits.memory_bytes == 128 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("outcome", "category"),
+    [
+        ("success", "success"),
+        ("compile_error", "syntax_error"),
+        ("runtime_error", "runtime_error"),
+        ("time_limit", "time_limit"),
+        ("output_limit", "output_limit"),
+        ("system_error", "system_error"),
+    ],
+)
+def test_python_execution_contract_preserves_outcome_fields_and_classification(
+    outcome: str, category: str
+) -> None:
+    app = CompilerApplication(OutcomePistonGateway(outcome), Settings())
+
+    response = app.execute({"language": "python", "source": "print('hello')"})
+
+    assert response.status_code == 200
+    assert response.body["outcome"] == outcome
+    assert response.body["assessment"]["category"] == category
+    assert set(response.body) == {
+        "outcome",
+        "stdout",
+        "stderr",
+        "exitCode",
+        "signal",
+        "status",
+        "metrics",
+        "runtime",
+        "assessment",
+        "ai",
+        "record",
+        "serviceTiming",
+    }
+
+
+def test_execute_reports_piston_unavailable_as_service_error() -> None:
+    app = CompilerApplication(UnavailablePistonGateway(), Settings())
+
+    response = app.execute({"language": "python", "source": "print('hello')"})
+
+    assert response.status_code == 503
+    assert response.body == {
+        "error": "执行服务暂时不可用，请确认 Piston 与 Python 运行时已经启动。"
+    }
 
 
 def test_execute_adds_rule_assessment_without_claiming_correctness() -> None:
@@ -137,6 +267,28 @@ def test_execute_and_history_use_anonymous_learner_uuid(tmp_path) -> None:
     assert executed.body["record"]["category"] == "success"
     assert history.status_code == 200
     assert len(history.body["records"]) == 1
+
+
+def test_execute_record_does_not_store_source_or_stdin(tmp_path) -> None:
+    database = tmp_path / "records.sqlite3"
+    store = LearningRecordStore(database)
+    app = CompilerApplication(FakePistonGateway(), Settings(), record_store=store)
+    source = "print('source-baseline-marker')"
+    stdin = "stdin-baseline-marker\n"
+
+    response = app.execute(
+        {
+            "language": "python",
+            "source": source,
+            "stdin": stdin,
+            "learnerId": "fd5f93a4-36c9-4f8d-9a73-71af013a4368",
+        }
+    )
+
+    assert response.status_code == 200
+    raw_database = database.read_bytes()
+    assert source.encode() not in raw_database
+    assert stdin.encode() not in raw_database
 
 
 def test_history_rejects_non_uuid_identity() -> None:
@@ -216,3 +368,24 @@ def test_execute_can_disable_ai_for_one_run() -> None:
     assert response.body["ai"]["status"] == "disabled"
     assert "evaluationId" not in response.body["ai"]
     assert evaluator.calls == 0
+
+
+def test_ai_unavailable_does_not_change_execution_or_rule_facts() -> None:
+    app = CompilerApplication(
+        FakePistonGateway(),
+        Settings(),
+        evaluator=UnavailableAiEvaluator(),
+        ai_status="ready",
+    )
+
+    response = app.execute({"language": "python", "source": "print('hello')"})
+
+    assert response.status_code == 200
+    assert response.body["outcome"] == "success"
+    assert response.body["assessment"]["category"] == "success"
+    assert response.body["ai"]["status"] == "pending"
+
+    evaluated = app.evaluate({"evaluationId": response.body["ai"]["evaluationId"]})
+
+    assert evaluated.status_code == 200
+    assert evaluated.body["ai"]["status"] == "unavailable"

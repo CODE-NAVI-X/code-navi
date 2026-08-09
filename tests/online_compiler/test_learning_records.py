@@ -38,6 +38,8 @@ def test_record_store_keeps_feedback_but_not_raw_source_or_input(tmp_path: Path)
 
     assert records == (created,)
     assert records[0].reference_score == 70
+    assert "source" not in records[0].as_dict()
+    assert "stdin" not in records[0].as_dict()
     raw_database = database.read_bytes()
     assert source.encode() not in raw_database
     assert b"private-program-output" not in raw_database

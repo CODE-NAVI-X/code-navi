@@ -63,6 +63,21 @@ def test_execute_payload_uses_server_limits_and_fixed_main_file() -> None:
     assert payload["run_cpu_time"] == 1_500
     assert payload["run_memory_limit"] == 128 * 1024 * 1024
     assert payload["args"] == []
+    assert payload["language"] == "python"
+    assert payload["version"] == "3.12.0"
+    assert set(payload) == {
+        "language",
+        "version",
+        "files",
+        "stdin",
+        "args",
+        "compile_timeout",
+        "run_timeout",
+        "compile_cpu_time",
+        "run_cpu_time",
+        "compile_memory_limit",
+        "run_memory_limit",
+    }
 
 
 def test_normalize_timeout_keeps_stdout_and_metrics() -> None:
