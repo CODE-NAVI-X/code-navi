@@ -19,8 +19,8 @@
 以下决策在进入编码阶段前固定；后续若改变 SQL 方言、批次或稳定语言 ID，需要先更新本文档并重新评估兼容性和隔离边界。
 
 - **SQL 执行后端**：SQLite。使用 Python 标准库 `sqlite3`，不新增 DuckDB 依赖；每次请求使用隔离的内存或临时数据库，禁止连接 Code Navi 业务数据库。
-- **首批语言**：Python、C、C++、Java、JavaScript、Go。
-- **第二批语言**：Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript。第二批只表示产品顺序，不表示 runtime 已安装或通过隔离验收。
+- **首批语言**：Python、C、C++、Java、JavaScript。
+- **第二批语言**：Go、Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript。第二批只表示产品顺序，不表示 runtime 已安装或通过隔离验收。
 - **目标环境**：Windows 本地开发宿主 + Docker 本地原型。Piston 继续由 Docker Desktop/Compose 提供；`compose.web.yaml` 当前不接入 Piston，本阶段不把多语言执行描述为 Web 容器或生产能力。
 - **稳定语言 ID**：`python`、`c`、`cpp`、`java`、`javascript`、`go`、`rust`、`sql`。其中 `cpp` 映射到 Piston runtime `c++`；浏览器只提交稳定 ID，不能提交 Piston ID、别名、版本或源文件名。
 
@@ -28,18 +28,17 @@
 
 仓库固定 Piston 镜像为 `ghcr.io/engineer-man/piston@sha256:2f66b7456189c4d713aa986d98eccd0b6ee16d26c7ec5f21b30e942756fd127a`。runtime 不随镜像预装，而是由部署流程安装到 `code-navi-piston-packages` volume；因此镜像 digest 本身不能证明某个 runtime 已安装。
 
-2026-08-09 对 `http://127.0.0.1:2000/api/v2/packages` 和 `/api/v2/runtimes` 的只读请求均连接失败，Docker daemon 也未运行。本阶段按约束没有启动 Piston、拉取镜像或安装 runtime。下表版本来自仓库现有 Python 固定值和 [Piston 官方包目录](https://github.com/engineer-man/piston/tree/master/packages)，作为下一阶段必须安装的精确目标；`/packages` 可用性、`/runtimes` 安装状态和实际执行仍未在本机验证。
+2026-08-09 先对 `http://127.0.0.1:2000/api/v2/packages` 和 `/api/v2/runtimes` 做了只读核验；随后按用户明确授权启动固定 digest 的 Piston，并保留既有 `code-navi-piston-packages` volume。`/packages` 提供首批所需的精确 package：`python=3.12.0`、`gcc=10.2.0`、`java=15.0.2`、`node=20.11.1`（目录见 [Piston 官方包目录](https://github.com/engineer-man/piston/tree/master/packages)）；`python=3.12.0` 在安装前已存在，`java=15.0.2` 与 `node=20.11.1` 安装成功并在 `/runtimes` 核验，`gcc=10.2.0` 的安装请求（含一次 600 秒等待）超时，当前仍未安装。未安装 GCC 导致 C/C++ 暂标记为 `unavailable`；本阶段未以真实执行样例替代 live 隔离验收。
 
 ### 3.2 首批 Piston runtime 矩阵
 
 | 稳定 ID | Piston package | Piston runtime ID | 精确版本 | Piston runtime aliases | 服务端源文件名 | 本机状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `python` | `python` | `python` | `3.12.0` | `py`、`py3`、`python3` | `main.py` | 目标已冻结；未实测 |
-| `c` | `gcc` | `c` | `10.2.0` | `gcc` | `main.c` | 目标已冻结；未实测 |
-| `cpp` | `gcc` | `c++` | `10.2.0` | `cpp`、`g++` | `main.cpp` | 目标已冻结；未实测 |
-| `java` | `java` | `java` | `15.0.2` | 无 | `Main.java` | 目标已冻结；未实测 |
-| `javascript` | `node` | `javascript` | `20.11.1` | `node-javascript`、`node-js`、`javascript`、`js` | `main.js` | 目标已冻结；未实测 |
-| `go` | `go` | `go` | `1.16.2` | 无 | `main.go` | 目标已冻结；未实测 |
+| `python` | `python` | `python` | `3.12.0` | `py`、`py3`、`python3`、`python3.12` | `main.py` | 已安装并通过 ID/版本/别名核验 |
+| `c` | `gcc` | `c` | `10.2.0` | `gcc`（目标 aliases，未因安装超时在本机核验） | `main.c` | package 可见；安装请求超时，runtime 未安装 |
+| `cpp` | `gcc` | `c++` | `10.2.0` | `cpp`、`g++`（目标 aliases，未因安装超时在本机核验） | `main.cpp` | package 可见；安装请求超时，runtime 未安装 |
+| `java` | `java` | `java` | `15.0.2` | 无（实测为空数组） | `Main.java` | 已安装并通过 ID/版本/别名核验 |
+| `javascript` | `node` | `javascript` | `20.11.1` | `node-javascript`、`node-js`、`javascript`、`js` | `main.js` | 已安装并通过 ID/版本/别名核验 |
 
 `sourceFile` 是 Code Navi 服务端语言包契约，不是浏览器可覆盖的 Piston 参数。C 与 C++ 共享 `gcc=10.2.0` package，但必须分别匹配 runtime ID `c` 与 `c++`；不得因为 package 已安装就假定两个 runtime 都通过隔离验收。
 
@@ -97,7 +96,7 @@
 | 首批编译型 | C、C++ | Piston `gcc=10.2.0` 提供的 `c`、`c++` runtime | 编译参数、标准版本和源文件名由语言包固定 |
 | 首批编译/运行型 | Java | Piston `java=15.0.2` | 入口类名、文件名、classpath 和版本必须由适配器控制 |
 | 首批解释型 | JavaScript | Piston `node=20.11.1` 提供的 `javascript` runtime | 禁止任意 npm 安装和网络依赖 |
-| 首批工具链型 | Go | Piston `go=1.16.2` | 禁止外部模块下载；编译缓存和构建目录必须隔离 |
+| 第二批工具链型 | Go | 后续固定的 Piston runtime | 禁止外部模块下载；编译缓存和构建目录必须隔离 |
 | 第二批 | Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript | 后续固定的 Piston runtime | 逐语言确定精确版本并通过隔离测试后才可启用；TypeScript 禁止任意 npm 安装 |
 | 独立后端 | SQL | Python 标准库 SQLite 临时数据库 | 仅使用内存/临时库和服务端 fixture，禁止连接真实数据库 |
 
@@ -117,7 +116,7 @@
 
 ### Phase 0：需求基线（当前）
 
-完成本文档，冻结兼容性规则、首批 runtime 安装目标、SQLite 后端、批次、稳定 ID 和目标环境；不修改现有代码。本机 Piston 未启动，实际 `/packages` 与 `/runtimes` 核验保留为进入编码前的显式门禁。
+完成本文档，冻结兼容性规则、首批 runtime 安装目标、SQLite 后端、批次、稳定 ID 和目标环境；不修改现有代码。本机固定 digest 的 Piston 已启动，Python、Java、JavaScript 已安装并通过 `/packages`、`/runtimes` 的 ID/版本/别名核验；GCC 安装受外部包安装超时阻塞，C/C++ 保持 `unavailable`。逐语言执行与隔离 live 测试仍是进入编码阶段后的独立门禁。
 
 ### Phase 1：语言包基础设施
 
@@ -125,11 +124,11 @@
 
 ### Phase 2：通用 Piston 语言
 
-优先接入 C、C++、Java、JavaScript、Go。每种语言分别固定文件名、入口、编译/运行策略和 runtime 版本；完善 mock 测试后，再在显式 live 环境验证实际 runtime。
+优先接入 C、C++、Java、JavaScript。每种语言分别固定文件名、入口、编译/运行策略和 runtime 版本；完善 mock 测试后，再在显式 live 环境验证实际 runtime。
 
 ### Phase 3：扩展工具链
 
-根据 Piston 的真实能力接入 Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript。每种语言先单独固定 runtime 和版本，再使用独立开关、独立验收；某个 runtime 缺失不得影响其他语言或 Python。
+根据 Piston 的真实能力接入 Go、Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript。每种语言先单独固定 runtime 和版本，再使用独立开关、独立验收；某个 runtime 缺失不得影响其他语言或 Python。
 
 ### Phase 4：SQL 练习
 
@@ -173,7 +172,7 @@
 
 ## 11. 本阶段完成定义
 
-本分支当前阶段只要求：需求范围、语言包契约、SQLite 后端、语言批次、稳定 ID、首批 runtime 安装目标、`/languages` 字段、目标环境、分阶段路径、兼容性规则、风险和验收门槛明确；不安装新 runtime、不改变 Python 代码路径、不修改现有 API 行为。由于 Piston 未启动，本阶段不声称 runtime 已安装、可执行或通过隔离验证；进入 Phase 1 前必须完成第 15 节的本机只读核验门禁。
+本分支当前阶段只要求：需求范围、语言包契约、SQLite 后端、语言批次、稳定 ID、首批 runtime 安装目标、`/languages` 字段、目标环境、分阶段路径、兼容性规则、风险和验收门槛明确；不改变 Python 代码路径或现有 API 行为。固定 digest 的本地 Piston 已启动；Python、Java、JavaScript 已安装并完成 package/runtime 元数据核验，GCC 安装超时使 C/C++ 保持 `unavailable`；代码执行和隔离 live 测试不在本阶段宣称完成。
 
 ## 12. 文件级开发清单
 
@@ -209,11 +208,11 @@
 | `src/code_navi/online_compiler/languages/registry.py` | 统一注册、别名规范化和能力筛选 | 根据稳定 ID 查找语言包；用 Piston runtime 列表计算 enabled/unavailable；拒绝未知别名和静默版本替换 |
 | `src/code_navi/online_compiler/languages/piston_adapter.py` | 封装程序语言到 Piston 的转换 | 根据包元数据生成服务端 payload；处理文件名、编译入口和运行入口；不执行用户提供的 shell 字符串 |
 | `src/code_navi/online_compiler/languages/sql_adapter.py` | 提供 SQL 独立执行后端 | 临时 SQLite、fixture 初始化、只读策略、结果归一化、超时和危险语句拦截；不连接 Code Navi 数据库 |
-| `src/code_navi/online_compiler/languages/builtin.py` | 注册首批内置语言包 | Python、C、C++、Java、JavaScript、Go、Rust 等固定元数据；每个 runtime 版本显式声明 |
+| `src/code_navi/online_compiler/languages/builtin.py` | 注册首批内置语言包 | Python、C、C++、Java、JavaScript 固定元数据；第二批语言另行增量声明，每个 runtime 版本显式声明 |
 | `src/code_navi/online_compiler/languages/manifest.py` | 为部署和审计提供机器可读清单 | 输出语言 ID、runtime、版本、模式和启用状态；作为 runtime setup、API 和前端能力数据的共同来源 |
 | `src/code_navi/online_compiler/problems/language_versions.py` | 存放跨语言题目实现 | 将题目语义与各语言 starter source、入口约定分开，避免继续扩大 `catalog.py` 的单文件体积 |
 
-练习记录当前不属于共享 SQLAlchemy Base，`COMPILER_DATABASE_PATH` 指向由编译器模块自主管理的独立 SQLite。因此本功能不新增 `migrations/` 或 Alembic revision；只有未来先通过单独架构决策把练习记录迁入共享业务数据库后，才适用共享 Alembic 流程。
+练习记录当前不属于共享 SQLAlchemy Base，`COMPILER_DATABASE_PATH` 指向由编译器模块自主管理的独立 SQLite。练习记录的 schema 由编译器模块执行幂等、向前兼容的本地升级，不直接使用 Alembic；因此本功能不新增 `migrations/` 或 Alembic revision。只有未来先通过单独架构决策把练习记录迁入共享业务数据库后，才适用共享 Alembic 流程；`dev-start.cmd` 的业务库迁移步骤不迁移练习记录。
 
 ### 12.3 需要新增的测试文件
 
@@ -236,7 +235,7 @@
 1. 在 `feat/code-practice-languages` 上确认当前工作区干净且不在 `main`。
 2. 记录当前 Python API 示例、`/runtime` 响应、题目 verdict、学习记录结构和本地 Piston runtime。
 3. 固定 SQL 使用 Python 标准库 SQLite，不引入 DuckDB。
-4. 固定首批为 Python、C、C++、Java、JavaScript、Go；第二批为 Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript，未验收语言标记 `unavailable` 或 `planned`。
+4. 固定首批为 Python、C、C++、Java、JavaScript；第二批为 Go、Rust、C#、Kotlin、PHP、Ruby、Swift、TypeScript，未验收语言标记 `unavailable` 或 `planned`。
 
 ### 第 1 步：先建契约，不切换旧流程
 
@@ -252,11 +251,11 @@
 3. 在 `judging.py` 增加通用 runner 调用，但保留 Python 兼容入口。
 4. 先只让 Python 走新路径，比较新旧响应和异常分类；回归通过后再开放 C/C++。
 
-### 第 3 步：接入 C/C++/Java/JavaScript/Go
+### 第 3 步：接入 C/C++/Java/JavaScript
 
 每种语言都按同一小循环实施：新增语言包 → mock payload 测试 → runtime setup 清单 → Piston live 成功/失败/限制测试 → API 能力开启 → 前端模板接入。任何一种语言失败只回退该语言状态，不回退 Python 或关闭整个编译器。
 
-Java 额外先统一入口类名和 `main` 文件名；C/C++ 先固定标准版本和无网络编译参数；JavaScript 禁止 npm 下载；Go 先禁用外部模块下载；这些规则在 adapter 测试中固化。
+Java 额外先统一入口类名和 `main` 文件名；C/C++ 先固定标准版本和无网络编译参数；JavaScript 禁止 npm 下载；这些规则在 adapter 测试中固化。
 
 ### 第 4 步：扩展题目模型和判题
 
@@ -301,7 +300,7 @@ Java 额外先统一入口类名和 `main` 文件名；C/C++ 先固定标准版�
 
 只有以下条件全部满足，才从文档阶段进入 Phase 1 编码：
 
-1. 启动目标固定 digest 的本地 Piston 后，只读 `/api/v2/packages` 能列出第 3.2 节全部精确 package，安装流程完成后只读 `/api/v2/runtimes` 能逐项匹配 runtime ID、精确版本和 aliases；本阶段尚未满足该项。
+1. 启动目标固定 digest 的本地 Piston 后，只读 `/api/v2/packages` 能列出第 3.2 节全部精确 package；本阶段已核验 Python、Java、JavaScript 的 runtime ID、精确版本和 aliases，GCC 安装超时使 C/C++ 的 runtime 核验待补，逐语言执行隔离仍需 live 测试。
 2. SQL 方言和执行后端已固定为 Python 标准库 SQLite，且没有任何真实数据库访问需求。
 3. `/languages` 的响应字段、旧 `/runtime` 兼容策略和 `language` ID 命名已确定。
 4. Python 回归门禁、live 隔离门禁和新增语言独立开关已写成测试要求。
