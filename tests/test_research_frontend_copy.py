@@ -62,6 +62,8 @@ def test_provider_status_has_local_only_key_configuration_ui() -> None:
     assert "保存并测试连接" in provider_source
     assert 'autoComplete="new-password"' in provider_source
     assert "测试连接" in provider_source
+    assert "网页配置已禁用" in provider_source
+    assert "browser_configuration_enabled" in provider_source
     assert "API Key" in provider_source
     assert "localStorage.setItem" not in provider_source
     assert "/api/v1/research/provider/configuration" in api_source

@@ -7,8 +7,7 @@ import {
   generateTopicDifficultyAnalysis,
   type TopicDifficultyAnalysis,
 } from "@/lib/api/research";
-
-const LABEL = { fact: "已知输入", inference: "分析建议", to_verify: "待核验" } as const;
+import { ClassificationBadge } from "./ClassificationBadge";
 const MODE = {
   llm: "模型个性化建议",
   rules: "基础规则",
@@ -78,7 +77,7 @@ export function ResearchDifficultyPanel({
           <li key={item.area} className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-950/40">
             <div className="flex items-center justify-between gap-2">
               <p className="font-semibold text-slate-800 dark:text-zinc-200">{item.area}</p>
-              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-800 dark:bg-orange-950/50 dark:text-orange-300">{LABEL[item.classification]}</span>
+              <ClassificationBadge classification={item.classification} />
             </div>
             <p className="mt-2 text-slate-700 dark:text-zinc-300">{item.content}</p>
             <p className="mt-1 text-[10px] text-slate-500">依据：{item.basis}</p>

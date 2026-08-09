@@ -56,6 +56,7 @@ def test_provider_status_distinguishes_rules_from_configured_model(
     assert configured.json()["mode"] == "model"
     assert configured.json()["model"] == "deepseek-test"
     assert configured.json()["configuration_method"] == "server_environment"
+    assert configured.json()["browser_configuration_enabled"] is False
     assert "secret-test-value" not in configured.text
 
 
@@ -87,8 +88,9 @@ class FakeConnectionGenerator:
         return self.outcome
 
 
-def test_browser_provider_mutations_are_disabled_by_default() -> None:
-    """A server must opt in before browser requests can persist or use a key."""
+def test_browser_provider_configuration_is_disabled_but_local_connection_test_is_available(
+) -> None:
+    """Key writes require opt-in; an explicit loopback connection test does not."""
     with TestClient(app) as client:
         configure_response = client.put(
             "/api/v1/research/provider/configuration",
@@ -102,9 +104,10 @@ def test_browser_provider_mutations_are_disabled_by_default() -> None:
         test_response = client.post("/api/v1/research/provider/test")
 
     assert configure_response.status_code == 403
-    assert test_response.status_code == 403
     assert "已禁用" in configure_response.json()["detail"]
-    assert "已禁用" in test_response.json()["detail"]
+    assert test_response.status_code == 200
+    assert test_response.json()["connected"] is False
+    assert "尚未配置" in test_response.json()["message"]
 
 
 def test_browser_provider_mutations_reject_non_loopback_clients(
@@ -133,7 +136,6 @@ def test_browser_provider_mutations_reject_non_loopback_clients(
 def test_connection_test_returns_audit_id_without_leaking_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "true")
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-test-value")
     fake = FakeConnectionGenerator(

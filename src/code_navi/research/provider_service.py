@@ -26,6 +26,16 @@ from .provider_schemas import (
 )
 
 
+def browser_provider_configuration_enabled() -> bool:
+    """Whether this local deployment explicitly permits browser key writes."""
+    return os.getenv("CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class ProviderConnectionService:
     """Expose configuration state without ever returning credentials."""
 
@@ -67,6 +77,7 @@ class ProviderConnectionService:
             configuration_method=(
                 "local_file" if local_config is not None else "server_environment"
             ),
+            browser_configuration_enabled=browser_provider_configuration_enabled(),
             configuration_issue=configuration_issue,
         )
 

@@ -131,6 +131,7 @@ export function ProviderStatusCard() {
   }
 
   const configured = status?.configured ?? false;
+  const browserConfigurationEnabled = status?.browser_configuration_enabled ?? false;
   const invalidConfiguration = status?.configuration_issue === "invalid_api_key";
   const connectionLabel = invalidConfiguration
     ? "API Key 配置无效"
@@ -139,8 +140,10 @@ export function ProviderStatusCard() {
       : testResult?.connected
         ? "模型连接正常"
         : testResult
-          ? "模型连接失败"
-          : "模型已配置（待验证）";
+        ? "模型连接失败"
+          : browserConfigurationEnabled
+            ? "模型已配置（待验证）"
+            : "模型已配置（可手动测试）";
 
   return (
     <details className="group relative">
@@ -182,9 +185,9 @@ export function ProviderStatusCard() {
         )}
 
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <button type="button" onClick={() => setShowConfiguration((value) => !value)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold hover:bg-slate-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+          <button type="button" onClick={() => setShowConfiguration((value) => !value)} disabled={!browserConfigurationEnabled} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
             <Settings2 className="h-3.5 w-3.5" />
-            {showConfiguration ? "收起配置" : configured ? "更换 API Key" : "输入 API Key"}
+            {browserConfigurationEnabled ? (showConfiguration ? "收起配置" : configured ? "更换 API Key" : "输入 API Key") : "网页配置已禁用"}
           </button>
           <button type="button" onClick={() => void testConnection()} disabled={!configured || testing || saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2.5 text-xs font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-zinc-100 dark:text-zinc-900">
             {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
@@ -192,7 +195,13 @@ export function ProviderStatusCard() {
           </button>
         </div>
 
-        {showConfiguration && (
+        {configured && !browserConfigurationEnabled && (
+          <p role="status" className="mt-3 rounded-xl border border-sky-200 bg-sky-50/60 p-3 text-xs leading-5 text-sky-900 dark:border-sky-900/70 dark:bg-sky-950/20 dark:text-sky-200">
+            模型配置已从本机运行环境加载。为保护 API Key，网页不能查看或修改 Key；你仍可主动点击“测试连接”验证模型连通性。
+          </p>
+        )}
+
+        {browserConfigurationEnabled && showConfiguration && (
           <form onSubmit={(event) => void saveAndTest(event)} className="mt-3 space-y-3 rounded-xl border border-sky-200 bg-sky-50/60 p-3 dark:border-sky-900/70 dark:bg-sky-950/20">
             <label className="block text-xs font-semibold">
               服务商

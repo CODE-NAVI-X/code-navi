@@ -236,6 +236,7 @@ export interface ProviderStatusResponse {
   configured: boolean;
   mode: "model" | "rules";
   configuration_method: "local_file" | "server_environment";
+  browser_configuration_enabled: boolean;
   configuration_issue: "invalid_api_key" | "missing_model" | null;
 }
 

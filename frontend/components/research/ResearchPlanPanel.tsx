@@ -1,20 +1,12 @@
 import { AlertTriangle, CalendarDays, CheckCircle2, FileText, Lightbulb } from "lucide-react";
 
 import type { ConversationResearchPlan, ResearchPlanEntry } from "@/lib/api/research";
+import { ClassificationBadge } from "./ClassificationBadge";
 
 function PlanEntry({ entry }: { entry: ResearchPlanEntry }) {
-  const pending = entry.classification === "to_verify";
   return (
     <li className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-950/40">
-      <span
-        className={
-          pending
-            ? "rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
-            : "rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800 dark:bg-sky-950/50 dark:text-sky-300"
-        }
-      >
-        {pending ? "待确认" : "建议"}
-      </span>
+      <ClassificationBadge classification={entry.classification} />
       <p className="mt-2 text-slate-800 dark:text-zinc-200">{entry.content}</p>
       <p className="mt-1 text-[10px] text-slate-500 dark:text-zinc-500">依据：{entry.basis}</p>
     </li>

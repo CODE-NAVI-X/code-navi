@@ -55,6 +55,26 @@ def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
             assert heading in content, f"{skill_name} 文档 Skill 缺少契约：{heading}"
 
 
+def test_public_mindmap_skill_documents_the_focus_workspace_and_svg_limit() -> None:
+    content = (REPOSITORY_ROOT / "docs" / "skills" / "research-mindmap" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    for phrase in (
+        "摘要卡",
+        "专注导图工作区",
+        "@xyflow/react",
+        "@dagrejs/dagre",
+        "不联网",
+        "不读论文全文",
+        "不调用模型",
+        "不写文件",
+        "SVG",
+        "PNG 尚未实现",
+    ):
+        assert phrase in content
+
+
 def test_research_demo_docs_describe_the_closed_loop_and_non_goals() -> None:
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     roadmap = (REPOSITORY_ROOT / "docs" / "product" / "roadmap.md").read_text(encoding="utf-8")
