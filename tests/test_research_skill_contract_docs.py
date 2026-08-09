@@ -106,3 +106,33 @@ def test_external_skill_evaluation_records_adoption_boundaries() -> None:
         assert phrase in evo_notes
     for phrase in ("苏格拉底式", "一次只追问一个未确认维度"):
         assert phrase in clarification_skill
+
+
+def test_paper_assistance_demo_checklist_covers_the_reviewable_local_flow() -> None:
+    checklist = (
+        REPOSITORY_ROOT / "docs" / "research-paper-assistance-demo-checklist.md"
+    ).read_text(encoding="utf-8")
+
+    for phrase in (
+        "演示前置条件",
+        "本地启动命令",
+        "EvidenceBundle",
+        "实验结果证据包",
+        "结构化审稿",
+        "逐段候选改写",
+        "引用占位",
+        "参考文献雏形",
+        "投稿前检查",
+        "Markdown / JSON",
+        "不自动联网",
+        "不自动写入",
+        "不自动安装依赖",
+        "不自动执行代码",
+        "不自动投稿",
+        "无 DeepSeek Key",
+        "正式导出",
+        "投稿适配",
+        "文献管理",
+        "实验材料整理",
+    ):
+        assert phrase in checklist

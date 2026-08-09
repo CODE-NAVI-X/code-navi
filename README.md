@@ -49,5 +49,6 @@ Windows 使用 `dev-start.cmd` 时会额外启动 Piston 并准备固定 Python 
 | 本地运行与生产准入 | [本地运行](docs/deployment/local.md)、[生产准入](docs/deployment/production.md) |
 | 外部科研 Skill 试用与论文设计依据 | [Skill 评估](docs/research-skill-evaluation.md)、[EvoScientist 笔记](docs/references/evo_scientist_experiment_notes.md) |
 | 后续论文初稿/评审接口边界 | [论文工作流设计](docs/research-paper-workflow-design.md) |
+| 导师本地演示与安全降级核对 | [科研论文辅助演示检查表](docs/research-paper-assistance-demo-checklist.md) |
 
 当前本地闭环不等于生产可用；实际能力和生产阻塞项分别以产品路线和生产准入文档为准。
