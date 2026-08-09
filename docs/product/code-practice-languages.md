@@ -118,3 +118,135 @@
 ## 10. 本阶段完成定义
 
 本分支当前阶段只要求：需求范围、语言包契约、分阶段路径、兼容性规则、风险和验收门槛明确；不安装新 runtime、不改变 Python 代码路径、不修改现有 API 行为。进入 Phase 1 前必须先确认 SQL 方言、首批 Piston runtime 版本和目标部署环境。
+
+## 11. 文件级开发清单
+
+以下路径以当前仓库结构为准。Phase 1 先完成基础抽象和 Python 等价迁移，后续语言按同一契约增量开发。
+
+### 11.1 需要修改的现有文件
+
+| 文件 | 修改目的 | 修改方式与边界 |
+| --- | --- | --- |
+| `src/code_navi/online_compiler/application.py` | 让应用层按语言包选择执行器 | 将 `language == "python"` 的硬编码校验改为注册表查找；保留无语言请求默认 Python；执行、提交、runtime 状态继续返回现有字段，并新增可选语言元数据 |
+| `src/code_navi/online_compiler/piston.py` | 从 Python 专用客户端扩展为通用 Piston 执行客户端 | 新增按 `LanguagePackage` 构造 payload 的通用方法；保留 `execute_python()` 兼容包装器；禁止客户端传入命令、版本和资源限制；统一编译/运行结果归一化 |
+| `src/code_navi/online_compiler/judging.py` | 让服务端题目判定支持不同语言实现 | 将 `ExecutionRunner.execute_python()` 抽象为受控 `execute()`；保留旧调用适配；判题比较、隐藏测试脱敏和 verdict 优先级不变 |
+| `src/code_navi/online_compiler/problems/models.py` | 解除题目版本只能是 Python 的限制 | 将 `language` 校验改为语言包 ID 校验；保持现有 Python `ProblemVersion` 可反序列化；不在模型中保存用户命令或 runtime 参数 |
+| `src/code_navi/online_compiler/problems/catalog.py` | 维护默认题目与语言实现的兼容关系 | 保留全部现有 Python 题目常量；新增语言版本时引用语言包模板，避免复制测试语义；首批语言题目单独增量加入 |
+| `src/code_navi/online_compiler/router.py` | 暴露语言能力发现接口 | 增加只读 `GET /api/v1/compiler/languages`；保留 `/runtime`、`/execute`、`/submit` 等现有路径和状态码；路由只转发，不承载语言命令逻辑 |
+| `src/code_navi/online_compiler/config.py` | 配置启用语言和固定 runtime | 增加启用语言清单、各语言固定版本、SQL 限制等服务端配置；环境变量只能选择已声明配置，不能动态注入任意 runtime |
+| `src/code_navi/online_compiler/runtime_setup.py` | 部署阶段安装并验证固定 runtime | 将单一 Python 安装改为遍历受控 runtime 清单；逐项检查 package 可用性和精确版本；失败时只禁用对应语言，Python 基线失败仍按当前流程阻止启动 |
+| `src/code_navi/online_compiler/learning_records.py` | 记录练习所用语言而不破坏历史记录 | 增加可空 `language_id`、`runtime_id`、`runtime_version` 字段；旧 SQLite 表通过向前兼容迁移补默认值；现有查询响应字段保留不变，新字段追加输出 |
+| `src/code_navi/online_compiler/ai_evaluation.py` | 让反馈上下文识别语言 | 将固定 Python 元数据替换为执行结果中的语言包信息；保持 AI 不能修改执行结果、判题结果和隐藏测试；旧 Python 反馈格式不变 |
+| `frontend/lib/api/compiler.ts` | 建立前端语言能力和通用执行 API | 增加 `CompilerLanguage`、`fetchCompilerLanguages()`、通用 `executeCode()`、`submitCode()`；保留 `executePython()`、`submitPython()` 作为旧页面和旧调用的兼容包装器 |
+| `frontend/app/(student)/practice/page.tsx` | 让练习页面由语言能力驱动 | 增加语言列表加载、默认 Python、语言切换、模板切换和不可用提示；逐步移除执行流程中的 Python 硬编码；旧题目进入页面时仍选择 Python，不改变原有交互 |
+| `compose.yaml` | 让本地 Piston 具备明确的语言 runtime | 只增加受控 runtime 安装变量或 setup 参数；保持 loopback、禁网、进程/文件/内存/输出限制；不能因扩展语言取消现有安全检查 |
+| `dev-start.cmd` | 让 Windows 本地入口准备首批 runtime | 将“准备 Python runtime”改为调用统一 setup；输出每个语言的 enabled/unavailable 状态；Python 失败仍提示原有修复方式，其他语言失败不能误报整个服务不可用 |
+| `docs/deployment/local.md` | 记录本地 runtime 安装与验证方式 | 明确首批语言、镜像缓存、启动耗时、磁盘需求和 live 测试命令；说明哪些语言因 runtime 未安装而不可用 |
+| `docs/deployment/production.md`、`docs/development/high-risk-capabilities.md` | 更新生产安全准入条件 | 增加多语言执行必须逐语言验证的要求；继续禁止生产直接依赖 privileged 原型、网络访问、宿主文件和凭据读取 |
+
+### 11.2 需要新增的核心文件
+
+| 文件 | 新增目的 | 主要内容 |
+| --- | --- | --- |
+| `src/code_navi/online_compiler/languages/__init__.py` | 建立语言包边界 | 只导出公共模型、注册表和默认目录，不让上层依赖具体编译命令 |
+| `src/code_navi/online_compiler/languages/models.py` | 定义不可变语言包契约 | `LanguagePackage`、`RuntimeRequirement`、`ExecutionMode`、入口/文件/限制/能力状态等类型和校验 |
+| `src/code_navi/online_compiler/languages/registry.py` | 统一注册、别名规范化和能力筛选 | 根据稳定 ID 查找语言包；用 Piston runtime 列表计算 enabled/unavailable；拒绝未知别名和静默版本替换 |
+| `src/code_navi/online_compiler/languages/piston_adapter.py` | 封装程序语言到 Piston 的转换 | 根据包元数据生成服务端 payload；处理文件名、编译入口和运行入口；不执行用户提供的 shell 字符串 |
+| `src/code_navi/online_compiler/languages/sql_adapter.py` | 提供 SQL 独立执行后端 | 临时 SQLite/DuckDB、fixture 初始化、只读策略、结果归一化、超时和危险语句拦截；不连接 Code Navi 数据库 |
+| `src/code_navi/online_compiler/languages/builtin.py` | 注册首批内置语言包 | Python、C、C++、Java、JavaScript、Go、Rust 等固定元数据；每个 runtime 版本显式声明 |
+| `src/code_navi/online_compiler/languages/manifest.py` | 为部署和审计提供机器可读清单 | 输出语言 ID、runtime、版本、模式和启用状态；作为 runtime setup、API 和前端能力数据的共同来源 |
+| `src/code_navi/online_compiler/problems/language_versions.py` | 存放跨语言题目实现 | 将题目语义与各语言 starter source、入口约定分开，避免继续扩大 `catalog.py` 的单文件体积 |
+| `alembic/versions/<revision>_add_compiler_language_metadata.py` | 为学习记录追加语言维度 | 仅在确定记录字段需要落库后新增；字段可空、有默认值、可回滚，不能破坏旧数据库 |
+
+### 11.3 需要新增的测试文件
+
+| 文件 | 验证目的 |
+| --- | --- |
+| `tests/online_compiler/test_languages.py` | 语言包模型、别名、固定版本、能力状态和非法配置 |
+| `tests/online_compiler/test_language_registry.py` | runtime 探测、注册表筛选、未知语言拒绝和 Python 默认兼容 |
+| `tests/online_compiler/test_piston_languages.py` | C/C++/Java/JavaScript/Go/Rust payload、文件名、编译/运行阶段和错误映射 |
+| `tests/online_compiler/test_sql_adapter.py` | SQL 临时库、fixture、只读限制、结果归一化、超时和数据库隔离 |
+| `tests/online_compiler/test_language_api.py` | `/languages` 能力接口、旧 `/runtime` 响应、旧执行请求和不支持语言的状态码 |
+| `tests/online_compiler/test_learning_records_languages.py` | 旧记录读取、新记录语言字段和迁移兼容 |
+| `tests/online_compiler/test_piston_live_languages.py` | 显式 live 环境逐语言执行和隔离边界；普通测试默认跳过 |
+
+现有 `test_application.py`、`test_compiler_api.py`、`test_piston.py`、`test_submit.py` 不删除，继续增加 Python 回归断言。只有在通用接口稳定后，才把 Fake Gateway 从 `execute_python()` 迁移到同时支持两者的测试替身。
+
+## 12. 具体修改顺序
+
+### 第 0 步：基线冻结
+
+1. 在 `feat/code-practice-languages` 上确认 `main` 工作区干净。
+2. 记录当前 Python API 示例、`/runtime` 响应、题目 verdict、学习记录结构和本地 Piston runtime。
+3. 决定 SQL 使用 SQLite 还是 DuckDB；若选 DuckDB，先评估依赖体积、许可证和 Docker 运行方式。
+4. 确认首批只启用 Python、C、C++、Java、JavaScript、Go；Rust 作为下一批，其他语言先标记 unavailable/planned。
+
+### 第 1 步：先建契约，不切换旧流程
+
+1. 新增 `languages/models.py`、`registry.py`、`builtin.py` 和对应单元测试。
+2. 把 Python 现有配置映射成一个等价语言包，但暂时不改变 `CompilerApplication` 的真实执行路径。
+3. 新增 `/languages` 的 mock API 测试，只读返回能力，不影响 `/runtime`。
+4. 通过 `ruff check .` 和语言包单元测试后再继续。
+
+### 第 2 步：抽象 Piston，同时保留 Python 包装器
+
+1. 在 `piston.py` 增加通用 `execute()` 和按包构造 payload 的函数。
+2. 保留 `execute_python()`，内部调用通用逻辑；现有测试替身和旧调用先不改。
+3. 在 `judging.py` 增加通用 runner 调用，但保留 Python 兼容入口。
+4. 先只让 Python 走新路径，比较新旧响应和异常分类；回归通过后再开放 C/C++。
+
+### 第 3 步：接入 C/C++/Java/JavaScript/Go
+
+每种语言都按同一小循环实施：新增语言包 → mock payload 测试 → runtime setup 清单 → Piston live 成功/失败/限制测试 → API 能力开启 → 前端模板接入。任何一种语言失败只回退该语言状态，不回退 Python 或关闭整个编译器。
+
+Java 额外先统一入口类名和 `main` 文件名；C/C++ 先固定标准版本和无网络编译参数；JavaScript 禁止 npm 下载；Go 先禁用外部模块下载；这些规则在 adapter 测试中固化。
+
+### 第 4 步：扩展题目模型和判题
+
+1. 先让 `ProblemVersion.language` 接受已注册语言 ID。
+2. 为一条现有简单题新增 C/C++/Java 版本，使用相同输入输出测试语义。
+3. 验证公开测试输出、隐藏测试脱敏、错误分类和 verdict 与 Python 语义一致。
+4. 再把语言实现移入 `problems/language_versions.py`，避免一次性重写既有目录。
+
+### 第 5 步：接入 SQL
+
+1. 先完成 SQL adapter 的单元测试和临时数据库清理。
+2. 只开放确定的 SQLite 或 DuckDB 方言，定义列名、排序、NULL 和浮点比较规则。
+3. 不复用 Piston 的源码文件和命令字段，不允许 `ATTACH`、扩展加载、外部文件、网络函数或真实数据库连接。
+4. 先提供独立 SQL 题目，再考虑与程序语言题目共享题目 ID；SQL 失败不影响 Piston 语言。
+
+### 第 6 步：迁移前端和记录
+
+1. `compiler.ts` 新增通用 API，同时保留 Python wrapper。
+2. 练习页先加载 `/languages`，加载失败时按当前行为显示 Python runtime 错误，不伪造语言列表。
+3. 语言切换只改变编辑器模式、模板和请求中的 `language`，不会改变服务端限制。
+4. 语言记录字段采用 additive migration；先验证旧 SQLite 数据读取，再写入新字段。
+
+### 第 7 步：部署、回归与发布
+
+1. 更新 `runtime_setup.py`、`compose.yaml` 和 `dev-start.cmd`，按固定清单安装并验证 runtime。
+2. 本地执行离线单元/API 测试，再启动 Piston 执行显式 live 测试。
+3. 运行 `ruff check .`、`pytest`、前端 lint/build 和 `python -m build`。
+4. 检查 Docker 日志、runtime 列表、API 能力列表、旧 Python 题目和新语言样例。
+5. 每一阶段单独提交；代码审核通过后再决定是否 push，当前不自动上传或创建 PR。
+
+## 13. 兼容风险分级
+
+| 等级 | 风险 | 合并门槛 |
+| --- | --- | --- |
+| P0 | Python 默认请求、现有题目判定、隐藏测试或学习记录被破坏 | 立即停止合并，先恢复 Python 回归 |
+| P0 | 新语言可访问宿主文件、网络、凭据或真实数据库 | 禁止启用，必须修复并完成 live 隔离验证 |
+| P1 | 新语言 runtime 缺失、版本漂移或编译命令不一致 | 该语言保持 unavailable，不影响其他语言 |
+| P1 | 前后端能力字段不一致、旧客户端无法解析响应 | 保持旧字段，新增字段可选，并补 API 契约测试 |
+| P2 | 模板体验、错误文案或语言编辑器模式不完整 | 不影响服务端安全和判题时可分阶段修复 |
+
+## 14. 进入编码阶段的最终检查
+
+只有以下条件全部满足，才从文档阶段进入 Phase 1 编码：
+
+1. 首批语言和每个 runtime 的精确版本已确认，并能在目标 Piston 镜像中列出或安装。
+2. SQL 方言和执行后端已二选一，且没有任何真实数据库访问需求。
+3. `/languages` 的响应字段、旧 `/runtime` 兼容策略和 `language` ID 命名已确定。
+4. Python 回归门禁、live 隔离门禁和新增语言独立开关已写成测试要求。
+5. Docker runtime 安装耗时、磁盘预算和失败回退策略已确认。
+6. 每个实现提交只包含一个可验证阶段，避免把语言目录、题库、前端和部署一次性混成不可回滚的大提交。
