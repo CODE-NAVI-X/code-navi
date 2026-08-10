@@ -144,3 +144,86 @@ def test_confirmation_migration_preserves_existing_drafts_and_conversations(
 
     assert transfer == ("transfer-before-confirm", "draft", None, None)
     assert conversation == ("conversation-before-confirm", None)
+
+
+def test_latest_migration_repairs_a_stale_conversation_context_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A database marked at the old head still gains a missing safe column."""
+    database_url = f"sqlite:///{tmp_path / 'stale-context.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "research_citation_scaffold_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "CREATE TABLE research_conversations_repaired "
+                "(id VARCHAR(36) PRIMARY KEY, profile_data JSON NOT NULL, "
+                "messages_data JSON NOT NULL, created_at DATETIME NOT NULL, "
+                "updated_at DATETIME NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO research_conversations_repaired "
+                "(id, profile_data, messages_data, created_at, updated_at) "
+                "SELECT id, profile_data, messages_data, created_at, updated_at "
+                "FROM research_conversations"
+            )
+        )
+        connection.execute(text("DROP TABLE research_conversations"))
+        connection.execute(
+            text("ALTER TABLE research_conversations_repaired RENAME TO research_conversations")
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(research_conversations)")
+                )
+            }
+    finally:
+        engine.dispose()
+
+    assert "context_provenance" in columns
+
+
+def test_repair_migration_downgrade_preserves_the_revision_0005_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leaving the repair revision must not remove schema owned by revision 0005."""
+    database_url = f"sqlite:///{tmp_path / 'repair-downgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "research_citation_scaffold_v1")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(research_conversations)")
+                )
+            }
+    finally:
+        engine.dispose()
+
+    assert "context_provenance" in columns
+    command.downgrade(config, "base")

@@ -10,6 +10,7 @@ import {
   type ExperimentDesign,
   type ResearchPlanEntry,
 } from "@/lib/api/research";
+import { ClassificationBadge } from "./ClassificationBadge";
 
 function Entries({ title, entries }: { title: string; entries: ResearchPlanEntry[] }) {
   return (
@@ -18,7 +19,7 @@ function Entries({ title, entries }: { title: string; entries: ResearchPlanEntry
       <ul className="mt-1 space-y-1">
         {entries.map((item) => (
           <li key={item.content} className="rounded-lg bg-slate-50 p-2 text-[11px] leading-5 text-slate-700 dark:bg-zinc-950/50 dark:text-zinc-300">
-            <span className="mr-1 font-semibold">{item.classification === "inference" ? "建议" : "待确认"}</span>
+            <ClassificationBadge classification={item.classification} />{" "}
             {item.content}
           </li>
         ))}

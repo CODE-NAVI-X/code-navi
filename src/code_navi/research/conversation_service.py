@@ -575,9 +575,20 @@ class ResearchConversationService:
         record = self._get_paper_review_record(review_id, db)
         review = PaperReview.model_validate(record.review_data)
         draft = self._get_paper_draft(review.draft_id, db)
+        latest = self._latest_paper_revision(draft.draft_id, db)
+        suggestion_draft = (
+            draft
+            if latest is None
+            else draft.model_copy(
+                update={
+                    "content": latest.content,
+                    "sections": parse_paper_sections(latest.content, format=draft.format),
+                }
+            )
+        )
         suggestion = build_revision_suggestion(
             review,
-            draft,
+            suggestion_draft,
             task_id,
             generator=self.artifact_generator,
             conversation_id=draft.conversation_id,
@@ -731,7 +742,18 @@ class ResearchConversationService:
             raise ValueError(
                 "Create a review, a revision preview, and an explicit submission checklist first."
             )
-        return build_paper_export_package(draft, review, revision, checks[0])
+        readiness = checks[0]
+        if revision.review_id != review.review_id:
+            raise ValueError(
+                "The latest revision does not belong to the latest review; "
+                "apply a revision from the current review before exporting."
+            )
+        if readiness.revision_id != revision.revision_id:
+            raise ValueError(
+                "The submission checklist is stale; create a new checklist for the latest "
+                "revision before exporting."
+            )
+        return build_paper_export_package(draft, review, revision, readiness)
 
     @staticmethod
     def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:

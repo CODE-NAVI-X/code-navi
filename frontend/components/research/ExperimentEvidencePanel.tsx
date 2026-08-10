@@ -12,6 +12,7 @@ import {
   type ExperimentEvidenceCategory,
   type PaperBlueprint,
 } from "@/lib/api/research";
+import { ClassificationBadge } from "./ClassificationBadge";
 
 const categoryLabels: Array<{ value: ExperimentEvidenceCategory; label: string }> = [
   { value: "data_or_sample", label: "数据或样本实际情况" },
@@ -33,8 +34,7 @@ const classificationLabels: Record<AnalysisClassification, string> = {
 };
 
 function EntryLabel({ classification }: { classification: AnalysisClassification }) {
-  const color = classification === "fact" ? "text-emerald-700 dark:text-emerald-300" : classification === "inference" ? "text-sky-700 dark:text-sky-300" : "text-amber-700 dark:text-amber-300";
-  return <span className={`font-semibold ${color}`}>{classificationLabels[classification]}</span>;
+  return <ClassificationBadge classification={classification} />;
 }
 
 export function ExperimentEvidencePanel({ conversationId }: { conversationId: string }) {

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -60,7 +58,10 @@ from .provider_schemas import (
     ProviderConnectionTestResponse,
     ProviderStatusResponse,
 )
-from .provider_service import _provider_connection_service
+from .provider_service import (
+    _provider_connection_service,
+    browser_provider_configuration_enabled,
+)
 from .schemas import (
     CreateEvidenceBundleRequest,
     CreateResearchSessionRequest,
@@ -108,20 +109,27 @@ def configure_provider(
 @router.post("/provider/test", response_model=ProviderConnectionTestResponse)
 def test_provider_connection(request: Request) -> ProviderConnectionTestResponse:
     """Run one local-only, no-tool structured model connection check."""
-    _require_local_browser_provider_access(request)
+    _require_local_browser_provider_test_access(request)
     return _provider_connection_service.test()
 
 
 def _require_local_browser_provider_access(request: Request) -> None:
     """Guard browser key operations behind explicit local-development opt-in."""
-    browser_configuration_enabled = os.getenv(
-        "CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG", "false"
-    ).lower() in {"1", "true", "yes", "on"}
-    if not browser_configuration_enabled:
+    if not browser_provider_configuration_enabled():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="当前部署已禁用网页 API Key 配置。",
         )
+    _require_loopback_browser_client(request)
+
+
+def _require_local_browser_provider_test_access(request: Request) -> None:
+    """Permit an explicit connection test from loopback without browser key writes."""
+    _require_loopback_browser_client(request)
+
+
+def _require_loopback_browser_client(request: Request) -> None:
+    """Keep all browser provider operations restricted to the local machine."""
     client_host = request.client.host if request.client else ""
     if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
         raise HTTPException(

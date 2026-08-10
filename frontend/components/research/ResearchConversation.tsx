@@ -21,10 +21,12 @@ import { useRouter } from "next/navigation";
 import {
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 
 import {
@@ -47,6 +49,7 @@ import { ResearchDifficultyPanel } from "./ResearchDifficultyPanel";
 import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
 import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
+import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
 
@@ -150,8 +153,56 @@ function ThinkingMessage() {
   );
 }
 
+const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1024px)";
+
+function subscribeDesktopBreakpoint(callback: () => void) {
+  const media = window.matchMedia(DESKTOP_BREAKPOINT_QUERY);
+  media.addEventListener("change", callback);
+  return () => media.removeEventListener("change", callback);
+}
+
+function readDesktopBreakpoint() {
+  return window.matchMedia(DESKTOP_BREAKPOINT_QUERY).matches;
+}
+
+function PanelSection({
+  id,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  // Responsive default: collapsed on narrow screens, expanded on desktop
+  // (lg and up). The details content stays mounted either way, so panel
+  // state and saved inputs are never discarded. SSR and the hydration pass
+  // always render collapsed; the desktop snapshot only applies after mount.
+  const desktop = useSyncExternalStore(subscribeDesktopBreakpoint, readDesktopBreakpoint, () => false);
+  return (
+    <details
+      id={id}
+      open={desktop}
+      className="group scroll-mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+        <span className="min-w-0">
+          <span className="block text-sm font-bold text-slate-900 dark:text-zinc-100">{title}</span>
+          <span className="mt-0.5 block text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{description}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-slate-200 p-3 sm:p-4 dark:border-zinc-800">{children}</div>
+    </details>
+  );
+}
+
 export function ResearchConversation() {
   const router = useRouter();
+  const [searchPanelMounted, setSearchPanelMounted] = useState(false);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<RequestPhase>("initializing");
@@ -367,8 +418,10 @@ export function ResearchConversation() {
           </aside>
         )}
 
+        <ResearchWorkflowNav conversation={conversation} />
+
         <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
-          <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70">
+          <section id="research-section-chat" className="min-w-0 scroll-mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70">
             <div className="max-h-[calc(100vh-13rem)] min-h-[520px] space-y-7 overflow-y-auto px-4 py-6 sm:px-7" aria-label="科研对话消息">
               {conversation.messages.map((message) => (
                 <MessageItem key={message.message_id} message={message} />
@@ -391,21 +444,38 @@ export function ResearchConversation() {
               </div>
             )}
 
-            {conversation.next_skill === "academic-search" && (
-              <>
-                <div className="mx-4 mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200 sm:mx-7">
-                  <p className="flex items-center gap-2 font-bold">
-                    <SearchCheck className="h-4 w-4" /> 需求确认 Skill 已完成
-                  </p>
-                  <p className="mt-2 text-xs leading-5">
-                    当前科研画像已交给“信息源检索 Skill”。系统不会自动全网搜索，请检查下方检索计划后再确认启动。
-                  </p>
-                </div>
-                <AcademicSearchPanel
-                  key={conversation.conversation_id}
-                  conversationId={conversation.conversation_id}
-                />
-              </>
+            {(conversation.research_plan || conversation.next_skill === "academic-search") && (
+              <div id="research-section-search" className="mx-4 mb-3 scroll-mt-4 sm:mx-7">
+                {conversation.next_skill === "academic-search" && (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200">
+                    <p className="flex items-center gap-2 font-bold">
+                      <SearchCheck className="h-4 w-4" /> 需求确认 Skill 已完成
+                    </p>
+                    <p className="mt-2 text-xs leading-5">
+                      当前科研画像已交给“信息源检索 Skill”。系统不会自动全网搜索，请检查下方检索计划后再确认启动。
+                    </p>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchPanelMounted(true);
+                    setSearchPanelOpen((open) => !open);
+                  }}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-50 dark:border-emerald-800 dark:bg-zinc-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+                >
+                  <SearchCheck className="h-3.5 w-3.5" />
+                  {searchPanelOpen ? "收起受限检索与已保存证据" : "打开受限检索与已保存证据"}
+                </button>
+                {searchPanelMounted && (
+                  <div className={searchPanelOpen ? undefined : "hidden"}>
+                    <AcademicSearchPanel
+                      key={conversation.conversation_id}
+                      conversationId={conversation.conversation_id}
+                    />
+                  </div>
+                )}
+              </div>
             )}
 
             {latestAssistant?.suggested_answers.length ? (
@@ -454,31 +524,60 @@ export function ResearchConversation() {
             </form>
           </section>
 
-          <div className="hidden lg:block">
-            <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
-            {conversation.research_plan && <div className="mt-4"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
-            <div className="mt-4"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
-            <div className="mt-4"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
-            {conversation.experiment_design && <div className="mt-4"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>}
-            {conversation.research_plan && <div className="mt-4"><ExperimentEvidencePanel conversationId={conversation.conversation_id} /></div>}
-            {conversation.research_plan && <div className="mt-4"><PaperDraftReviewPanel conversationId={conversation.conversation_id} /></div>}
-          </div>
-
-          <details className="group rounded-2xl border border-slate-200 bg-white lg:hidden dark:border-zinc-800 dark:bg-zinc-900">
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold">
-              查看科研画像与下一步
-              <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
-            </summary>
-            <div className="border-t border-slate-200 p-3 dark:border-zinc-800">
+          <aside className="min-w-0 space-y-4">
+            <div id="research-section-profile" className="scroll-mt-4">
               <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
-              {conversation.research_plan && <div className="mt-3"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
-              <div className="mt-3"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
-              <div className="mt-3"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
-              {conversation.experiment_design && <div className="mt-3"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>}
-              {conversation.research_plan && <div className="mt-3"><ExperimentEvidencePanel conversationId={conversation.conversation_id} /></div>}
-              {conversation.research_plan && <div className="mt-3"><PaperDraftReviewPanel conversationId={conversation.conversation_id} /></div>}
             </div>
-          </details>
+            {conversation.research_plan && (
+              <div id="research-section-plan" className="scroll-mt-4">
+                <ResearchPlanPanel plan={conversation.research_plan} />
+              </div>
+            )}
+          </aside>
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <PanelSection
+            id="research-section-difficulty"
+            title="方向难点分析"
+            description="基于科研画像、规则计划或已保存摘要的风险与缺口提示；每条均标注事实分类与生成方式。"
+          >
+            <ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} />
+          </PanelSection>
+          {conversation.experiment_design && (
+            <PanelSection
+              id="research-section-experiment"
+              title="实验方案与代码草案"
+              description="建议性实验设计；代码草案需你明确确认，且只能预览、复制或下载文本，不会写入项目或执行。"
+            >
+              <ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-evidence"
+              title="实验结果证据包"
+              description="只有你主动粘贴的实验记录才会成为事实来源；没有结果时仍可生成“待补充”的论文蓝图。"
+            >
+              <ExperimentEvidencePanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-paper"
+              title="论文辅助：初稿、审稿、修订与引用"
+              description="初稿由你粘贴；审稿、候选修订与投稿前检查均为建议，不代表导师或同行评审结论。"
+            >
+              <PaperDraftReviewPanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          <PanelSection
+            id="research-section-mindmap"
+            title="研究思维导图"
+            description="只可视化已保存画像、规则计划与证据包；支持缩放、拖拽节点与 SVG 导出。"
+          >
+            <ResearchMindMapPanel mindmap={conversation.research_mindmap} />
+          </PanelSection>
         </div>
       </div>
     </main>
