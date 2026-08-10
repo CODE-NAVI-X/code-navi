@@ -269,6 +269,50 @@ def test_accepted_task_creates_a_persisted_paragraph_suggestion_and_manual_versi
     )
 
 
+def test_next_suggestion_uses_latest_revision_when_tasks_share_a_paragraph(
+    client: TestClient,
+) -> None:
+    conversation_id = _conversation(client)
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts",
+        json={"title": "待完善初稿", "format": "plain_text", "content": "现有研究说明。"},
+    ).json()
+    review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    ).json()
+    tasks = [
+        next(item for item in review["revision_tasks"] if item["finding_id"] == finding_id)
+        for finding_id in ("missing-摘要", "missing-引言")
+    ]
+
+    revisions = []
+    for task in tasks:
+        accepted = client.patch(
+            f"/api/v1/research/paper-reviews/{review['review_id']}"
+            f"/revision-tasks/{task['task_id']}",
+            json={"status": "accepted"},
+        )
+        assert accepted.status_code == 200
+        suggestion = client.post(
+            f"/api/v1/research/paper-reviews/{review['review_id']}"
+            f"/revision-tasks/{task['task_id']}/suggestions",
+            json={"user_confirmed": True},
+        )
+        assert suggestion.status_code == 201
+        applied = client.post(
+            f"/api/v1/research/revision-suggestions/"
+            f"{suggestion.json()['suggestion_id']}/apply",
+            json={"action": "accepted"},
+        )
+        assert applied.status_code == 201
+        revisions.append(applied.json())
+
+    assert revisions[1]["parent_revision_id"] == revisions[0]["revision_id"]
+    assert "补充“摘要”小节" in revisions[1]["content"]
+    assert "补充“引言”小节" in revisions[1]["content"]
+
+
 def test_invalid_model_suggestion_falls_back_without_promoting_claim_to_fact(
     client: TestClient,
 ) -> None:

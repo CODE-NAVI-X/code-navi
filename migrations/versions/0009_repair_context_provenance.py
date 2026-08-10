@@ -30,10 +30,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    columns = {
-        column["name"]
-        for column in sa.inspect(op.get_bind()).get_columns("research_conversations")
-    }
-    if "context_provenance" in columns:
-        with op.batch_alter_table("research_conversations") as batch:
-            batch.drop_column("context_provenance")
+    """Keep the column owned by revision 0005 when leaving this repair revision."""

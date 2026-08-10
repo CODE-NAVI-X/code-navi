@@ -166,3 +166,73 @@ def test_export_requires_explicit_confirmation_and_redacts_sensitive_text(
     assert "api_key=" not in joined
     assert "c:\\users\\" not in joined
     assert "对话记录" not in joined
+
+
+def test_export_rejects_a_check_created_before_the_latest_revision(
+    client: TestClient,
+) -> None:
+    conversation_id = _conversation(client)
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts", json=_draft()
+    ).json()
+    stale_check = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+    assert stale_check.status_code == 201
+    assert stale_check.json()["revision_id"] is None
+
+    review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    ).json()
+    task = next(
+        item
+        for item in review["revision_tasks"]
+        if item["finding_id"].startswith("unsupported-claim")
+    )
+    client.patch(
+        f"/api/v1/research/paper-reviews/{review['review_id']}"
+        f"/revision-tasks/{task['task_id']}",
+        json={"status": "accepted"},
+    )
+    suggestion = client.post(
+        f"/api/v1/research/paper-reviews/{review['review_id']}"
+        f"/revision-tasks/{task['task_id']}/suggestions",
+        json={"user_confirmed": True},
+    ).json()
+    revision = client.post(
+        f"/api/v1/research/revision-suggestions/{suggestion['suggestion_id']}/apply",
+        json={"action": "accepted"},
+    )
+    assert revision.status_code == 201
+
+    exported = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/export-package",
+        json={"user_confirmed": True},
+    )
+
+    assert exported.status_code == 409
+    assert "checklist is stale" in exported.json()["detail"]
+
+
+def test_export_rejects_a_revision_from_an_older_review(client: TestClient) -> None:
+    draft, _revision = _review_and_revision(client)
+    second_review = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
+        json={"user_confirmed": True},
+    )
+    assert second_review.status_code == 200
+    readiness = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+    assert readiness.status_code == 201
+
+    exported = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/export-package",
+        json={"user_confirmed": True},
+    )
+
+    assert exported.status_code == 409
+    assert "latest review" in exported.json()["detail"]

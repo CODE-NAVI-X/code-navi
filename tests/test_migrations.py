@@ -197,3 +197,33 @@ def test_latest_migration_repairs_a_stale_conversation_context_column(
         engine.dispose()
 
     assert "context_provenance" in columns
+
+
+def test_repair_migration_downgrade_preserves_the_revision_0005_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leaving the repair revision must not remove schema owned by revision 0005."""
+    database_url = f"sqlite:///{tmp_path / 'repair-downgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "research_citation_scaffold_v1")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(research_conversations)")
+                )
+            }
+    finally:
+        engine.dispose()
+
+    assert "context_provenance" in columns
+    command.downgrade(config, "base")
