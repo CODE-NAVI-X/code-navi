@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -199,13 +200,18 @@ def _extract_section(chunk: str, names: tuple[str, ...]) -> str | None:
 
 def _extract_sample_tests(chunk: str) -> tuple[ImportedSampleTest, ...]:
     lines = chunk.splitlines()
+    labeled_samples = _extract_labeled_sample_tests(lines)
+    if labeled_samples:
+        return tuple(labeled_samples[:4])
+
     samples: list[ImportedSampleTest] = []
     for index, line in enumerate(lines):
         if not re.match(r"^(样例|示例|Sample)\s*(\d+)?\s*[：:]?", line.strip(), re.I):
             continue
-        block = lines[index + 1 : index + 7]
-        stdin = _section_value(block, ("输入", "Input"))
-        output = _section_value(block, ("输出", "Output"))
+        end = _next_sample_or_problem_index(lines, index + 1)
+        block = lines[index + 1 : end]
+        stdin = _sample_section_value(block, ("输入", "Input"))
+        output = _sample_section_value(block, ("输出", "Output"))
         if stdin and output:
             samples.append(ImportedSampleTest(stdin, output))
         elif len(block) >= 2:
@@ -213,6 +219,131 @@ def _extract_sample_tests(chunk: str) -> tuple[ImportedSampleTest, ...]:
             if len(values) >= 2:
                 samples.append(ImportedSampleTest(values[0], values[1]))
     return tuple(samples[:4])
+
+
+def _extract_labeled_sample_tests(lines: list[str]) -> list[ImportedSampleTest]:
+    samples: list[ImportedSampleTest] = []
+    index = 0
+    while index < len(lines):
+        if not _is_sample_input_heading(lines[index].strip()):
+            index += 1
+            continue
+        stdin, next_index = _heading_block_value(
+            lines,
+            index,
+            stop_at=(_is_sample_output_heading, _is_sample_input_heading, _is_problem_heading),
+        )
+        output_index = _next_matching_index(
+            lines,
+            next_index,
+            target=_is_sample_output_heading,
+            stop_at=(_is_sample_input_heading, _is_problem_heading),
+        )
+        if output_index is None:
+            index = next_index + 1
+            continue
+        output, index = _heading_block_value(
+            lines,
+            output_index,
+            stop_at=(_is_sample_input_heading, _is_problem_heading),
+        )
+        if stdin and output:
+            samples.append(ImportedSampleTest(stdin, output))
+    return samples
+
+
+HeadingMatcher = Callable[[str], bool]
+
+
+def _heading_block_value(
+    lines: list[str],
+    heading_index: int,
+    *,
+    stop_at: tuple[HeadingMatcher, ...],
+) -> tuple[str | None, int]:
+    stripped = lines[heading_index].strip()
+    inline = re.sub(
+        r"^(?:样例|示例|Sample|Example)\s*(?:\d+)?\s*(?:输入|输出|Input|Output)\s*[：:]?\s*",
+        "",
+        stripped,
+        flags=re.I,
+    ).strip()
+    if inline:
+        return _clip_preserve_lines(inline, 500), heading_index + 1
+
+    values: list[str] = []
+    index = heading_index + 1
+    while index < len(lines):
+        candidate = lines[index].strip()
+        if not candidate:
+            if values:
+                break
+            index += 1
+            continue
+        if any(matcher(candidate) for matcher in stop_at):
+            break
+        values.append(lines[index].rstrip())
+        index += 1
+    value = "\n".join(values).strip()
+    return (_clip_preserve_lines(value, 500) if value else None), index
+
+
+def _sample_section_value(lines: list[str], names: tuple[str, ...]) -> str | None:
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        for name in names:
+            if re.match(rf"^{re.escape(name)}\s*[：:]", stripped, re.I):
+                inline = re.sub(
+                    rf"^{re.escape(name)}\s*[：:]\s*",
+                    "",
+                    stripped,
+                    flags=re.I,
+                )
+                if inline.strip():
+                    return _clip_preserve_lines(inline, 500)
+                return _read_sample_block(lines, index + 1)
+            if re.match(rf"^{re.escape(name)}\s*$", stripped, re.I):
+                return _read_sample_block(lines, index + 1)
+    return None
+
+
+def _read_sample_block(lines: list[str], start_index: int) -> str | None:
+    values: list[str] = []
+    for line in lines[start_index:]:
+        stripped = line.strip()
+        if not stripped:
+            if values:
+                break
+            continue
+        if _is_section_heading(stripped) or _is_sample_input_heading(stripped):
+            break
+        values.append(line.rstrip())
+    value = "\n".join(values).strip()
+    return _clip_preserve_lines(value, 500) if value else None
+
+
+def _next_matching_index(
+    lines: list[str],
+    start_index: int,
+    *,
+    target: HeadingMatcher,
+    stop_at: tuple[HeadingMatcher, ...],
+) -> int | None:
+    for index in range(start_index, len(lines)):
+        stripped = lines[index].strip()
+        if target(stripped):
+            return index
+        if any(matcher(stripped) for matcher in stop_at):
+            return None
+    return None
+
+
+def _next_sample_or_problem_index(lines: list[str], start_index: int) -> int:
+    for index in range(start_index, len(lines)):
+        stripped = lines[index].strip()
+        if _is_sample_heading(stripped) or _is_problem_heading(stripped):
+            return index
+    return len(lines)
 
 
 def _section_value(lines: list[str], names: tuple[str, ...]) -> str | None:
@@ -228,6 +359,40 @@ def _section_value(lines: list[str], names: tuple[str, ...]) -> str | None:
                 following = _next_content_line(lines[index + 1 :])
                 return _clip(following, 500) if following else None
     return None
+
+
+def _is_problem_heading(value: str) -> bool:
+    return bool(
+        re.match(
+            r"^(?:#{1,3}\s*)?(?:题目|练习|Problem|Exercise)\s*[\d一二三四五六七八九十]*[：:.\s-]*",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _is_sample_heading(value: str) -> bool:
+    return bool(re.match(r"^(?:样例|示例|Sample|Example)\s*(?:\d+)?\s*[：:]?", value, re.I))
+
+
+def _is_sample_input_heading(value: str) -> bool:
+    return bool(
+        re.match(
+            r"^(?:样例|示例|Sample|Example)\s*(?:\d+)?\s*(?:输入|Input)\s*[：:]?",
+            value,
+            re.I,
+        )
+    )
+
+
+def _is_sample_output_heading(value: str) -> bool:
+    return bool(
+        re.match(
+            r"^(?:样例|示例|Sample|Example)\s*(?:\d+)?\s*(?:输出|Output)\s*[：:]?",
+            value,
+            re.I,
+        )
+    )
 
 
 def _parse_structured_upload(text: str, filename: str | None) -> str | None:
@@ -396,4 +561,9 @@ def _order_reason(difficulty: str, tags: tuple[str, ...]) -> str:
 
 def _clip(value: str, limit: int) -> str:
     compact = re.sub(r"\s+", " ", value).strip()
+    return compact if len(compact) <= limit else compact[: limit - 1] + "…"
+
+
+def _clip_preserve_lines(value: str, limit: int) -> str:
+    compact = "\n".join(line.rstrip() for line in value.strip().splitlines()).strip()
     return compact if len(compact) <= limit else compact[: limit - 1] + "…"
