@@ -34,6 +34,7 @@ def create_compiler_application(settings: Settings | None = None) -> CompilerApp
         resolved,
         evaluator=ai_service.evaluator,
         tutor=ai_service.tutor,
+        organizer=ai_service.organizer,
         ai_status=ai_service.status,
         ai_message=ai_service.message,
         record_store=LearningRecordStore(resolved.database_path),
@@ -106,6 +107,16 @@ def guidance(
     """Provide guided follow-up for a server-owned submission context."""
 
     return _json_response(application.guidance(payload))
+
+
+@router.post("/problem-imports/analyze", status_code=200)
+def analyze_problem_import(
+    payload: Any = _json_body,
+    application: CompilerApplication = _compiler_dependency,
+) -> JSONResponse:
+    """Analyze pasted exercise text into ordered practice items."""
+
+    return _json_response(application.analyze_problem_import(payload))
 
 
 @router.get("/records", status_code=200)

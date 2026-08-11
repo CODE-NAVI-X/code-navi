@@ -116,6 +116,21 @@ export interface CompilerGuidance {
   blocked: boolean;
 }
 
+export interface ImportedCompilerProblem {
+  importId: string;
+  title: string;
+  description: string;
+  difficulty: "easy" | "medium" | "hard";
+  tags: string[];
+  inputHint: string;
+  outputHint: string;
+  starterCode: string;
+  sampleTests: Array<{ stdin: string; expectedOutput: string }>;
+  confidence: number;
+  warnings: string[];
+  orderReason: string;
+}
+
 export class CompilerApiError extends Error {
   constructor(
     public readonly status: number,
@@ -185,6 +200,21 @@ export async function requestCompilerGuidance(payload: {
   });
 }
 
+export async function analyzeProblemImport(payload: {
+  text: string;
+  filename?: string;
+  learnerId?: string;
+}): Promise<{
+  source: "deterministic_rule";
+  problems: ImportedCompilerProblem[];
+  warnings: string[];
+}> {
+  return request("/api/v1/compiler/problem-imports/analyze", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchCompilerRecords(
   learnerId: string,
 ): Promise<CompilerRecord[]> {
@@ -233,4 +263,3 @@ async function errorDetail(response: Response): Promise<string | null> {
   }
   return response.statusText || null;
 }
-

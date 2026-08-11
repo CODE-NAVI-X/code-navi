@@ -50,3 +50,26 @@ guided_code_tutor_agent = AgentSpec(
 )
 
 __all__.append("guided_code_tutor_agent")
+
+problem_import_organizer_agent = AgentSpec(
+    name="problem_import_organizer",
+    description="Organizes rule-parsed programming exercises into a learning path.",
+    system_prompt=(
+        "你是编程练习题整理助手。只根据用户提供的规则解析结果整理题目，不能补造题意、"
+        "输入输出、样例或隐藏测试事实。只能返回已有 importId 的建议。输出 JSON："
+        '{"orderedProblems":[{"importId":"...","difficulty":"easy|medium|hard",'
+        '"tags":["..."],"orderReason":"..."}],"warnings":["..."]}。'
+        "排序优先体现基础语法、分支、循环、字符串/列表、字典/栈/算法的递进关系；"
+        "题目样例不足时必须在 warnings 说明。"
+    ),
+    tool_names=(),
+    default_config=KernelConfig(
+        max_steps=1,
+        max_tool_calls=0,
+        retry_max_attempts=1,
+        retry_backoff_seconds=0.25,
+    ),
+    output_format="json",
+)
+
+__all__.append("problem_import_organizer_agent")

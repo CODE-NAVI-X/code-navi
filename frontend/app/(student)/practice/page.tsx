@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Clock3,
   FileUp,
+  Import,
   List,
   Loader2,
   Play,
@@ -19,9 +20,11 @@ import {
 import {
   CompilerAiFeedback,
   CompilerExecutionResult,
+  ImportedCompilerProblem,
   CompilerRecord,
   CompilerRuntimeStatus,
   CompilerJudgeResult,
+  analyzeProblemImport,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
@@ -44,6 +47,10 @@ interface PracticeExercise {
   outputHint: string;
   source: string;
   stdin: string;
+  origin?: "built_in" | "python_file" | "uploaded_problem";
+  orderReason?: string;
+  warnings?: string[];
+  sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
 }
 
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
@@ -140,7 +147,26 @@ else:
 `,
     stdin: "{[()]}\n",
   },
-];
+].map((exercise) => ({ ...exercise, origin: "built_in" as const })) as PracticeExercise[];
+
+function importedProblemToExercise(problem: ImportedCompilerProblem): PracticeExercise {
+  return {
+    id: problem.importId,
+    title: problem.title,
+    summary: `${problem.tags.join(" · ")} · 上传题目`,
+    difficulty: problem.difficulty,
+    tags: ["上传", ...problem.tags],
+    description: problem.description,
+    inputHint: problem.inputHint,
+    outputHint: problem.outputHint,
+    source: problem.starterCode,
+    stdin: "",
+    origin: "uploaded_problem",
+    orderReason: problem.orderReason,
+    warnings: problem.warnings,
+    sampleTests: problem.sampleTests,
+  };
+}
 
 function PracticeContent() {
   const router = useRouter();
@@ -157,7 +183,12 @@ function PracticeContent() {
   const [difficulty, setDifficulty] = useState<Difficulty | "all">("all");
   const [selectedExerciseId, setSelectedExerciseId] = useState(EXERCISES[0].id);
   const [activeExercise, setActiveExercise] = useState<PracticeExercise>(EXERCISES[0]);
-  const [importedExercise, setImportedExercise] = useState<PracticeExercise | null>(null);
+  const [importedExercises, setImportedExercises] = useState<PracticeExercise[]>([]);
+  const [problemImportText, setProblemImportText] = useState("");
+  const [problemImportFileName, setProblemImportFileName] = useState<string | null>(null);
+  const [problemImportPreview, setProblemImportPreview] = useState<ImportedCompilerProblem[]>([]);
+  const [problemImportBusy, setProblemImportBusy] = useState(false);
+  const [problemImportMessage, setProblemImportMessage] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<CompilerRuntimeStatus | null>(null);
   const [source, setSource] = useState(EXERCISES[0].source);
   const [stdin, setStdin] = useState(EXERCISES[0].stdin);
@@ -174,8 +205,8 @@ function PracticeContent() {
   const [learnerId] = useState(() => getLearnerId());
 
   const exercises = useMemo(
-    () => (importedExercise ? [importedExercise, ...EXERCISES] : EXERCISES),
-    [importedExercise],
+    () => [...importedExercises, ...EXERCISES],
+    [importedExercises],
   );
 
   const visibleExercises = useMemo(() => {
@@ -246,11 +277,87 @@ function PracticeContent() {
       outputHint: "按代码逻辑输出",
       source: await file.text(),
       stdin: "",
+      origin: "python_file",
     };
-    setImportedExercise(imported);
+    setImportedExercises((items) => [imported, ...items.filter((item) => item.id !== imported.id)]);
     setSelectedExerciseId(imported.id);
     setQuery("");
     setDifficulty("all");
+  }
+
+  async function importProblemTextFile(file: File | null) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setProblemImportText(text);
+      setProblemImportFileName(file.name);
+      setProblemImportPreview([]);
+      setProblemImportMessage(`已读取题目文件：${file.name}`);
+    } catch {
+      setProblemImportMessage("题目文件读取失败，请确认文件是文本格式。");
+    }
+  }
+
+  async function analyzeUploadedProblems() {
+    if (!problemImportText.trim()) {
+      setProblemImportMessage("请先粘贴题目文本。");
+      return;
+    }
+    setProblemImportBusy(true);
+    setProblemImportMessage(null);
+    try {
+      const analyzed = await analyzeProblemImport({
+        text: problemImportText,
+        filename: problemImportFileName ?? undefined,
+        learnerId,
+      });
+      setProblemImportPreview(analyzed.problems);
+      setProblemImportMessage(
+        analyzed.problems.length > 0
+          ? `已识别 ${analyzed.problems.length} 道题，可确认后加入本组练习。`
+          : analyzed.warnings[0] ?? "未识别到题目。",
+      );
+    } catch (importError) {
+      setProblemImportMessage(importError instanceof Error ? importError.message : "题目识别失败。");
+    } finally {
+      setProblemImportBusy(false);
+    }
+  }
+
+  function addUploadedProblems() {
+    const imported = problemImportPreview.map(importedProblemToExercise);
+    setImportedExercises((items) => [
+      ...imported,
+      ...items.filter((item) => !imported.some((next) => next.id === item.id)),
+    ]);
+    if (imported[0]) {
+      setSelectedExerciseId(imported[0].id);
+      setQuery("");
+      setDifficulty("all");
+    }
+    setProblemImportMessage(`已加入 ${imported.length} 道上传题目。`);
+  }
+
+  function moveImportedProblem(index: number, direction: -1 | 1) {
+    setProblemImportPreview((items) => {
+      const target = index + direction;
+      if (target < 0 || target >= items.length) return items;
+      const next = [...items];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next.map((problem, position) => ({
+        ...problem,
+        orderReason: `手动调整为第 ${position + 1} 项；${problem.orderReason}`,
+      }));
+    });
+  }
+
+  function updateImportedProblem(
+    importId: string,
+    patch: Partial<Pick<ImportedCompilerProblem, "difficulty" | "tags">>,
+  ) {
+    setProblemImportPreview((items) =>
+      items.map((problem) => (problem.importId === importId ? { ...problem, ...patch } : problem)),
+    );
   }
 
   async function runCode() {
@@ -341,7 +448,7 @@ function PracticeContent() {
                 今天想练什么？
               </h1>
               <p className="mt-4 text-sm leading-6 text-[#607066]">
-                当前知识点：{knowledgeName}。选择一道题，或者带上自己的 Python 文件进入编译练习。
+                当前知识点：{knowledgeName}。选择一道题，上传自己的题目，或者带上 Python 文件进入编译练习。
               </p>
             </div>
 
@@ -380,6 +487,13 @@ function PracticeContent() {
                   onChange={(event) => void importPythonSource(event.target.files?.[0] ?? null)}
                 />
               </label>
+              <a
+                href="#problem-import"
+                className="inline-flex items-center gap-2 rounded-full border border-[#d9dfd2] bg-white px-4 py-2 text-xs font-semibold text-[#35443b] shadow-sm transition hover:bg-[#eef2e8]"
+              >
+                <Import className="h-3.5 w-3.5" strokeWidth={1.5} />
+                上传题目
+              </a>
               {(["all", "easy", "medium", "hard"] as const).map((item) => (
                 <button
                   key={item}
@@ -426,6 +540,83 @@ function PracticeContent() {
                 )}
               </div>
             </section>
+
+            <section id="problem-import" className="mt-8 rounded-2xl border border-[#d9dfd2] bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] font-semibold uppercase text-[#7b857d]">
+                    Problem Import
+                  </p>
+                  <h2 className="mt-1 text-xl font-bold">上传题目并智能排列</h2>
+                  <p className="mt-2 max-w-2xl text-xs leading-5 text-[#667168]">
+                    上传题目文件或直接粘贴题目文本后，系统会识别题意、输入输出、难度和知识点，并按练习路径加入当前题组。上传题目默认只支持运行和 AI 评析，不使用服务端隐藏测试判题。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void analyzeUploadedProblems()}
+                  disabled={problemImportBusy}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#17201b] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#2f3c34] disabled:opacity-50"
+                >
+                  {problemImportBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+                  ) : (
+                    <BrainCircuit className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  )}
+                  {problemImportBusy ? "识别中" : "识别并排列"}
+                </button>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-4 py-2.5 text-xs font-semibold text-[#35443b] transition hover:bg-[#eef2e8]">
+                  <FileUp className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  选择题目文件
+                  <input
+                    type="file"
+                    accept=".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json"
+                    className="hidden"
+                    onChange={(event) => void importProblemTextFile(event.target.files?.[0] ?? null)}
+                  />
+                </label>
+                {problemImportFileName ? (
+                  <span className="text-xs text-[#667168]">{problemImportFileName}</span>
+                ) : (
+                  <span className="text-xs text-[#667168]">也可以直接在下方粘贴题目内容</span>
+                )}
+              </div>
+              <textarea
+                value={problemImportText}
+                onChange={(event) => setProblemImportText(event.target.value)}
+                placeholder={"题目一：字符串回文判断\n描述：读取一行文本，判断是否为回文。\n输入：一行字符串\n输出：YES 或 NO"}
+                className="mt-4 min-h-36 w-full resize-y rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] p-3 text-sm leading-6 text-[#17201b] outline-none focus:border-[#9fb49d]"
+              />
+              {problemImportMessage ? (
+                <p className="mt-3 text-xs text-[#667168]">{problemImportMessage}</p>
+              ) : null}
+              {problemImportPreview.length > 0 ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-[#e6eadf]">
+                  {problemImportPreview.map((problem, index) => (
+                    <ImportedProblemRow
+                      key={problem.importId}
+                      problem={problem}
+                      index={index}
+                      total={problemImportPreview.length}
+                      onMove={moveImportedProblem}
+                      onChange={updateImportedProblem}
+                    />
+                  ))}
+                  <div className="border-t border-[#e6eadf] bg-[#fbfcf7] p-3 text-right">
+                    <button
+                      type="button"
+                      onClick={addUploadedProblems}
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#b9f28d] px-4 py-2 text-xs font-bold text-[#122017] transition hover:bg-[#c9ffa2]"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+                      加入本组练习
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </section>
           </section>
         </div>
       </main>
@@ -446,7 +637,7 @@ function PracticeContent() {
         <button
           type="button"
           onClick={() => void submitCode()}
-          disabled={running || !runtime?.ready || activeExercise.id === "imported"}
+          disabled={running || !runtime?.ready || activeExercise.origin !== "built_in"}
           className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#667c68] bg-white px-4 py-2.5 text-sm font-bold text-[#233728] transition hover:bg-[#eef2e8] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />
@@ -454,8 +645,10 @@ function PracticeContent() {
         </button>
         <div className="min-w-0 flex-1">
           <span className="font-mono text-[10px] text-[#78827a]">
-            {activeExercise.id === "imported"
-              ? "自定义练习"
+          {activeExercise.origin === "python_file"
+            ? "自定义练习"
+            : activeExercise.origin === "uploaded_problem"
+              ? "上传题目"
               : `练习 ${String(exercises.findIndex((item) => item.id === activeExercise.id) + 1).padStart(2, "0")}`}
           </span>
           <strong className="block truncate text-sm text-[#17201b]">{activeExercise.title}</strong>
@@ -514,6 +707,16 @@ function PracticeContent() {
                   {DIFFICULTY_LABELS[activeExercise.difficulty]}
                 </span>
                 <p className="mt-3 text-sm leading-6 text-[#405146]">{activeExercise.description}</p>
+                {activeExercise.orderReason ? (
+                  <p className="mt-2 text-xs leading-5 text-[#667168]">{activeExercise.orderReason}</p>
+                ) : null}
+                {activeExercise.warnings?.length ? (
+                  <ul className="mt-2 space-y-1 text-xs text-amber-700">
+                    {activeExercise.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
               <dl className="grid gap-2 text-xs text-[#667168]">
                 <div className="rounded-xl bg-[#f5f6ef] p-3">
@@ -671,6 +874,102 @@ function ExerciseRow({
         <ArrowRight className="h-4 w-4" strokeWidth={1.5} />
       </button>
     </div>
+  );
+}
+
+function ImportedProblemRow({
+  problem,
+  index,
+  total,
+  onMove,
+  onChange,
+}: {
+  problem: ImportedCompilerProblem;
+  index: number;
+  total: number;
+  onMove: (index: number, direction: -1 | 1) => void;
+  onChange: (
+    importId: string,
+    patch: Partial<Pick<ImportedCompilerProblem, "difficulty" | "tags">>,
+  ) => void;
+}) {
+  return (
+    <article className="grid gap-3 border-t border-[#e6eadf] p-4 first:border-t-0 md:grid-cols-[40px_minmax(0,1fr)_220px]">
+      <span className="font-mono text-xs text-[#7b857d]">
+        {String(index + 1).padStart(2, "0")}
+      </span>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <strong className="text-sm text-[#17201b]">{problem.title}</strong>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${DIFFICULTY_BADGES[problem.difficulty]}`}>
+            {DIFFICULTY_LABELS[problem.difficulty]}
+          </span>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-[#667168]">{problem.description}</p>
+        <p className="mt-2 text-[11px] text-[#667168]">{problem.orderReason}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="text-[11px] text-[#667168]">
+            难度
+            <select
+              value={problem.difficulty}
+              onChange={(event) =>
+                onChange(problem.importId, {
+                  difficulty: event.target.value as ImportedCompilerProblem["difficulty"],
+                })
+              }
+              className="ml-1 rounded-md border border-[#d9dfd2] bg-white px-1.5 py-1 text-[11px] text-[#35443b]"
+            >
+              <option value="easy">入门</option>
+              <option value="medium">进阶</option>
+              <option value="hard">挑战</option>
+            </select>
+          </label>
+          <label className="min-w-0 flex-1 text-[11px] text-[#667168]">
+            标签
+            <input
+              value={problem.tags.join(", ")}
+              onChange={(event) =>
+                onChange(problem.importId, {
+                  tags: event.target.value
+                    .split(",")
+                    .map((tag) => tag.trim())
+                    .filter(Boolean)
+                    .slice(0, 6),
+                })
+              }
+              className="ml-1 w-full min-w-28 rounded-md border border-[#d9dfd2] bg-white px-1.5 py-1 text-[11px] text-[#35443b]"
+            />
+          </label>
+        </div>
+        {problem.warnings.length ? (
+          <p className="mt-2 text-[11px] text-amber-700">{problem.warnings.join(" ")}</p>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-start justify-between gap-2 text-left text-[11px] text-[#667168] md:block md:text-right">
+        <p>置信度 {Math.round(problem.confidence * 100)}%</p>
+        <p className="mt-1">{problem.sampleTests.length ? `样例 ${problem.sampleTests.length} 组` : "无样例"}</p>
+        <div className="mt-2 flex gap-1 md:justify-end">
+          <button
+            type="button"
+            aria-label="上移题目"
+            disabled={index === 0}
+            onClick={() => onMove(index, -1)}
+            className="rounded-md border border-[#d9dfd2] px-2 py-1 disabled:opacity-40"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="下移题目"
+            disabled={index === total - 1}
+            onClick={() => onMove(index, 1)}
+            className="rounded-md border border-[#d9dfd2] px-2 py-1 disabled:opacity-40"
+          >
+            ↓
+          </button>
+        </div>
+      </div>
+    </article>
   );
 }
 
