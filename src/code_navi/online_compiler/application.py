@@ -15,7 +15,7 @@ from .evaluation import AiFeedback, RuleAssessment, classify_execution
 from .judging import JudgeResult, judge_submission
 from .learning_records import LearningRecordStore
 from .piston import ExecutionLimits, ExecutionResult, PistonError, RuntimeInfo
-from .problem_imports import analyze_problem_text
+from .problem_imports import ImportedProblem, analyze_problem_text
 from .problems.catalog import build_default_problem_repository
 from .problems.repository import ProblemRepository
 
@@ -76,6 +76,18 @@ PENDING_EVALUATION_TTL_SECONDS = 300.0
 MAX_PENDING_EVALUATIONS = 256
 PENDING_SUBMISSION_TTL_SECONDS = 900.0
 MAX_PENDING_SUBMISSIONS = 256
+
+
+def _problem_organization_changed(
+    original: list[ImportedProblem], organized: list[ImportedProblem]
+) -> bool:
+    return [
+        (problem.import_id, problem.difficulty, problem.tags, problem.order_reason)
+        for problem in original
+    ] != [
+        (problem.import_id, problem.difficulty, problem.tags, problem.order_reason)
+        for problem in organized
+    ]
 
 
 class CompilerApplication:
@@ -369,15 +381,19 @@ class CompilerApplication:
             return ApiResponse(400, {"error": str(error)})
         problems = analyze_problem_text(text, filename=filename)
         organizer_warnings: list[str] = []
+        source = "deterministic_rule"
         if self._organizer is not None and problems:
             try:
-                problems, organizer_warnings = self._organizer.organize(problems, learner_id)
+                organized, organizer_warnings = self._organizer.organize(problems, learner_id)
+                if _problem_organization_changed(problems, organized):
+                    source = "rules_with_ai_organization"
+                problems = organized
             except AiEvaluationError:
                 organizer_warnings = ["AI 整理暂不可用，当前结果来自规则解析。"]
         return ApiResponse(
             200,
             {
-                "source": "deterministic_rule",
+                "source": source,
                 "problems": [problem.as_dict() for problem in problems],
                 "warnings": (
                     organizer_warnings

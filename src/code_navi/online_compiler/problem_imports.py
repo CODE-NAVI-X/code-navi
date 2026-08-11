@@ -71,8 +71,14 @@ def analyze_problem_text(text: str, *, filename: str | None = None) -> list[Impo
     structured = _parse_structured_upload(normalized, filename)
     if structured is not None:
         normalized = structured
+    if not normalized.strip():
+        return []
     chunks = _split_problem_chunks(normalized)
-    problems = [_problem_from_chunk(index, chunk) for index, chunk in enumerate(chunks)]
+    problems = [
+        _problem_from_chunk(index, chunk)
+        for index, chunk in enumerate(chunks)
+        if _has_problem_signal(chunk)
+    ]
     return sorted(
         problems,
         key=lambda item: (
@@ -230,7 +236,7 @@ def _parse_structured_upload(text: str, filename: str | None) -> str | None:
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
-            return None
+            return ""
         records = (
             payload
             if isinstance(payload, list)
@@ -239,7 +245,7 @@ def _parse_structured_upload(text: str, filename: str | None) -> str | None:
             else None
         )
         if not isinstance(records, list):
-            return None
+            return ""
         chunks = [_json_record_to_chunk(record, index) for index, record in enumerate(records)]
         return "\n\n".join(chunk for chunk in chunks if chunk)
     if suffix == "csv":
@@ -247,9 +253,25 @@ def _parse_structured_upload(text: str, filename: str | None) -> str | None:
             rows = csv.DictReader(io.StringIO(text))
             chunks = [_json_record_to_chunk(row, index) for index, row in enumerate(rows)]
         except csv.Error:
-            return None
+            return ""
         return "\n\n".join(chunk for chunk in chunks if chunk)
     return None
+
+
+def _has_problem_signal(chunk: str) -> bool:
+    has_title = bool(
+        re.search(
+            r"(?im)^(?:#{1,3}\s*)?(?:题目|练习|Problem|Exercise)\s*[\d一二三四五六七八九十]*[：:.\s-]*\S+",
+            chunk,
+        )
+    )
+    has_description = bool(re.search(r"(?im)^(?:题目描述|描述|Description)\s*[：:]\s*\S+", chunk))
+    has_input = _extract_section(chunk, ("输入", "Input")) is not None
+    has_output = _extract_section(chunk, ("输出", "Output")) is not None
+    has_sample = bool(_extract_sample_tests(chunk))
+    if has_input and has_output:
+        return True
+    return has_title and (has_description or has_input or has_output or has_sample)
 
 
 def _json_record_to_chunk(record: Any, index: int) -> str:

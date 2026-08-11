@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from code_navi.online_compiler.ai_evaluation import AiEvaluator
+from code_navi.online_compiler.ai_evaluation import AiEvaluator, ProblemOrganizer
 from code_navi.online_compiler.application import CompilerApplication
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
 from code_navi.online_compiler.piston import ExecutionLimits, ExecutionResult, RuntimeInfo
+from code_navi.online_compiler.problem_imports import ImportedProblem
 
 
 class FakePistonGateway:
@@ -56,6 +57,14 @@ class FakeAiEvaluator(AiEvaluator):
         assert source
         assert result.outcome == assessment.category == "success"
         return AiFeedback("命名清晰。", ("增加边界用例",), QualityRubric(90, 80, 70))
+
+
+class FakeProblemOrganizer(ProblemOrganizer):
+    def organize(
+        self, problems: list[ImportedProblem], learner_id: str | None = None
+    ) -> tuple[list[ImportedProblem], list[str]]:
+        assert learner_id == "learner-1"
+        return list(reversed(problems)), ["AI 仅调整了练习顺序。"]
 
 
 def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
@@ -260,6 +269,26 @@ def test_problem_import_rejects_invalid_payload_before_gateway_call() -> None:
     assert gateway.calls == []
 
 
+def test_problem_import_does_not_fabricate_problem_from_plain_notes() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import({"text": "今天下午讨论项目进度，记得带电脑。"})
+
+    assert response.status_code == 200
+    assert response.body["problems"] == []
+    assert "未能" in response.body["warnings"][0]
+
+
+def test_problem_import_does_not_fabricate_problem_from_empty_json() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import({"filename": "problems.json", "text": "[]"})
+
+    assert response.status_code == 200
+    assert response.body["problems"] == []
+    assert "未能" in response.body["warnings"][0]
+
+
 def test_problem_import_accepts_json_file_and_extracts_sample_tests() -> None:
     app = CompilerApplication(FakePistonGateway(), Settings())
 
@@ -292,3 +321,32 @@ def test_problem_import_accepts_csv_file() -> None:
 
     assert response.status_code == 200
     assert response.body["problems"][0]["title"] == "求和"
+
+
+def test_problem_import_reports_ai_organization_source_when_changed() -> None:
+    app = CompilerApplication(
+        FakePistonGateway(),
+        Settings(),
+        organizer=FakeProblemOrganizer(),
+    )
+
+    response = app.analyze_problem_import(
+        {
+            "learnerId": "learner-1",
+            "text": """
+题目一：整数列表求和
+描述：读取一行以空格分隔的整数，输出所有整数之和。
+输入：空格分隔的整数
+输出：一个整数
+
+题目二：字符串回文判断
+描述：判断字符串是否为回文。
+输入：一行字符串
+输出：YES 或 NO
+""",
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "rules_with_ai_organization"
+    assert response.body["warnings"] == ["AI 仅调整了练习顺序。"]

@@ -149,9 +149,12 @@ else:
   },
 ].map((exercise) => ({ ...exercise, origin: "built_in" as const })) as PracticeExercise[];
 
-function importedProblemToExercise(problem: ImportedCompilerProblem): PracticeExercise {
+function importedProblemToExercise(
+  problem: ImportedCompilerProblem,
+  batchId: string,
+): PracticeExercise {
   return {
-    id: problem.importId,
+    id: `${batchId}-${problem.importId}`,
     title: problem.title,
     summary: `${problem.tags.join(" · ")} · 上传题目`,
     difficulty: problem.difficulty,
@@ -325,7 +328,13 @@ function PracticeContent() {
   }
 
   function addUploadedProblems() {
-    const imported = problemImportPreview.map(importedProblemToExercise);
+    const batchId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? `uploaded-${crypto.randomUUID()}`
+        : `uploaded-${Date.now()}`;
+    const imported = problemImportPreview.map((problem) =>
+      importedProblemToExercise(problem, batchId),
+    );
     setImportedExercises((items) => [
       ...imported,
       ...items.filter((item) => !imported.some((next) => next.id === item.id)),

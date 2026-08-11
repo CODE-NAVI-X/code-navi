@@ -205,7 +205,7 @@ export async function analyzeProblemImport(payload: {
   filename?: string;
   learnerId?: string;
 }): Promise<{
-  source: "deterministic_rule";
+  source: "deterministic_rule" | "rules_with_ai_organization";
   problems: ImportedCompilerProblem[];
   warnings: string[];
 }> {
