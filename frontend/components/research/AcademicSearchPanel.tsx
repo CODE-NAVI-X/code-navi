@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import {
   type AcademicSourceId,
@@ -266,6 +267,11 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                   {savedNoteId ? "已保存为研究笔记" : `保存所选证据到 Notebook（${selectedPaperUrls.length}）`}
                 </button>
                 <p className="mt-2 text-[11px] leading-5 text-emerald-800 dark:text-emerald-300">保存内容包括研究主题、问题、所选 Evidence 来源和下一步建议，并保留当前 Research Conversation。</p>
+                {savedNoteId && (
+                  <Link href="/learning#research-notes" className="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-zinc-900 dark:text-emerald-300 dark:hover:bg-emerald-950/40">
+                    <BookOpenCheck className="h-4 w-4" /> 返回学习笔记查看
+                  </Link>
+                )}
               </div>
             )}
             {paperAnalysis && (

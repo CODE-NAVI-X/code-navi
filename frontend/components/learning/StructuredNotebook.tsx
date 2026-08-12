@@ -31,6 +31,7 @@ interface StructuredNotebookProps {
   open: boolean;
   onDismiss: () => void;
   sessionId?: string;
+  initialTab?: TabId;
 }
 
 function PresentationPreviewOverlay({
@@ -102,9 +103,10 @@ export function StructuredNotebook({
   open,
   onDismiss,
   sessionId,
+  initialTab = "summary",
 }: StructuredNotebookProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabId>("summary");
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [items, setItems] = useState<NotebookItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

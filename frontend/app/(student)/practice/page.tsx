@@ -32,7 +32,7 @@ import {
   requestCompilerGuidance,
   submitPython,
 } from "@/lib/api/compiler";
-import { useFlowStore } from "@/lib/store/flow-store";
+import { getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
 
@@ -175,11 +175,13 @@ function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const payload = useFlowStore((s) => s.payload);
+  const persistedPayload = useMemo(() => getPersistedFlowPayload(), []);
   const knowledgeName =
     payload?.masteredKnowledgePoint.name ??
     searchParams.get("knowledge_name") ??
+    persistedPayload?.masteredKnowledgePoint.name ??
     "DHCP 四阶段报文交互";
-  const recommendedIds = payload?.payloadData.exerciseIds ?? [];
+  const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
 
   const [view, setView] = useState<"start" | "workspace">("start");
   const [query, setQuery] = useState("");
@@ -445,7 +447,7 @@ function PracticeContent() {
           <PracticeTopbar
             runtime={runtime}
             error={error}
-            onBack={() => router.push("/student/learning")}
+            onBack={() => router.push("/learning")}
           />
 
           <section className="mx-auto w-full max-w-5xl py-10 sm:py-14">
@@ -832,7 +834,7 @@ function PracticeTopbar({
         className="inline-flex items-center gap-2 text-xs font-semibold text-[#667168] transition hover:text-[#17201b]"
       >
         <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
-        返回知识点学习
+        返回学习
       </button>
       <RuntimeBadge runtime={runtime} error={error} />
     </header>

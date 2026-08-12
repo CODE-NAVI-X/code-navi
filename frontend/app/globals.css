@@ -3,6 +3,10 @@
 :root {
   --background: #fafafa;
   --foreground: #09090b;
+  --app-surface: #f8fafc;
+  --app-foreground: #17201b;
+  --app-border: rgba(148, 163, 184, 0.32);
+  --app-header: rgba(250, 250, 250, 0.9);
   /* System font stack (was next/font/google Geist) so `next build` runs
      fully offline — required for the Docker/NAS build, which cannot reach
      Google Fonts. Variable names kept so @theme below needs no change. */
@@ -24,6 +28,10 @@
   :root {
     --background: #09090b;
     --foreground: #fafafa;
+    --app-surface: #09090b;
+    --app-foreground: #fafafa;
+    --app-border: rgba(82, 82, 91, 0.65);
+    --app-header: rgba(9, 9, 11, 0.9);
   }
 }
 
