@@ -25,7 +25,6 @@ import {
   Sparkles,
   Compass,
   ExternalLink,
-  Layers,
   GraduationCap,
   Search,
   Loader2,
@@ -206,7 +205,16 @@ export default function LearningPage(): JSX.Element {
   }, [query, result, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName]);
 
   const [notebookOpen, setNotebookOpen] = useState(false);
-  const [goCardVisible, setGoCardVisible] = useState(true);
+  const [notebookInitialTab, setNotebookInitialTab] = useState<"summary" | "research_note">("summary");
+
+  useEffect(() => {
+    if (window.location.hash === "#research-notes") {
+      queueMicrotask(() => {
+        setNotebookInitialTab("research_note");
+        setNotebookOpen(true);
+      });
+    }
+  }, []);
 
   async function handleSubmit(formEvent: React.FormEvent) {
     formEvent.preventDefault();
@@ -323,16 +331,6 @@ export default function LearningPage(): JSX.Element {
             <BookOpen className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
             学习笔记
           </button>
-          {result && (
-            <button
-              type="button"
-              onClick={() => setGoCardVisible((prev) => !prev)}
-              className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-slate-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700/80 dark:hover:text-white"
-            >
-              <Layers className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
-              节点流转看板 {goCardVisible ? "已开启" : "已隐藏"}
-            </button>
-          )}
         </div>
       </div>
 
@@ -485,6 +483,15 @@ export default function LearningPage(): JSX.Element {
               )}
             </div>
           )}
+          <DownstreamGoCard
+            knowledgePoint={result.knowledge_point || query || "DHCP 四阶段报文交互"}
+            knowledgePointId="kp_dhcp_4stage"
+            sessionId={sessionId}
+            onOpenResearch={() => {
+              setNotebookInitialTab("summary");
+              setNotebookOpen(true);
+            }}
+          />
         </div>
       )}
 
@@ -503,20 +510,12 @@ export default function LearningPage(): JSX.Element {
 
       {/* Side-Drawer Notebook */}
       <StructuredNotebook
+        key={notebookInitialTab}
         open={notebookOpen}
         onDismiss={() => setNotebookOpen(false)}
         sessionId={sessionId}
+        initialTab={notebookInitialTab}
       />
-
-      {/* Downstream Flow Go Card */}
-      {result && goCardVisible && (
-        <DownstreamGoCard
-          knowledgePoint={result?.knowledge_point || query || "DHCP 四阶段报文交互"}
-          knowledgePointId="kp_dhcp_4stage"
-          sessionId={sessionId}
-          onDismiss={() => setGoCardVisible(false)}
-        />
-      )}
     </div>
   );
 }
