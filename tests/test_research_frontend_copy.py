@@ -10,6 +10,7 @@ PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
 MINDMAP = Path("frontend/components/research/ResearchMindMapPanel.tsx")
 DIFFICULTY = Path("frontend/components/research/ResearchDifficultyPanel.tsx")
 EXPERIMENT = Path("frontend/components/research/ExperimentDesignPanel.tsx")
+PAPER_DRAFT_REVIEW = Path("frontend/components/research/PaperDraftReviewPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -151,3 +152,15 @@ def test_experiment_design_discloses_model_or_rules_generation_mode() -> None:
     assert "复制代码" in experiment_source
     assert "下载草案文本" in experiment_source
     assert "不写入项目" in experiment_source
+
+
+def test_submission_profile_is_explicit_and_never_claims_venue_compliance() -> None:
+    panel_source = PAPER_DRAFT_REVIEW.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "SubmissionProfile" in api_source
+    assert "submission-profile" in api_source
+    assert "saveSubmissionProfile" in api_source
+    assert "投稿准备档案" in panel_source
+    assert "本地规则辅助，不代表满足任何会议或期刊要求" in panel_source
+    assert "我确认执行投稿前检查" in panel_source

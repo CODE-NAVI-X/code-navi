@@ -65,6 +65,8 @@ from .conversation_schemas import (
     RevisionSuggestion,
     SelectedCitation,
     SendResearchMessageRequest,
+    SubmissionProfile,
+    SubmissionProfileInput,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
@@ -80,6 +82,7 @@ from .models import (
     ResearchPaperRevisionModel,
     ResearchRevisionSuggestionModel,
     ResearchSelectedCitationModel,
+    ResearchSubmissionProfileModel,
     ResearchSubmissionReadinessModel,
 )
 from .research_artifact_llm import (
@@ -729,11 +732,69 @@ class ResearchConversationService:
         )
         return [PaperRevision.model_validate(record.revision_data) for record in records]
 
+    def save_submission_profile(
+        self,
+        conversation_id: str,
+        request: SubmissionProfileInput,
+        db: Session,
+    ) -> SubmissionProfile:
+        """Persist only user-supplied local constraints; no venue lookup is performed."""
+        self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchSubmissionProfileModel)
+            .filter(ResearchSubmissionProfileModel.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        now = datetime.now(UTC)
+        if record is None:
+            profile = SubmissionProfile(
+                profile_id=str(uuid.uuid4()),
+                conversation_id=conversation_id,
+                created_at=now,
+                updated_at=now,
+                **request.model_dump(),
+            )
+            db.add(
+                ResearchSubmissionProfileModel(
+                    id=profile.profile_id,
+                    conversation_id=conversation_id,
+                    profile_data=profile.model_dump(mode="json"),
+                    created_at=profile.created_at,
+                    updated_at=profile.updated_at,
+                )
+            )
+        else:
+            current = SubmissionProfile.model_validate(record.profile_data)
+            profile = SubmissionProfile(
+                profile_id=current.profile_id,
+                conversation_id=conversation_id,
+                created_at=current.created_at,
+                updated_at=now,
+                **request.model_dump(),
+            )
+            record.profile_data = profile.model_dump(mode="json")
+            record.updated_at = profile.updated_at
+        db.commit()
+        return profile
+
+    def get_submission_profile(
+        self, conversation_id: str, db: Session
+    ) -> SubmissionProfile | None:
+        """Restore the user's local profile without invoking a provider or network tool."""
+        self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchSubmissionProfileModel)
+            .filter(ResearchSubmissionProfileModel.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        return SubmissionProfile.model_validate(record.profile_data) if record is not None else None
+
     def create_submission_readiness(self, draft_id: str, db: Session) -> SubmissionReadinessCheck:
         """Persist an explicit, rules-only checklist without evaluating acceptance."""
         draft = self._get_paper_draft(draft_id, db)
         review = self._latest_paper_review(draft_id, db)
         revision = self._latest_paper_revision(draft_id, db)
+        submission_profile = self.get_submission_profile(draft.conversation_id, db)
         check = build_submission_readiness(
             draft,
             review,
@@ -742,6 +803,7 @@ class ResearchConversationService:
             has_experiment_evidence=bool(
                 self._experiment_evidence_bundles(draft.conversation_id, db)
             ),
+            submission_profile=submission_profile,
         )
         db.add(
             ResearchSubmissionReadinessModel(

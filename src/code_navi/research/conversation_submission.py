@@ -13,6 +13,7 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    SubmissionProfile,
     SubmissionReadinessCheck,
     SubmissionReadinessItem,
 )
@@ -51,6 +52,7 @@ def build_submission_readiness(
     *,
     has_academic_evidence: bool,
     has_experiment_evidence: bool,
+    submission_profile: SubmissionProfile | None = None,
 ) -> SubmissionReadinessCheck:
     """Check only saved local artifacts; no network/model call is made here."""
     blockers: list[SubmissionReadinessItem] = []
@@ -151,7 +153,12 @@ def build_submission_readiness(
                 "academic_metadata_abstract",
             )
         )
-    if any(pattern.search(text) for pattern in _ANONYMITY_PATTERNS):
+    identity_signal_found = any(pattern.search(text) for pattern in _ANONYMITY_PATTERNS)
+    if (
+        identity_signal_found
+        and submission_profile is not None
+        and submission_profile.anonymity_required is True
+    ):
         blockers.append(
             _item(
                 "anonymity-risk",
@@ -163,6 +170,19 @@ def build_submission_readiness(
                 "to_verify",
                 "仅为模式匹配提示，不判断目标 venue 的具体匿名规则。",
                 "revision_preview" if revision else "draft_text",
+            )
+        )
+    elif identity_signal_found and (
+        submission_profile is None or submission_profile.anonymity_required is None
+    ):
+        manual_checks.append(
+            _item(
+                "identity-information-manual-check",
+                "匿名投稿",
+                "检测到可能的身份或机构线索；是否需要匿名处理取决于你尚未确认的目标投稿方向。",
+                "to_verify",
+                "只做本地模式匹配，不读取或抓取任何 venue 的投稿规则。",
+                "manual_confirmation",
             )
         )
     if not any(marker in lowered for marker in ("伦理", "匿名", "知情同意", "数据许可")):
@@ -187,16 +207,68 @@ def build_submission_readiness(
                 "manual_confirmation",
             )
         )
-    manual_checks.append(
-        _item(
-            "venue-format-unchecked",
-            "目标 venue 格式",
-            "尚未针对指定 venue 的格式、页数、匿名与模板规则核验。",
-            "to_verify",
-            "当前项目没有 venue 专用模板或自动投稿能力。",
-            "manual_confirmation",
+    if submission_profile is None or submission_profile.target_venue is None:
+        manual_checks.append(
+            _item(
+                "target-venue-pending",
+                "目标投稿方向",
+                "目标投稿方向（venue）待用户确认；系统不会猜测会议、期刊、格式或页数要求。",
+                "to_verify",
+                "尚未保存用户明确填写的目标投稿方向。",
+                "submission_profile",
+            )
         )
-    )
+    else:
+        manual_checks.append(
+            _item(
+                "venue-format-unchecked",
+                "目标 venue 格式",
+                f"已记录目标投稿方向“{submission_profile.target_venue}”，仍需作者或导师按正式规范核验格式、页数与模板。",
+                "to_verify",
+                "本地规则不会联网抓取 venue 官网，也没有专用模板或自动投稿能力。",
+                "submission_profile",
+            )
+        )
+    if submission_profile is None or submission_profile.anonymity_required is None:
+        manual_checks.append(
+            _item(
+                "anonymity-requirement-pending",
+                "匿名要求",
+                "匿名要求待用户确认；在确认前，系统不会将身份线索判断为已满足或不需要处理。",
+                "to_verify",
+                "投稿准备档案没有记录匿名要求。",
+                "submission_profile",
+            )
+        )
+    if (
+        submission_profile is not None
+        and submission_profile.ethics_and_data_requirements is not None
+        and not any(marker in lowered for marker in ("伦理", "匿名", "知情同意", "数据许可"))
+    ):
+        manual_checks.append(
+            _item(
+                "ethics-data-requirements-pending",
+                "伦理与数据要求",
+                "已记录的伦理或数据要求尚未在当前草稿/修订预览中找到直接说明，请作者补充并核对。",
+                "to_verify",
+                "只有用户提交的文本能支持事实；系统不推断伦理审批、匿名化或数据许可已完成。",
+                "submission_profile",
+            )
+        )
+    if (
+        submission_profile is not None
+        and submission_profile.length_or_section_requirements is not None
+    ):
+        manual_checks.append(
+            _item(
+                "length-section-requirements-manual-check",
+                "篇幅与章节要求",
+                "已记录用户填写的篇幅或章节要求；请按目标 venue 的正式模板人工核对。",
+                "to_verify",
+                "Markdown/纯文本草稿不能可靠验证排版页数或 venue 专用章节规则。",
+                "submission_profile",
+            )
+        )
     fact_boundary_notes = [
         _item(
             "fact-boundary",
@@ -228,6 +300,7 @@ def build_submission_readiness(
         draft_id=draft.draft_id,
         revision_id=revision.revision_id if revision else None,
         conversation_id=draft.conversation_id,
+        submission_profile=submission_profile,
         readiness_status=readiness_status,
         blockers=blockers,
         warnings=warnings,
