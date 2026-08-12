@@ -32,7 +32,7 @@ import {
   requestCompilerGuidance,
   submitPython,
 } from "@/lib/api/compiler";
-import { getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
+import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
 
@@ -175,12 +175,10 @@ function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const payload = useFlowStore((s) => s.payload);
-  const persistedPayload = useMemo(() => getPersistedFlowPayload(), []);
+  const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(null);
+  const urlKnowledgeName = searchParams.get("knowledge_name");
   const knowledgeName =
-    payload?.masteredKnowledgePoint.name ??
-    searchParams.get("knowledge_name") ??
-    persistedPayload?.masteredKnowledgePoint.name ??
-    "DHCP 四阶段报文交互";
+    urlKnowledgeName ?? payload?.masteredKnowledgePoint.name ?? persistedPayload?.masteredKnowledgePoint.name;
   const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
 
   const [view, setView] = useState<"start" | "workspace">("start");
@@ -208,6 +206,10 @@ function PracticeContent() {
   const [records, setRecords] = useState<CompilerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [learnerId] = useState(() => getLearnerId());
+
+  useEffect(() => {
+    queueMicrotask(() => setPersistedPayload(getPersistedFlowPayload()));
+  }, []);
 
   const exercises = useMemo(
     () => [...importedExercises, ...EXERCISES],
@@ -444,11 +446,7 @@ function PracticeContent() {
     return (
       <main className="min-h-screen bg-[#f5f6ef] text-[#17201b]">
         <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
-          <PracticeTopbar
-            runtime={runtime}
-            error={error}
-            onBack={() => router.push("/learning")}
-          />
+          <PracticeTopbar runtime={runtime} error={error} />
 
           <section className="mx-auto w-full max-w-5xl py-10 sm:py-14">
             <div className="max-w-3xl">
@@ -458,9 +456,22 @@ function PracticeContent() {
               <h1 className="mt-3 text-4xl font-bold tracking-normal text-[#17201b] sm:text-5xl">
                 今天想练什么？
               </h1>
-              <p className="mt-4 text-sm leading-6 text-[#607066]">
-                当前知识点：{knowledgeName}。选择一道题，上传自己的题目，或者带上 Python 文件进入编译练习。
-              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-sm leading-6 text-[#607066]">
+                <p>{knowledgeName ? <>当前主题：<strong className="text-[#35443b]">{knowledgeName}</strong>。选择一道题继续巩固。</> : "自由练习：选择一道题、上传自己的题目，或者带上 Python 文件开始。"}</p>
+                {knowledgeName ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearFlowPayload();
+                      setPersistedPayload(null);
+                      router.replace("/practice");
+                    }}
+                    className="rounded-full border border-[#cfd8ca] bg-white px-3 py-1 text-xs font-semibold text-[#526158] transition hover:bg-[#eef2e8]"
+                  >
+                    清除当前主题 / 自由练习
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="mt-7 grid min-h-17 overflow-hidden rounded-2xl border border-[#d9dfd2] bg-white shadow-[0_16px_40px_rgba(32,44,36,0.08)] md:grid-cols-[minmax(0,1fr)_160px]">
@@ -820,22 +831,12 @@ function PracticeContent() {
 function PracticeTopbar({
   runtime,
   error,
-  onBack,
 }: {
   runtime: CompilerRuntimeStatus | null;
   error: string | null;
-  onBack: () => void;
 }) {
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-[#d9dfd2] pb-4">
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex items-center gap-2 text-xs font-semibold text-[#667168] transition hover:text-[#17201b]"
-      >
-        <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
-        返回学习
-      </button>
+    <header className="flex items-center justify-end border-b border-[#d9dfd2] pb-4">
       <RuntimeBadge runtime={runtime} error={error} />
     </header>
   );
