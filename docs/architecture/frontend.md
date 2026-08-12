@@ -31,7 +31,7 @@ Evidence 卡片逐条显示来源平台、标题、年份、证据级别、摘�
 
 1. 学习 `session_id`、科研 `conversation_id` 和练习匿名 `learner_id` 分别保存在 `localStorage`，用于同一浏览器内恢复；旧科研 `session_id` 会被清除。
 2. 不在 `localStorage` 保存凭据、Provider 密钥、原始练习代码、完整研究数据或工具授权。
-3. `frontend/lib/store/flow-store.ts` 的 `FlowPayload` 只服务 Learning → Practice 当前任务；跳转 URL 携带知识点名称、标识和学习会话，`localStorage` 保存同一份轻量数据用于刷新回退，不保存源码、凭据或工具权限。
+3. `frontend/lib/store/flow-store.ts` 的 `FlowPayload` 只服务 Learning → Practice 当前任务；跳转 URL 携带知识点名称、标识和学习会话，`localStorage` 保存同一份轻量数据用于刷新回退，不保存源码、凭据或工具权限。Practice 提供“清除当前主题 / 自由练习”动作，同时清除内存和浏览器持久化任务；没有 URL 或持久化任务时显示自由练习，不虚构当前主题。
 4. Learning → Research 使用服务端 `context-transfer.v1`；浏览器从 URL 读取上下文 ID，并携带当前学习 `session_id` 恢复、编辑、取消或确认。确认请求直接提交页面最终数据，返回的 `conversation_id` 写入现有科研会话恢复键；Research 页面只根据恢复响应中的 `context_provenance` 显示来源主题、摘要和保留内容，不从 Learning 页面状态重建背景。
 
 顶层学习、练习和科研路由共用 `AppShell`，在桌面与窄屏持续显示三个独立入口和当前活动模块。各模块内部导航继续负责模块内步骤，不替代顶层模块位置感。

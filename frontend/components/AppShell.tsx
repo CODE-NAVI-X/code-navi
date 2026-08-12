@@ -16,15 +16,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[var(--app-surface)] text-[var(--app-foreground)]">
       <header className="sticky top-0 z-[70] border-b border-[var(--app-border)] bg-[var(--app-header)] backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-4 px-4 sm:px-6">
+        <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-2 px-2 sm:gap-4 sm:px-6">
           <Link href="/learning" className="flex min-w-0 items-center gap-2.5" aria-label="Code Navi 首页">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 font-mono text-sm font-bold text-white dark:bg-white dark:text-zinc-950">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-950 font-mono text-xs font-bold text-white sm:h-9 sm:w-9 sm:rounded-xl sm:text-sm dark:bg-white dark:text-zinc-950">
               CN
             </span>
-            <span className="truncate text-sm font-bold tracking-tight">Code Navi</span>
+            <span className="hidden truncate text-sm font-bold tracking-tight min-[430px]:inline">Code Navi</span>
           </Link>
 
-          <nav aria-label="主要模块" className="grid grid-cols-3 rounded-xl border border-[var(--app-border)] bg-white/70 p-1 shadow-sm dark:bg-zinc-900/70">
+          <nav aria-label="主要模块" className="grid min-w-0 grid-cols-3 rounded-xl border border-[var(--app-border)] bg-white/70 p-0.5 shadow-sm sm:p-1 dark:bg-zinc-900/70">
             {modules.map(({ href, label, match, icon: Icon }) => {
               const active = pathname.includes(`/${match}`);
               return (
@@ -32,7 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   key={href}
                   href={href}
                   aria-current={active ? "page" : undefined}
-                  className={`inline-flex min-w-16 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition sm:min-w-24 ${
+                  className={`inline-flex min-w-0 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold whitespace-nowrap transition min-[360px]:px-2.5 sm:min-w-24 sm:gap-1.5 sm:px-3 ${
                     active
                       ? "bg-slate-950 text-white shadow-sm dark:bg-white dark:text-zinc-950"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"

@@ -23,7 +23,6 @@ import {
 import {
   BookOpen,
   Sparkles,
-  Compass,
   ExternalLink,
   GraduationCap,
   Search,
@@ -313,25 +312,16 @@ export default function LearningPage(): JSX.Element {
   const hasPptContent = slides.length > 0 || pptGenerating;
 
   return (
-    <div className="mx-auto max-w-[1920px] px-4 py-8 sm:py-12">
-      {/* Top Floating Control Bar - Swiss Light Gray Minimalist */}
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-slate-100/70 p-3 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-900/70">
-        <div className="flex items-center gap-2">
-          <Compass className="h-4 w-4 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
-          <span className="text-xs font-medium text-slate-700 dark:text-zinc-300">
-            知识探索与学术辅助工具栏
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setNotebookOpen(true)}
-            className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-slate-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700/80 dark:hover:text-white"
-          >
-            <BookOpen className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
-            学习笔记
-          </button>
-        </div>
+    <div className="mx-auto max-w-[1920px] px-4 py-5 sm:py-8">
+      <div className="mb-4 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setNotebookOpen(true)}
+          className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-slate-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700/80 dark:hover:text-white"
+        >
+          <BookOpen className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
+          学习笔记
+        </button>
       </div>
 
       {/* Header */}
@@ -348,7 +338,7 @@ export default function LearningPage(): JSX.Element {
       </header>
 
       {/* Unified search form */}
-      <form onSubmit={handleSubmit} className="mb-8 flex gap-2.5">
+      <form onSubmit={handleSubmit} className="mb-8 flex flex-col gap-2.5 sm:flex-row">
         <div className="relative flex-1">
           <input
             type="text"
@@ -363,7 +353,7 @@ export default function LearningPage(): JSX.Element {
         <button
           type="submit"
           disabled={loading || !query.trim()}
-          className="flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-6 py-3.5 text-sm font-medium text-white shadow-2xs transition hover:bg-slate-800 focus:ring-2 focus:ring-slate-900/20 focus:outline-none active:scale-98 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-900 px-6 py-3.5 text-sm font-medium text-white shadow-2xs transition hover:bg-slate-800 focus:ring-2 focus:ring-slate-900/20 focus:outline-none active:scale-98 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
         >
           {loading ? (
             <>

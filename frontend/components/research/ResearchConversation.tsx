@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowLeft,
   Bot,
   BrainCircuit,
   ChevronDown,
@@ -17,7 +16,6 @@ import {
   Sparkles,
   UserRound,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -200,7 +198,6 @@ function PanelSection({
 }
 
 export function ResearchConversation() {
-  const router = useRouter();
   const [searchPanelMounted, setSearchPanelMounted] = useState(false);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
@@ -344,18 +341,10 @@ export function ResearchConversation() {
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <div className="mx-auto w-full max-w-[1380px] overflow-x-hidden px-3 py-3 sm:px-5 sm:py-5">
-        <header className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm backdrop-blur sm:px-4 dark:border-zinc-800 dark:bg-zinc-900/90">
+      <div className="mx-auto w-full max-w-[1380px] overflow-x-hidden px-3 py-2 sm:px-5 sm:py-3">
+        <header className="mb-2 flex min-w-0 items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 shadow-sm backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/90">
           <div className="flex min-w-0 items-center gap-3">
-            <button
-              type="button"
-              onClick={() => router.push("/learning")}
-              className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              aria-label="返回知识点学习"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
               <MessageSquareText className="h-4 w-4" />
             </div>
             <div className="min-w-0">
@@ -375,7 +364,7 @@ export function ResearchConversation() {
               type="button"
               onClick={() => void startNewConversation()}
               disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
             >
               <Plus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">新建会话</span>
             </button>
