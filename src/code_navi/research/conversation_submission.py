@@ -155,9 +155,9 @@ def build_submission_readiness(
         )
     identity_signal_found = any(pattern.search(text) for pattern in _ANONYMITY_PATTERNS)
     if (
-        submission_profile is not None
-        and submission_profile.anonymity_required
-        and identity_signal_found
+        identity_signal_found
+        and submission_profile is not None
+        and submission_profile.anonymity_required is True
     ):
         blockers.append(
             _item(
@@ -172,7 +172,9 @@ def build_submission_readiness(
                 "revision_preview" if revision else "draft_text",
             )
         )
-    elif identity_signal_found:
+    elif identity_signal_found and (
+        submission_profile is None or submission_profile.anonymity_required is None
+    ):
         manual_checks.append(
             _item(
                 "identity-information-manual-check",

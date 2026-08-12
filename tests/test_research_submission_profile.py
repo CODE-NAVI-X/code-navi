@@ -151,3 +151,38 @@ def test_anonymous_profile_surfaces_identity_and_ethics_gaps(client: TestClient)
     assert body["submission_profile"]["target_venue"] == "教育技术方向会议"
     assert any(item["id"] == "anonymity-risk" for item in body["blockers"])
     assert any(item["id"] == "ethics-data-requirements-pending" for item in body["manual_checks"])
+
+
+def test_explicit_non_anonymous_profile_does_not_report_anonymity_as_unconfirmed(
+    client: TestClient,
+) -> None:
+    conversation_id = _conversation(client)
+    saved = client.put(
+        f"/api/v1/research/conversations/{conversation_id}/submission-profile",
+        json={
+            "target_venue": "课程项目报告",
+            "anonymity_required": False,
+        },
+    )
+    assert saved.status_code == 200
+    draft = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-drafts",
+        json={
+            "title": "课堂研究",
+            "format": "markdown",
+            "content": "# 课堂研究\n\n姓名：陈同学\n\n## 引言\n待补充",
+        },
+    ).json()
+
+    readiness = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+
+    assert readiness.status_code == 201
+    body = readiness.json()
+    assert not any(item["id"] == "anonymity-risk" for item in body["blockers"])
+    assert not any(
+        item["id"] == "identity-information-manual-check"
+        for item in body["manual_checks"]
+    )
