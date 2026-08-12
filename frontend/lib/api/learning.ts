@@ -54,8 +54,8 @@ export function getLearningSessionId(): string {
  * Mint a fresh opaque session id.
  *
  * ``crypto.randomUUID`` is only defined in secure contexts (HTTPS or
- * localhost). On plain HTTP — e.g. this LAN deployment
- * ``http://192.168.0.32:25000`` — it is undefined and throws at runtime.
+ * localhost). On plain HTTP through a LAN hostname or address, it is undefined
+ * and throws at runtime.
  * ``crypto.getRandomValues`` is available in every context, so use it
  * instead, and fall back to ``Math.random`` only as a last resort.
  */
