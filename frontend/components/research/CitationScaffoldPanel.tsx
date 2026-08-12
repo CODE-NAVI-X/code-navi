@@ -3,6 +3,7 @@
 import {
   CheckCircle2,
   ClipboardCheck,
+  Copy,
   ExternalLink,
   Loader2,
   Quote,
@@ -13,16 +14,16 @@ import { useEffect, useState } from "react";
 import {
   createCitationQualityCheck,
   createSelectedCitation,
+  getReferenceDraftPackage,
   listCitationCandidates,
   listCitationQualityChecks,
-  listReferenceEntryDrafts,
   listSelectedCitations,
   updateSelectedCitation,
   type CitationCandidate,
   type CitationQualityCheck,
   type CitationQualityIssue,
   type CitationTargetDocument,
-  type ReferenceEntryDraft,
+  type ReferenceDraftPackage,
   type SelectedCitation,
 } from "@/lib/api/research";
 import { ClassificationBadge } from "./ClassificationBadge";
@@ -32,7 +33,7 @@ const sectionOptions = ["引言", "相关工作", "方法", "实验", "讨论", 
 export function CitationScaffoldPanel({ conversationId }: { conversationId: string }) {
   const [candidates, setCandidates] = useState<CitationCandidate[]>([]);
   const [selected, setSelected] = useState<SelectedCitation[]>([]);
-  const [references, setReferences] = useState<ReferenceEntryDraft[]>([]);
+  const [referencePackage, setReferencePackage] = useState<ReferenceDraftPackage | null>(null);
   const [qualityChecks, setQualityChecks] = useState<CitationQualityCheck[]>([]);
   const [qualityStale, setQualityStale] = useState(false);
   const [chosenId, setChosenId] = useState<string | null>(null);
@@ -43,13 +44,14 @@ export function CitationScaffoldPanel({ conversationId }: { conversationId: stri
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function restore() {
     const restored = await restoreCitationWorkspace(conversationId);
     setCandidates(restored.candidates);
     setSelected(restored.selected);
-    setReferences(restored.references);
+    setReferencePackage(restored.referencePackage);
     setQualityChecks(restored.qualityChecks);
     setQualityStale(citationCheckIsStale(restored.qualityChecks[0], restored.selected));
   }
@@ -61,7 +63,7 @@ export function CitationScaffoldPanel({ conversationId }: { conversationId: stri
         if (!active) return;
         setCandidates(restored.candidates);
         setSelected(restored.selected);
-        setReferences(restored.references);
+        setReferencePackage(restored.referencePackage);
         setQualityChecks(restored.qualityChecks);
         setQualityStale(citationCheckIsStale(restored.qualityChecks[0], restored.selected));
       })
@@ -132,6 +134,24 @@ export function CitationScaffoldPanel({ conversationId }: { conversationId: stri
     }
   }
 
+  async function copyReferenceDraft() {
+    if (!referencePackage?.copy_text) {
+      setError("当前没有可复制的参考文献草案。请先主动选择来源。");
+      return;
+    }
+    setError(null);
+    try {
+      if (!navigator.clipboard) {
+        throw new Error("当前浏览器不支持剪贴板 API，请手动选择草案文本复制。");
+      }
+      await navigator.clipboard.writeText(referencePackage.copy_text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "复制参考文献草案失败。");
+    }
+  }
+
   const activeSelected = selected.filter((item) => item.status !== "skipped");
   const latestCheck = qualityChecks[0] ?? null;
 
@@ -182,19 +202,25 @@ export function CitationScaffoldPanel({ conversationId }: { conversationId: stri
         onRun={() => void runQualityCheck()}
       />
 
-      {references.length > 0 && <ReferenceDraftList references={references} />}
+      {referencePackage && (
+        <ReferenceDraftList
+          referencePackage={referencePackage}
+          copied={copied}
+          onCopy={() => void copyReferenceDraft()}
+        />
+      )}
     </section>
   );
 }
 
 async function restoreCitationWorkspace(conversationId: string) {
-  const [candidates, selected, references, qualityChecks] = await Promise.all([
+  const [candidates, selected, referencePackage, qualityChecks] = await Promise.all([
     listCitationCandidates(conversationId),
     listSelectedCitations(conversationId),
-    listReferenceEntryDrafts(conversationId),
+    getReferenceDraftPackage(conversationId),
     listCitationQualityChecks(conversationId),
   ]);
-  return { candidates, selected, references, qualityChecks };
+  return { candidates, selected, referencePackage, qualityChecks };
 }
 
 function PanelIntroduction() {
@@ -550,22 +576,55 @@ function IssueList({ title, issues }: { title: string; issues: CitationQualityIs
   );
 }
 
-function ReferenceDraftList({ references }: { references: ReferenceEntryDraft[] }) {
+function ReferenceDraftList({
+  referencePackage,
+  copied,
+  onCopy,
+}: {
+  referencePackage: ReferenceDraftPackage;
+  copied: boolean;
+  onCopy: () => void;
+}) {
   return (
     <details className="mt-3" open>
-      <summary className="cursor-pointer font-semibold">
-        参考文献雏形（{references.length}）
-      </summary>
+      <summary className="cursor-pointer font-semibold">可核验参考文献草案（{referencePackage.entries.length}）</summary>
+      <p className="mt-2 text-[10px] leading-5 text-amber-700 dark:text-amber-300">
+        {referencePackage.boundary_note}
+      </p>
+      {referencePackage.empty_state_message && (
+        <p className="mt-2 rounded bg-white/80 p-2 text-slate-600 dark:bg-zinc-950/70 dark:text-zinc-300">
+          {referencePackage.empty_state_message}
+        </p>
+      )}
+      {referencePackage.entries.length > 0 && (
+        <button
+          type="button"
+          onClick={onCopy}
+          className="mt-2 inline-flex items-center gap-1 rounded border border-cyan-300 bg-white px-2 py-1 font-medium text-cyan-800 hover:bg-cyan-50 dark:border-cyan-800 dark:bg-zinc-950 dark:text-cyan-200"
+        >
+          {copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? "已复制" : "复制文本草案"}
+        </button>
+      )}
       <ul className="mt-2 space-y-2">
-        {references.map((reference) => (
+        {referencePackage.entries.map((reference) => (
           <li
-            key={reference.reference_id}
+            key={reference.selected_citation_id}
             className="rounded bg-white/80 p-2 text-[11px] leading-5 dark:bg-zinc-950/70"
           >
-            <code className="text-[10px] text-slate-500">{reference.citation_key}</code>
+            <p className="text-[10px] text-amber-700 dark:text-amber-300">
+              {reference.format_notice}
+            </p>
             <p>{reference.display_text}</p>
+            <a
+              href={reference.source_url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-flex items-center gap-1 text-cyan-700 underline dark:text-cyan-300"
+            >
+              查看原始来源 <ExternalLink className="h-3 w-3" />
+            </a>
             <p className="mt-1 text-[10px] text-slate-500">
-              信息范围：{reference.source_scope} ·{" "}
               <ClassificationBadge classification={reference.classification} />
               {reference.to_verify_items.length
                 ? " · 待核对：" + reference.to_verify_items.join("；")
@@ -574,6 +633,18 @@ function ReferenceDraftList({ references }: { references: ReferenceEntryDraft[] 
           </li>
         ))}
       </ul>
+      {referencePackage.verification_items.length > 0 && (
+        <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 dark:border-amber-900 dark:bg-amber-950/20">
+          <p className="font-semibold text-amber-800 dark:text-amber-200">作者 / 导师集中核验清单</p>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-amber-800 dark:text-amber-200">
+            {referencePackage.verification_items.map((item) => (
+              <li key={item.selected_citation_id}>
+                {item.missing_fields.join("；")} · <ClassificationBadge classification={item.classification} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </details>
   );
 }

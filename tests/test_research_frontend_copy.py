@@ -169,3 +169,16 @@ def test_citation_panel_requires_an_explicit_offline_quality_check() -> None:
     assert "不代表引用正确或论文可以投稿" in citation_source
     assert "/citation-quality-checks" in api_source
     assert "CitationQualityCheck" in api_source
+
+
+def test_citation_panel_exposes_a_traceable_copyable_reference_draft() -> None:
+    citation_source = CITATION.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "可核验参考文献草案" in citation_source
+    assert "复制文本草案" in citation_source
+    assert "查看原始来源" in citation_source
+    assert "作者 / 导师集中核验清单" in citation_source
+    assert "navigator.clipboard.writeText(referencePackage.copy_text)" in citation_source
+    assert "/reference-draft-package" in api_source
+    assert "ReferenceDraftPackage" in api_source

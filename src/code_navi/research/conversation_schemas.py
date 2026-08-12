@@ -952,6 +952,49 @@ class CitationQualityCheck(BaseModel):
     source_scope: Literal["local_selected_evidence_only"] = "local_selected_evidence_only"
 
 
+class ReferenceDraftItem(BaseModel):
+    """One traceable, non-publication-style reference line."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    selected_citation_id: str = Field(min_length=1, max_length=100)
+    source_url: str = Field(min_length=1, max_length=2000)
+    citation_placeholder: str = Field(min_length=1, max_length=1000)
+    display_text: str = Field(min_length=1, max_length=3000)
+    classification: AnalysisClassification
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
+    format_notice: str = Field(min_length=1, max_length=300)
+
+
+class ReferenceDraftVerificationItem(BaseModel):
+    """Missing saved metadata that an author or advisor must verify."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    selected_citation_id: str = Field(min_length=1, max_length=100)
+    source_url: str = Field(min_length=1, max_length=2000)
+    missing_fields: list[str] = Field(min_length=1, max_length=12)
+    classification: Literal["to_verify"] = "to_verify"
+    basis: str = Field(min_length=1, max_length=1000)
+
+
+class ReferenceDraftPackage(BaseModel):
+    """A stable copy surface derived only from active local selections."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["reference-draft-package.v1"] = "reference-draft-package.v1"
+    session_id: str = Field(min_length=1, max_length=100)
+    entries: list[ReferenceDraftItem] = Field(default_factory=list, max_length=1000)
+    copy_text: str = Field(default="", max_length=500_000)
+    verification_items: list[ReferenceDraftVerificationItem] = Field(
+        default_factory=list, max_length=1000
+    )
+    empty_state_message: str | None = Field(default=None, max_length=1000)
+    boundary_note: str = Field(min_length=1, max_length=1500)
+    source_scope: Literal["local_selected_evidence_only"] = "local_selected_evidence_only"
+
+
 SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
 SubmissionSourceScope = Literal[
     "draft_text",
