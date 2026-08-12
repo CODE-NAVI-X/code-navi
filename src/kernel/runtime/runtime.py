@@ -130,6 +130,7 @@ class AgentRuntime:
                 system_metadata,
                 pinned=True,
             ),
+            *request.conversation_history,
             Message(
                 "user",
                 (ContentBlock("text", {"text": request.user_input}),),

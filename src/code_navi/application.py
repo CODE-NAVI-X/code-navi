@@ -12,6 +12,12 @@ from code_navi.context import (
     ContextSlice,
     ConversationTurn,
 )
+from code_navi.conversations import (
+    ContextAssembler,
+    RecentTurnsContextAssembler,
+    RecentTurnsContextInput,
+)
+from kernel.core import Message
 from kernel.runtime import AgentRuntime, RuntimeRequest, RuntimeResult
 
 
@@ -38,10 +44,15 @@ class QuestionService:
         *,
         events_dir: str | Path,
         session_id: str | None = None,
+        context_assembler: ContextAssembler[
+            RecentTurnsContextInput, tuple[Message, ...]
+        ]
+        | None = None,
     ) -> None:
         self.context_builder = context_builder
         self.session_id = session_id or f"cli-{uuid4()}"
         self.runtime = AgentRuntime(provider, session_dir=events_dir)
+        self.context_assembler = context_assembler or RecentTurnsContextAssembler()
 
     def ask(
         self,
@@ -50,6 +61,7 @@ class QuestionService:
         attachments: tuple[str, ...] = (),
         last_answer: str | None = None,
         branch_history: tuple[ConversationTurn, ...] = (),
+        conversation_history: tuple[Message, ...] = (),
     ) -> QuestionResult:
         """Answer one question without mutating project files or task state."""
         prepared = self.context_builder.prepare(
@@ -67,9 +79,14 @@ class QuestionService:
                     "interface": "cli",
                     "context_sources": list(prepared.context.sources),
                 },
+                conversation_history=self.context_assembler.assemble(
+                    RecentTurnsContextInput(
+                        conversation_history,
+                        self.context_builder.max_context_chars,
+                    )
+                ),
             ),
         )
         return QuestionResult(prepared.question, prepared.context, result)
-
 
 __all__ = ["QuestionResult", "QuestionService"]

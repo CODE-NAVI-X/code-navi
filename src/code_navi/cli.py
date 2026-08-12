@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import TextIO
 
 from code_navi.application import QuestionResult, QuestionService
+from code_navi.cli_conversation import (
+    CliConversationNotFoundError,
+    CliConversationScopeError,
+    CliConversationStore,
+    ShellConversationService,
+)
 from code_navi.context import (
     ContextBuilder,
     ContextError,
@@ -19,6 +25,7 @@ from code_navi.context import (
     ConversationTurn,
     discover_project_root,
 )
+from code_navi.db import SessionLocal
 from code_navi.provider_config import LocalProviderConfig, write_local_provider_config
 from code_navi.providers import (
     ProviderConfigurationError,
@@ -48,7 +55,7 @@ class InteractiveShell:
 
     def __init__(
         self,
-        service: QuestionService,
+        service: ShellConversationService,
         *,
         stdin: TextIO,
         stdout: TextIO,
@@ -58,17 +65,23 @@ class InteractiveShell:
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
-        self.last_answer: str | None = None
+        self.last_answer = service.last_answer
         self.last_context: ContextSlice | None = None
         self.branch: BranchState | None = None
 
     @property
     def project_name(self) -> str:
-        return self.service.context_builder.project_root.name
+        return self.service.question_service.context_builder.project_root.name
 
     def run(self) -> int:
         """Read commands until EOF or an explicit exit command."""
-        self._write("Code Navi CLI。输入问题，或使用 /help 查看交互命令。\n")
+        project_root = self.service.question_service.context_builder.project_root
+        self._write(
+            "Code Navi CLI。输入问题，或使用 /help 查看交互命令。\n"
+            f"conversation_id: {self.service.conversation_id}\n"
+            "恢复命令：code-navi shell "
+            f'--resume {self.service.conversation_id} --project "{project_root}"\n'
+        )
         while True:
             self._write(self._prompt(), end="")
             self.stdout.flush()
@@ -102,6 +115,7 @@ class InteractiveShell:
                 self._error("当前不在问题分支中。")
             else:
                 self.branch = None
+                self.last_answer = self.service.last_answer
                 self._write("已返回主任务。\n")
             return True
         if command == "/branch":
@@ -113,8 +127,7 @@ class InteractiveShell:
                 self._error("用法：/branch <需要连续追问的问题>")
                 return True
             self.branch = BranchState(self._branch_title(question))
-            seeded_question = f"@last {question}" if self.last_answer else question
-            self._answer(seeded_question, persist_in_branch=True)
+            self._answer(question, persist_in_branch=True)
             return True
         if command.startswith("/"):
             self._error(f"未知命令：{command}。使用 /help 查看帮助。")
@@ -129,23 +142,31 @@ class InteractiveShell:
 
     def _answer(self, question: str, *, persist_in_branch: bool) -> None:
         history = () if self.branch is None else tuple(self.branch.turns)
-        result = self.service.ask(
-            question,
-            last_answer=self.last_answer,
-            branch_history=history,
-        )
+        if self.branch is None:
+            result = self.service.ask_main(question)
+        else:
+            result = self.service.ask_branch(
+                question,
+                last_answer=self.last_answer,
+                branch_history=history,
+            )
         self.last_context = result.context
         self._write(f"上下文：{result.context.receipt}\n\n")
         if result.output_text:
             self._write(result.output_text.rstrip() + "\n\n")
         else:
             self._error(_runtime_error_message(result))
-        self.last_answer = result.output_text or self.last_answer
+        self.last_answer = (
+            self.service.last_answer
+            if self.branch is None
+            else result.output_text or self.last_answer
+        )
         if persist_in_branch and self.branch is not None and result.output_text:
             self.branch.turns.append(ConversationTurn(result.question, result.output_text))
 
     def _show_context(self) -> None:
-        context = self.last_context or self.service.context_builder.preview()
+        builder = self.service.question_service.context_builder
+        context = self.last_context or builder.preview()
         self._write(f"项目：{context.project_name}\n")
         self._write(f"根目录：{context.project_root}\n")
         if context.task.title:
@@ -163,7 +184,7 @@ class InteractiveShell:
             """
 直接输入问题       使用当前项目上下文回答
 ? <问题>           一次性快速提问，回答后保持在主任务
-/branch <问题>     打开可连续追问的临时问题分支
+/branch <问题>     从当前主对话打开可连续追问的临时问题分支
 /back              关闭问题分支并返回主任务
 /context           查看当前自动携带的上下文
 /help              显示帮助
@@ -213,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     shell = subparsers.add_parser("shell", help="start the interactive question shell")
     _add_common_options(shell)
+    shell.add_argument(
+        "--resume",
+        metavar="CONVERSATION_ID",
+        help="explicitly resume one CLI conversation in the current project",
+    )
 
     configure = subparsers.add_parser(
         "configure-provider",
@@ -268,8 +294,23 @@ def main(argv: list[str] | None = None) -> int:
             return _configure_provider(args)
         service = _create_service(args)
         if args.command == "shell":
+            store = CliConversationStore(SessionLocal)
+            try:
+                state = (
+                    store.load(args.resume, service.context_builder.project_root)
+                    if args.resume
+                    else store.create(service.context_builder.project_root)
+                )
+            except CliConversationNotFoundError as exc:
+                raise ContextError(
+                    f"CLI conversation not found: {exc.args[0]}"
+                ) from exc
+            except CliConversationScopeError as exc:
+                raise ContextError(
+                    f"CLI conversation does not belong to this project: {exc.args[0]}"
+                ) from exc
             return InteractiveShell(
-                service,
+                ShellConversationService(service, store, state),
                 stdin=sys.stdin,
                 stdout=sys.stdout,
                 stderr=sys.stderr,

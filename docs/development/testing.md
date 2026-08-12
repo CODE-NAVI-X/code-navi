@@ -12,13 +12,13 @@
 
 | 改动 | 优先测试 |
 | --- | --- |
-| Kernel Runtime、Event、Provider 或权限 | 对应 `tests/kernel/`，再加一个应用接线测试 |
-| CLI、上下文或公共 Provider 选择 | `tests/test_cli.py`、`test_context.py`、`test_providers.py` |
+| Kernel Runtime、Event、Provider 或权限 | 对应 `tests/kernel/`，显式历史改动还需证明消息顺序和 `session_id` 不会隐式恢复，再加一个应用接线测试 |
+| CLI、上下文或公共 Provider 选择 | `tests/test_cli.py`、`test_context.py`、`test_providers.py`；shell 恢复还需覆盖项目隔离、业务 `conversation_id` 与 Runtime `session_id` 分离、branch 非持久化和无状态 `ask` |
 | 知识点学习 | `tests/test_learning_module.py` 与相关 server/provider 测试 |
 | 跨模块上下文 | `tests/test_context_transfers.py`、`tests/test_migrations.py`，验证最终数据确认、每轮澄清接收背景、来源/画像/计划恢复、重复确认与确认页构建 |
 | Python 执行、判题与学习记录 | `tests/online_compiler/`；涉及真实 Piston 时再追加显式隔离环境测试 |
 | 科研兼容规则、API 或措辞 | `tests/test_research_api.py`、`test_research_llm.py` |
-| 动态科研对话、规则研究计划与 Provider | `tests/test_research_conversation.py`、`test_research_frontend_copy.py`、`test_research_deepseek.py`、`test_provider_configuration.py` |
+| 动态科研对话、规则研究计划与 Provider | `tests/test_research_conversation.py`、`test_research_frontend_copy.py`、`test_research_deepseek.py`、`test_provider_configuration.py`；持久化上下文还需覆盖预算、摘要边界、跨 run 复用和失败保留 |
 | 学术检索与对话检索 | `tests/test_research_tools.py`、`test_academic_evidence.py`、`test_conversation_search.py` |
 | ORM 或 Alembic | `tests/test_migrations.py` 和受影响模块测试 |
 | FastAPI 边界 | `tests/test_server_gateway.py` 与目标 router 测试 |
