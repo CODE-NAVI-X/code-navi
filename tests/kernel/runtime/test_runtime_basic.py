@@ -50,6 +50,25 @@ def test_runtime_runs_one_agent_and_exposes_host_friendly_result() -> None:
     assert sent[1]["metadata"] == {"source": "ui"}
 
 
+def test_runtime_sends_explicit_history_between_system_and_current_user() -> None:
+    provider = MockProvider([ProviderResult(text_message("Continued."))])
+    history = (
+        Message("user", (ContentBlock("text", {"text": "Earlier question"}),)),
+        Message("assistant", (ContentBlock("text", {"text": "Earlier answer"}),)),
+    )
+
+    AgentRuntime(provider).run(
+        AgentSpec("helper", "Helps.", "Help."),
+        RuntimeRequest("Follow up", conversation_history=history),
+    )
+
+    sent = provider.calls[0]["messages"]
+    assert [message["role"] for message in sent] == ["system", "user", "assistant", "user"]
+    assert sent[1:3] == [message.to_json() for message in history]
+    assert sent[0]["pinned"] is True
+    assert sent[-1]["pinned"] is True
+
+
 def test_runtime_config_priority_is_explicit_then_agent_then_runtime() -> None:
     agent_default = AgentSpec("helper", "Helps.", "Help.", default_config=KernelConfig(max_steps=0))
     runtime = AgentRuntime(

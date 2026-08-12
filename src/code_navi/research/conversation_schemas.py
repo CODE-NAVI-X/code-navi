@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -160,6 +160,20 @@ class ResearchConversationMessage(BaseModel):
         ]
         | None
     ) = None
+
+
+class ResearchContextSummary(BaseModel):
+    """Persisted coverage boundary for reusable cross-run conversation compression."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["research-context-summary.v1"] = "research-context-summary.v1"
+    summary: str = Field(min_length=1, max_length=8000)
+    through_message_id: str = Field(min_length=1)
+    source_message_count: int = Field(ge=1)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    generation_mode: Literal["rules", "agent"]
+    run_id: str | None = None
 
 
 class ResearchReadiness(BaseModel):

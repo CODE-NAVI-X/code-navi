@@ -14,6 +14,7 @@ from alembic.autogenerate import compare_metadata  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from alembic.migration import MigrationContext  # noqa: E402
 
+from code_navi import cli_conversation as cli_conversation_models  # noqa: E402,F401
 from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
@@ -227,3 +228,92 @@ def test_repair_migration_downgrade_preserves_the_revision_0005_column(
 
     assert "context_provenance" in columns
     command.downgrade(config, "base")
+
+
+def test_context_summary_migration_preserves_existing_conversations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'context-summary-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "research_context_provenance_repair_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO research_conversations "
+                "(id, profile_data, messages_data, context_provenance, created_at, updated_at) "
+                "VALUES ('before-summary', '{}', '[]', NULL, CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            row = connection.execute(
+                text(
+                    "SELECT id, context_summary_data FROM research_conversations "
+                    "WHERE id = 'before-summary'"
+                )
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert row == ("before-summary", None)
+
+
+def test_cli_conversation_migration_upgrades_the_previous_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'cli-conversation-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "research_context_summary_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO research_conversations "
+                "(id, profile_data, messages_data, context_provenance, "
+                "context_summary_data, created_at, updated_at) VALUES "
+                "('before-cli', '{}', '[]', NULL, NULL, CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'table'")
+                )
+            }
+            preserved = connection.execute(
+                text("SELECT id FROM research_conversations WHERE id = 'before-cli'")
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert "cli_conversations" in tables
+    assert preserved == "before-cli"

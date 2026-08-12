@@ -36,6 +36,7 @@ class ResearchConversationModel(Base):
     profile_data = Column(JSON, nullable=False, default=dict)
     messages_data = Column(JSON, nullable=False, default=list)
     context_provenance = Column(JSON, nullable=True)
+    context_summary_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at = Column(
         DateTime,

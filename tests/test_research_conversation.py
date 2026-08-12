@@ -17,15 +17,30 @@ from code_navi.context_transfer.schemas import (  # noqa: E402
     ContextSourceObject,
     SelectedContextContent,
 )
-from code_navi.db import engine  # noqa: E402
+from code_navi.db import SessionLocal, engine  # noqa: E402
 from code_navi.learning.models import Base  # noqa: E402
 from code_navi.research.conversation_agent import (  # noqa: E402
     ConversationDecisionOutcome,
     ResearchConversationDecision,
     RuntimeConversationDecisionGenerator,
+    build_research_conversation_input,
     research_conversation_agent,
 )
-from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa: E402
+from code_navi.research.conversation_context import (  # noqa: E402
+    ConversationCompactor,
+    ResearchContextAssembler,
+    ResearchContextInput,
+)
+from code_navi.research.conversation_schemas import (  # noqa: E402
+    CreateResearchConversationRequest,
+    ResearchContextSummary,
+    ResearchConversationMessage,
+    ResearchProfile,
+    ResearchProfilePatch,
+    SendResearchMessageRequest,
+)
+from code_navi.research.conversation_service import ResearchConversationService  # noqa: E402
+from code_navi.research.models import ResearchConversationModel  # noqa: E402
 from code_navi.research.research_artifact_llm import ArtifactLlmOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.research.skill_runtime import (  # noqa: E402
@@ -777,7 +792,7 @@ def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> Non
 
     outcome = generator.generate(
         profile={},
-        messages=[],
+        conversation_history=(),
         user_message="我想研究 RAG 评测",
         conversation_id="conversation-runtime-test",
         confirmed_context=confirmed_context,
@@ -792,6 +807,7 @@ def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> Non
     system_message = provider.calls[0]["messages"][0]
     assert system_message["metadata"]["agent_name"] == "research_conversation_agent"
     runtime_payload = json.loads(provider.calls[0]["messages"][1]["content"][0]["text"])
+    assert "recent_messages" not in runtime_payload
     assert runtime_payload["confirmed_learning_context"]["topic"] == "RAG 评测"
     assert runtime_payload["confirmed_learning_context"]["selected_content"] == [
         {
@@ -800,6 +816,298 @@ def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> Non
             "content": "检索质量影响证据覆盖。",
         }
     ]
+
+
+def test_rebuilt_service_restores_explicit_history_and_keeps_conversations_isolated() -> None:
+    decisions = [
+        _decision(reply="第一轮回复", profile_patch=ResearchProfilePatch(topic="会话甲")),
+        _decision(reply="第二轮回复"),
+        _decision(reply="独立回复", profile_patch=ResearchProfilePatch(topic="会话乙")),
+    ]
+    provider = MockProvider(
+        [
+            ProviderResult(
+                Message("assistant", (ContentBlock("text", {"text": item.model_dump_json()}),))
+            )
+            for item in decisions
+        ]
+    )
+    generator = RuntimeConversationDecisionGenerator(
+        provider_factory=lambda: provider,
+        timeout_seconds=1,
+    )
+    with SessionLocal() as db:
+        first_service = ResearchConversationService(decision_generator=generator)
+        first = first_service.create(
+            CreateResearchConversationRequest(initial_message="甲的第一轮"), db
+        )
+        rebuilt_service = ResearchConversationService(decision_generator=generator)
+        rebuilt_service.send_message(
+            first.conversation_id,
+            SendResearchMessageRequest(message="甲的第二轮"),
+            db,
+        )
+        calls_before_get = len(provider.calls)
+        rebuilt_service.get(first.conversation_id, db)
+        assert len(provider.calls) == calls_before_get
+        rebuilt_service.create(
+            CreateResearchConversationRequest(initial_message="乙的第一轮"), db
+        )
+
+    second_call = provider.calls[1]["messages"]
+    assert [item["role"] for item in second_call] == ["system", "user", "assistant", "user"]
+    assert second_call[1]["content"][0]["text"] == "甲的第一轮"
+    assert second_call[2]["content"][0]["text"] == "第一轮回复"
+    assert json.loads(second_call[3]["content"][0]["text"])["latest_user_message"] == "甲的第二轮"
+    assert [item["role"] for item in provider.calls[2]["messages"]] == ["system", "user"]
+
+
+def test_rebuilt_service_restores_confirmed_context_for_the_next_run() -> None:
+    decision = _decision(reply="继续基于已确认背景澄清")
+    provider = MockProvider(
+        [
+            ProviderResult(
+                Message(
+                    "assistant",
+                    (ContentBlock("text", {"text": decision.model_dump_json()}),),
+                )
+            )
+        ]
+    )
+    provenance = ConfirmedContextProvenance(
+        transfer_id="transfer-restored",
+        source_module="learning",
+        source_object=ContextSourceObject(type="notebook_item", id="note-restored"),
+        source_scope_id="learning-session-restored",
+        target_module="research",
+        topic="已确认主题",
+        summary="已确认摘要",
+        selected_content=[],
+        confirmed_at=datetime.now(UTC),
+    )
+    with SessionLocal() as db:
+        created = ResearchConversationService().create_from_confirmed_context(provenance, db)
+        rebuilt = ResearchConversationService(
+            decision_generator=RuntimeConversationDecisionGenerator(
+                provider_factory=lambda: provider,
+                timeout_seconds=1,
+            )
+        )
+        rebuilt.send_message(
+            created.conversation_id,
+            SendResearchMessageRequest(message="继续澄清"),
+            db,
+        )
+
+    sent = provider.calls[0]["messages"]
+    assert [item["role"] for item in sent] == ["system", "user", "assistant", "user"]
+    payload = json.loads(sent[-1]["content"][0]["text"])
+    assert payload["confirmed_learning_context"]["topic"] == "已确认主题"
+
+
+def test_context_assembler_reuses_summary_boundary_without_resummarizing_covered_messages() -> None:
+    class RecordingCompactor(ConversationCompactor):
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def compact(
+            self,
+            previous_summary: str | None,
+            messages: tuple[ResearchConversationMessage, ...],
+            budget_tokens: int,
+        ) -> str:
+            self.calls.append([message.message_id for message in messages])
+            return super().compact(previous_summary, messages, budget_tokens)
+
+    now = datetime.now(UTC)
+    messages = [
+        ResearchConversationMessage(
+            message_id=f"message-{index}",
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"history-{index}-" + ("x" * 180),
+            created_at=now,
+        )
+        for index in range(8)
+    ]
+    profile = ResearchProfile(topic="预算测试")
+    runtime_input = build_research_conversation_input(profile, "继续", None)
+    fixed_tokens = len(research_conversation_agent.system_prompt) + len(runtime_input)
+    recorder = RecordingCompactor()
+    assembler = ResearchContextAssembler(
+        budget_tokens=fixed_tokens + 450,
+        summary_budget_tokens=80,
+        compactor=recorder,
+    )
+
+    first = assembler.assemble(
+        ResearchContextInput(
+            messages,
+            research_conversation_agent.system_prompt,
+            runtime_input,
+            None,
+        )
+    )
+    extended = messages + [
+        ResearchConversationMessage(
+            message_id=f"message-{index}",
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"history-{index}-" + ("y" * 180),
+            created_at=now,
+        )
+        for index in range(8, 10)
+    ]
+    second = assembler.assemble(
+        ResearchContextInput(
+            extended,
+            research_conversation_agent.system_prompt,
+            runtime_input,
+            first.pending_summary,
+        )
+    )
+
+    assert first.pending_summary is not None
+    assert second.pending_summary is not None
+    assert first.token_count <= assembler.budget_tokens
+    assert second.token_count <= assembler.budget_tokens
+    covered_first = set(recorder.calls[0])
+    assert covered_first.isdisjoint(recorder.calls[1])
+    assert second.pending_summary.source_message_count > first.pending_summary.source_message_count
+    assert second.pending_summary.through_message_id == recorder.calls[1][-1]
+
+
+def test_service_persists_and_reuses_budgeted_context_summary_across_runs() -> None:
+    now = datetime.now(UTC)
+    stored_messages = [
+        ResearchConversationMessage(
+            message_id=f"stored-{index}",
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"stored history {index} " + ("长" * 300),
+            created_at=now,
+        )
+        for index in range(6)
+    ]
+    profile = ResearchProfile(topic="长对话")
+    runtime_input = build_research_conversation_input(profile, "继续研究", None)
+    budget = len(research_conversation_agent.system_prompt) + len(runtime_input) + 500
+    assembler = ResearchContextAssembler(budget_tokens=budget, summary_budget_tokens=100)
+    decisions = [_decision(reply="第一轮压缩后回复"), _decision(reply="复用摘要后的回复")]
+    provider = MockProvider(
+        [
+            ProviderResult(
+                Message("assistant", (ContentBlock("text", {"text": item.model_dump_json()}),))
+            )
+            for item in decisions
+        ]
+    )
+    generator = RuntimeConversationDecisionGenerator(
+        provider_factory=lambda: provider,
+        timeout_seconds=1,
+    )
+    with SessionLocal() as db:
+        model = ResearchConversationModel(
+            profile_data=profile.model_dump(mode="json"),
+            messages_data=[item.model_dump(mode="json") for item in stored_messages],
+        )
+        db.add(model)
+        db.commit()
+        db.refresh(model)
+        conversation_id = model.id
+        ResearchConversationService(
+            decision_generator=generator,
+            context_assembler=assembler,
+        ).send_message(
+            conversation_id,
+            SendResearchMessageRequest(message="继续研究"),
+            db,
+        )
+        db.refresh(model)
+        first_summary = dict(model.context_summary_data)
+        ResearchConversationService(
+            decision_generator=generator,
+            context_assembler=assembler,
+        ).send_message(
+            conversation_id,
+            SendResearchMessageRequest(message="再继续"),
+            db,
+        )
+        db.refresh(model)
+        second_summary = dict(model.context_summary_data)
+
+    first_call = provider.calls[0]["messages"]
+    assert first_call[0]["pinned"] is True
+    assert first_call[-1]["pinned"] is True
+    assert any(
+        item["metadata"].get("context_kind") == "research_conversation_summary"
+        and item["pinned"] is False
+        for item in first_call
+    )
+    assert sum(
+        len(str(block.get("text", "")))
+        for item in first_call
+        for block in item["content"]
+    ) <= budget
+    assert first_summary == second_summary
+    assert first_summary["generation_mode"] == "rules"
+    assert first_summary["run_id"].startswith("context-summary-")
+
+
+def test_compaction_failure_keeps_the_previous_valid_summary() -> None:
+    class FailingCompactor:
+        def compact(self, *args: object, **kwargs: object) -> str:
+            raise RuntimeError("summary failed")
+
+    now = datetime.now(UTC)
+    messages = [
+        ResearchConversationMessage(
+            message_id=f"failure-{index}",
+            role="user" if index % 2 == 0 else "assistant",
+            content="原始历史" + ("x" * 300),
+            created_at=now,
+        )
+        for index in range(4)
+    ]
+    previous = ResearchContextSummary(
+        summary="上一个有效摘要",
+        through_message_id="failure-0",
+        source_message_count=1,
+        generation_mode="rules",
+        run_id="context-summary-valid",
+    )
+    fake = FakeDecisionGenerator(
+        [
+            ConversationDecisionOutcome.generated(
+                _decision(reply="仍使用原始消息完成本轮"),
+                run_id="decision-after-summary-failure",
+                event_count=1,
+            )
+        ]
+    )
+    with SessionLocal() as db:
+        model = ResearchConversationModel(
+            profile_data=ResearchProfile(topic="压缩失败测试").model_dump(mode="json"),
+            messages_data=[item.model_dump(mode="json") for item in messages],
+            context_summary_data=previous.model_dump(mode="json"),
+        )
+        db.add(model)
+        db.commit()
+        db.refresh(model)
+        runtime_input = build_research_conversation_input(
+            ResearchProfile(topic="压缩失败测试"), "继续", None
+        )
+        budget = len(research_conversation_agent.system_prompt) + len(runtime_input) + 100
+        ResearchConversationService(
+            decision_generator=fake,
+            context_assembler=ResearchContextAssembler(
+                budget_tokens=budget,
+                summary_budget_tokens=50,
+                compactor=FailingCompactor(),
+            ),
+        ).send_message(model.id, SendResearchMessageRequest(message="继续"), db)
+        db.refresh(model)
+
+        assert model.context_summary_data == previous.model_dump(mode="json")
+        history = fake.calls[0]["conversation_history"]
+        assert len(history) == len(messages)
 
 
 def test_runtime_generator_rejects_blank_profile_patch_before_persistence() -> None:
@@ -822,7 +1130,7 @@ def test_runtime_generator_rejects_blank_profile_patch_before_persistence() -> N
 
     outcome = generator.generate(
         profile={},
-        messages=[],
+        conversation_history=(),
         user_message="我有一个约束",
         conversation_id="conversation-invalid-patch",
     )
