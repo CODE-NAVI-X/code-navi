@@ -15,6 +15,7 @@ from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
 )
+from .conversation_citation_quality import build_citation_quality_check
 from .conversation_citation_scaffold import build_citation_candidate, build_selected_citation
 from .conversation_code_draft import build_experiment_code_draft
 from .conversation_difficulty import build_topic_difficulty_analysis
@@ -31,6 +32,7 @@ from .conversation_plan import build_conversation_research_plan
 from .conversation_schemas import (
     ApplyRevisionSuggestionRequest,
     CitationCandidate,
+    CitationQualityCheck,
     ConversationEvidenceBundle,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
@@ -62,6 +64,7 @@ from .conversation_schemas import (
 )
 from .conversation_submission import build_paper_export_package, build_submission_readiness
 from .models import (
+    ResearchCitationQualityCheckModel,
     ResearchConversationModel,
     ResearchEvidenceBundleModel,
     ResearchExperimentEvidenceBundleModel,
@@ -501,6 +504,43 @@ class ResearchConversationService:
             for selected in self.list_selected_citations(conversation_id, db)
             if selected.status != "skipped"
         ]
+
+    def create_citation_quality_check(
+        self, conversation_id: str, db: Session
+    ) -> CitationQualityCheck:
+        """Persist one explicit offline check over this conversation's saved selections."""
+        self._get_model(conversation_id, db)
+        checked_at = datetime.now(UTC)
+        check_id = str(uuid.uuid4())
+        check = build_citation_quality_check(
+            conversation_id,
+            self.list_selected_citations(conversation_id, db),
+            check_id=check_id,
+            checked_at=checked_at,
+        )
+        db.add(
+            ResearchCitationQualityCheckModel(
+                id=check_id,
+                conversation_id=conversation_id,
+                check_data=check.model_dump(mode="json"),
+                created_at=checked_at,
+            )
+        )
+        db.commit()
+        return check
+
+    def list_citation_quality_checks(
+        self, conversation_id: str, db: Session
+    ) -> list[CitationQualityCheck]:
+        """Restore checks for one conversation without running search or changing a draft."""
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchCitationQualityCheckModel)
+            .filter(ResearchCitationQualityCheckModel.conversation_id == conversation_id)
+            .order_by(ResearchCitationQualityCheckModel.created_at.desc())
+            .all()
+        )
+        return [CitationQualityCheck.model_validate(record.check_data) for record in records]
 
     def create_paper_review(self, draft_id: str, db: Session) -> PaperReview:
         draft = self._get_paper_draft(draft_id, db)

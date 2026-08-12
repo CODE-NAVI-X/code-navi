@@ -888,6 +888,70 @@ class SelectedCitation(BaseModel):
     created_at: datetime
 
 
+CitationQualityStatus = Literal["empty", "needs_review", "review_ready"]
+CitationCoverageStatus = Literal["mapped", "needs_verification"]
+
+
+class CitationQualityIssue(BaseModel):
+    """One local citation gap with an explicit source and fact boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    issue_code: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=1500)
+    selected_citation_ids: list[str] = Field(default_factory=list, max_length=40)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+
+
+class CitationCoverageItem(BaseModel):
+    """A user-created source-to-section mapping, not proof that a claim is supported."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_document: CitationTargetDocument
+    target_section: str = Field(min_length=1, max_length=300)
+    selected_citation_ids: list[str] = Field(min_length=1, max_length=40)
+    source_titles: list[str] = Field(min_length=1, max_length=40)
+    citation_placeholders: list[str] = Field(min_length=1, max_length=40)
+    status: CitationCoverageStatus
+    classification: Literal["inference"] = "inference"
+    information_scopes: list[Literal["metadata_only", "metadata_and_abstract"]] = Field(
+        min_length=1, max_length=2
+    )
+    basis: str = Field(min_length=1, max_length=1500)
+    to_verify_items: list[str] = Field(default_factory=list, max_length=40)
+
+
+class CitationQualityCheck(BaseModel):
+    """A persisted rules-only check over citations explicitly selected by one user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["citation-quality-check.v1"] = "citation-quality-check.v1"
+    check_id: str = Field(min_length=1, max_length=100)
+    session_id: str = Field(min_length=1, max_length=100)
+    checked_at: datetime
+    quality_status: CitationQualityStatus
+    selected_source_count: int = Field(ge=0, le=1000)
+    unique_source_count: int = Field(ge=0, le=1000)
+    mapped_section_count: int = Field(ge=0, le=100)
+    core_section_coverage_percent: int = Field(ge=0, le=100)
+    coverage_items: list[CitationCoverageItem] = Field(default_factory=list, max_length=100)
+    unmapped_core_sections: list[str] = Field(default_factory=list, max_length=20)
+    uninserted_placeholders: list[CitationQualityIssue] = Field(
+        default_factory=list, max_length=100
+    )
+    duplicate_selections: list[CitationQualityIssue] = Field(default_factory=list, max_length=100)
+    metadata_gaps: list[CitationQualityIssue] = Field(default_factory=list, max_length=100)
+    author_verification_items: list[CitationQualityIssue] = Field(
+        default_factory=list, max_length=100
+    )
+    empty_state_message: str | None = Field(default=None, max_length=1000)
+    boundary_note: str = Field(min_length=1, max_length=1500)
+    source_scope: Literal["local_selected_evidence_only"] = "local_selected_evidence_only"
+
+
 SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
 SubmissionSourceScope = Literal[
     "draft_text",
