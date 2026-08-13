@@ -499,6 +499,17 @@ export interface CitationQualityCheck {
   author_verification_items: CitationQualityIssue[]; empty_state_message: string | null;
   boundary_note: string; source_scope: "local_selected_evidence_only";
 }
+export interface SubmissionProfileInput {
+  target_venue?: string | null;
+  anonymity_required?: boolean | null;
+  length_or_section_requirements?: string | null;
+  ethics_and_data_requirements?: string | null;
+  user_notes?: string | null;
+}
+export interface SubmissionProfile extends SubmissionProfileInput {
+  schema_version: "submission-profile.v1"; profile_id: string; conversation_id: string;
+  created_at: string; updated_at: string;
+}
 export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
 export interface SubmissionReadinessItem {
   id: string; category: string; message: string; classification: AnalysisClassification;
@@ -506,7 +517,8 @@ export interface SubmissionReadinessItem {
 }
 export interface SubmissionReadinessCheck {
   schema_version: "submission-readiness.v1"; check_id: string; draft_id: string;
-  revision_id: string | null; conversation_id: string; readiness_status: SubmissionReadinessStatus;
+  revision_id: string | null; conversation_id: string; submission_profile: SubmissionProfile | null;
+  readiness_status: SubmissionReadinessStatus;
   blockers: SubmissionReadinessItem[]; warnings: SubmissionReadinessItem[];
   manual_checks: SubmissionReadinessItem[]; fact_boundary_notes: SubmissionReadinessItem[];
   recommended_next_actions: SubmissionReadinessItem[]; created_at: string;
@@ -762,6 +774,12 @@ export async function createCitationQualityCheck(conversationId: string): Promis
 }
 export async function listCitationQualityChecks(conversationId: string): Promise<CitationQualityCheck[]> {
   return request<CitationQualityCheck[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`);
+}
+export async function getSubmissionProfile(conversationId: string): Promise<SubmissionProfile | null> {
+  return request<SubmissionProfile | null>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`);
+}
+export async function saveSubmissionProfile(conversationId: string, payload: SubmissionProfileInput): Promise<SubmissionProfile> {
+  return request<SubmissionProfile>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`, { method: "PUT", body: JSON.stringify(payload) });
 }
 export async function createSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck> {
   return request<SubmissionReadinessCheck>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });

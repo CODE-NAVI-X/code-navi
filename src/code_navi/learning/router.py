@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from code_navi.db import get_db
@@ -13,6 +14,9 @@ from code_navi.db import get_db
 from .models import NotebookItemModel
 from .presentation.schemas import PresentationGenerateRequest
 from .presentation.services import PresentationGenerator
+from .quiz.docx import export_quiz_docx
+from .quiz.schemas import GradeRequest, GradeResponse, QuizGenerateRequest, QuizGenerateResponse
+from .quiz.services import QuizGenerator, QuizNotFoundError
 from .schemas import ExplainRequest, ExplainResponse
 from .services import QueryOrchestrator
 
@@ -20,7 +24,12 @@ router = APIRouter(prefix="/api/v1/learning", tags=["Learning"])
 
 _orchestrator = QueryOrchestrator()
 _presentation_generator = PresentationGenerator()
+_quiz_generator = QuizGenerator()
 _db_dependency = Depends(get_db)
+
+_DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 
 @router.post("/explain", response_model=ExplainResponse, status_code=200)
@@ -155,5 +164,82 @@ async def generate_presentation(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/quiz/generate", response_model=QuizGenerateResponse, status_code=200)
+async def generate_quiz(
+    request: QuizGenerateRequest,
+    db: Session = _db_dependency,
+):
+    """Generate one exercise set for a knowledge point.
+
+    Runs one audited kernel call (no tools granted), normalizes the LLM JSON
+    array into the shared question model, and archives the quiz to the student
+    notebook under the effective ``session_id``.
+    """
+    return _quiz_generator.generate(request, db)
+
+
+@router.post("/quiz/grade", response_model=GradeResponse, status_code=200)
+async def grade_quiz(
+    request: GradeRequest,
+    db: Session = _db_dependency,
+) -> GradeResponse:
+    """Grade fill_blank / short_answer answers through the LLM.
+
+    The scoring rubric is loaded from the archived quiz strictly within the
+    requesting ``session_id`` — the client submits only the quiz id and the
+    student's answers, so it cannot alter the correct answers or points.
+    ``single`` is graded client-side, not here.  When no online provider is
+    configured the service degrades to honest offline grading (exact match for
+    fill blanks, ``graded=false`` + self-check hint for short answers) and
+    never fakes an LLM verdict.
+    """
+    try:
+        return _quiz_generator.grade_quiz(request, db)
+    except QuizNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/quiz/export-docx")
+async def export_quiz_docx_endpoint(
+    quiz_id: str = Query(..., min_length=1, max_length=64),
+    session_id: str = Query(..., min_length=1, max_length=64),
+    with_answer: bool = Query(default=False),
+    db: Session = _db_dependency,
+) -> Response:
+    """Export a previously generated quiz as a standard Word exam paper.
+
+    The quiz is looked up strictly within the requesting ``session_id`` — a
+    quiz id that belongs to another session yields 404, matching the notebook
+    list / presentation read-back behavior.  ``with_answer`` appends a
+    参考答案 section at the end of the same document.
+    """
+    try:
+        knowledge_point, questions = QuizGenerator.load_quiz(db, session_id, quiz_id)
+    except QuizNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    docx_bytes = export_quiz_docx(
+        knowledge_point=knowledge_point,
+        questions=questions,
+        with_answer=with_answer,
+    )
+
+    suffix = "（含答案）" if with_answer else ""
+    # ``filename`` must stay ASCII (RFC 5987); the readable Chinese name goes
+    # into ``filename*`` only.
+    fallback = f"quiz_{quiz_id[:8]}{'-answer' if with_answer else ''}.docx"
+    filename = f"《{knowledge_point}》练习题{suffix}.docx"
+    quoted = urllib.parse.quote(filename)
+    return Response(
+        content=docx_bytes,
+        media_type=_DOCX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quoted}"
+            )
         },
     )

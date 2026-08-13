@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -160,6 +160,20 @@ class ResearchConversationMessage(BaseModel):
         ]
         | None
     ) = None
+
+
+class ResearchContextSummary(BaseModel):
+    """Persisted coverage boundary for reusable cross-run conversation compression."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["research-context-summary.v1"] = "research-context-summary.v1"
+    summary: str = Field(min_length=1, max_length=8000)
+    through_message_id: str = Field(min_length=1)
+    source_message_count: int = Field(ge=1)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    generation_mode: Literal["rules", "agent"]
+    run_id: str | None = None
 
 
 class ResearchReadiness(BaseModel):
@@ -952,6 +966,28 @@ class CitationQualityCheck(BaseModel):
     source_scope: Literal["local_selected_evidence_only"] = "local_selected_evidence_only"
 
 
+class SubmissionProfileInput(BaseModel):
+    """User-known submission constraints; no venue rule is fetched or inferred."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_venue: str | None = Field(default=None, min_length=1, max_length=300)
+    anonymity_required: bool | None = None
+    length_or_section_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    ethics_and_data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    user_notes: str | None = Field(default=None, min_length=1, max_length=1500)
+
+
+class SubmissionProfile(SubmissionProfileInput):
+    """Persisted local submission-profile data controlled by the user."""
+
+    schema_version: Literal["submission-profile.v1"] = "submission-profile.v1"
+    profile_id: str
+    conversation_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
 SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
 SubmissionSourceScope = Literal[
     "draft_text",
@@ -959,6 +995,7 @@ SubmissionSourceScope = Literal[
     "paper_review",
     "experiment_evidence",
     "academic_metadata_abstract",
+    "submission_profile",
     "manual_confirmation",
 ]
 
@@ -984,6 +1021,7 @@ class SubmissionReadinessCheck(BaseModel):
     draft_id: str
     revision_id: str | None = None
     conversation_id: str
+    submission_profile: SubmissionProfile | None = None
     readiness_status: SubmissionReadinessStatus
     blockers: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
     warnings: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)

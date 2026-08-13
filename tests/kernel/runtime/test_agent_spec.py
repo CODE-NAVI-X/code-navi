@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from kernel.core import KernelConfig
+from kernel.core import ContentBlock, KernelConfig, Message
 from kernel.runtime import AgentSpec, RuntimeRequest
 
 
@@ -48,12 +48,18 @@ def test_agent_spec_rejects_invalid_default_config(default_config: object) -> No
 
 
 def test_runtime_request_normalizes_metadata_and_validates_inputs() -> None:
+    history_message = Message("assistant", (ContentBlock("text", {"text": "Earlier."}),))
     request = RuntimeRequest(
-        "Summarize this.", session_id="session-1", run_id="run-1", metadata={"n": 1}
+        "Summarize this.",
+        session_id="session-1",
+        run_id="run-1",
+        metadata={"n": 1},
+        conversation_history=[history_message],
     )
 
     assert request.metadata == {"n": 1}
     assert type(request.metadata) is dict
+    assert request.conversation_history == (history_message,)
 
     for kwargs in (
         {"user_input": ""},
@@ -62,6 +68,18 @@ def test_runtime_request_normalizes_metadata_and_validates_inputs() -> None:
         {"user_input": "ok", "metadata": []},
         {"user_input": "ok", "metadata": {"bad": {1, 2}}},
         {"user_input": "ok", "metadata": {"nan": math.nan}},
+        {"user_input": "ok", "conversation_history": "not messages"},
+        {"user_input": "ok", "conversation_history": [object()]},
+        {
+            "user_input": "ok",
+            "conversation_history": [Message("user", (object(),))],
+        },
+        {
+            "user_input": "ok",
+            "conversation_history": [
+                Message("user", (ContentBlock("text", {"text": "Pinned"}),), pinned=True)
+            ],
+        },
     ):
         with pytest.raises((TypeError, ValueError)):
             RuntimeRequest(**kwargs)  # type: ignore[arg-type]

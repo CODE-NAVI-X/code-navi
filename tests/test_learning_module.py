@@ -200,6 +200,9 @@ class TestQueryOrchestrator:
         assert item is not None
         assert item.item_type == "summary"
         assert item.content == response.summary
+        # The response exposes the archived id so the client can open the
+        # learning → research context-transfer confirm flow for this record.
+        assert response.notebook_item_id == item.id
 
     def test_explain_without_citations(self, db: Session) -> None:
         orchestrator = QueryOrchestrator()

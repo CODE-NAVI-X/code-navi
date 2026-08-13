@@ -79,3 +79,30 @@ def test_compiler_api_rejects_invalid_payload_without_gateway_call() -> None:
     assert response.status_code == 400
     assert "Python" in response.json()["error"]
     assert gateway.calls == []
+
+
+def test_compiler_api_analyzes_uploaded_problem_text() -> None:
+    compiler = CompilerApplication(FakePistonGateway(), Settings())
+    app.dependency_overrides[get_compiler_application] = lambda: compiler
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/compiler/problem-imports/analyze",
+                json={
+                    "text": (
+                        "题目：字符串回文判断\n"
+                        "描述：判断字符串是否为回文。\n"
+                        "输入：一行字符串\n"
+                        "输出：YES 或 NO"
+                    )
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_compiler_application, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "deterministic_rule"
+    assert payload["problems"][0]["title"] == "字符串回文判断"
+    assert "字符串" in payload["problems"][0]["tags"]

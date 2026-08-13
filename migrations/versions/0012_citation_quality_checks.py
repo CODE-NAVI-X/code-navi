@@ -1,7 +1,7 @@
 """Persist offline citation-quality checks.
 
 Revision ID: research_citation_quality_v1
-Revises: research_context_provenance_repair_v1
+Revises: research_submission_profile_v1
 Create Date: 2026-08-11
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "research_citation_quality_v1"
-down_revision: str | None = "research_context_provenance_repair_v1"
+down_revision: str | None = "research_submission_profile_v1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

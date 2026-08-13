@@ -273,6 +273,11 @@ class QueryOrchestrator:
         db.add(notebook_entry)
         db.commit()
 
+        # The id is a client-side default assigned at flush; it is available
+        # once committed, so we can hand it back for the downstream context
+        # transfer without a second lookup.
+        response.notebook_item_id = notebook_entry.id
+
         return response
 
 
