@@ -296,7 +296,9 @@ def _render_answer_section(doc: Document, questions: list[QuizQuestion]) -> None
         answer_text = _format_answer(q)
         if answer_text:
             _add_rich_text(p, answer_text)
-        if q.analysis:
+        # A short_answer's reference answer *is* its analysis (already embedded
+        # in ``参考答案：`` above), so don't reprint it as a separate 解析 line.
+        if q.type != "short_answer" and q.analysis:
             p2 = _paragraph(doc)
             _char_indent(p2, left_chars=2)
             _add_plain_run(p2, "解析：", size_pt=12)

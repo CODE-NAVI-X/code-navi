@@ -536,17 +536,18 @@ class QuizGenerator:
             audit=audit,
         )
 
-    def grade_quiz(self, request: GradeRequest) -> GradeResponse:
+    def grade_quiz(self, request: GradeRequest, db: Session) -> GradeResponse:
         """Grade fill_blank / short_answer answers through the LLM (or mock).
 
-        Stateless: the request carries the questions and the student's answers,
-        so nothing is read from or written to the database.  One audited kernel
-        run scores each answered item and returns per-question score + Chinese
-        comment.  Offline mode degrades honestly — exact-match for fill blanks
-        (``is_mock=True``) and ``graded=False`` for short answers — never a
-        faked model verdict.
+        The scoring rubric is loaded server-side from the archived quiz — the
+        request carries only the quiz id and the student's answers, so a caller
+        can neither alter the correct answers nor the points.  One audited
+        kernel run scores each answered item and returns per-question score +
+        Chinese comment.  Offline mode degrades honestly — exact-match for fill
+        blanks (``is_mock=True``) and ``graded=False`` for short answers — never
+        a faked model verdict.
         """
-        questions = request.questions
+        _, questions = self.load_quiz(db, request.session_id, request.quiz_id)
         targets = [q for q in questions if q.type in ("fill_blank", "short_answer")]
         target_ids = {q.id for q in targets}
         answers_map: dict[str, list[str]] = {}
@@ -555,7 +556,6 @@ class QuizGenerator:
                 answers_map[item.question_id] = item.answer
 
         to_grade = [q for q in targets if q.id in answers_map]
-        grade_ids = {q.id for q in to_grade}
         offline = json.dumps(
             [r.model_dump() for r in _mock_grade_results(to_grade, answers_map)],
             ensure_ascii=False,
@@ -576,9 +576,8 @@ class QuizGenerator:
         )
         answers_json = json.dumps(
             [
-                {"question_id": item.question_id, "type": item.type, "answer": item.answer}
-                for item in request.student_answers
-                if item.question_id in grade_ids
+                {"question_id": q.id, "type": q.type, "answer": answers_map[q.id]}
+                for q in to_grade
             ],
             ensure_ascii=False,
         )

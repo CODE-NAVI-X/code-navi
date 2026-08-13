@@ -240,10 +240,8 @@ export async function exportQuizDocx(
 // itself lives in ``learning.ts`` (per the learning-module client contract).
 
 export interface QuizStudentAnswerItem {
-  /** Must match an id in ``GradeQuizRequest.questions``. */
+  /** Must match an id in the archived quiz being graded. */
   question_id: string;
-  /** fill_blank | short_answer (single is graded client-side). */
-  type: QuizQuestionType;
   /**
    * fill_blank: one entry per blank, in order. short_answer: a single entry
    * holding the free-text answer.
@@ -279,8 +277,8 @@ export interface QuizGradeResponse {
 
 export interface GradeQuizRequest {
   session_id: string;
-  /** The exact rendered questions to grade (only fill_blank / short_answer). */
-  questions: QuizQuestion[];
+  /** The archived quiz to grade (its rubric is loaded server-side). */
+  quiz_id: string;
   /** The student's answers, one entry per answered question. */
   student_answers: QuizStudentAnswerItem[];
 }

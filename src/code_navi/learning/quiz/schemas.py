@@ -200,10 +200,7 @@ class StudentAnswerItem(BaseModel):
     """One student's answer to a ``fill_blank`` / ``short_answer`` item."""
 
     question_id: str = Field(
-        ..., description="Must match an id in ``GradeRequest.questions``."
-    )
-    type: QuestionType = Field(
-        ..., description="fill_blank | short_answer (single is graded client-side)."
+        ..., description="Must match an id in the archived quiz being graded."
     )
     answer: list[str] = Field(
         default_factory=list,
@@ -217,22 +214,16 @@ class StudentAnswerItem(BaseModel):
 class GradeRequest(BaseModel):
     """Payload for ``POST /api/v1/learning/quiz/grade``.
 
-    Stateless on purpose: the client sends the exact questions it rendered and
-    the student's answers, so the endpoint needs no quiz lookup and no database
-    — it only produces a scored, audited verdict for the given pair.
+    The client submits only the quiz id and the student's answers — the grading
+    rubric (correct answers, points, ``comment_prompt``) is loaded server-side
+    from the archived quiz, so a caller cannot alter the scoring basis.
     """
 
     session_id: str = Field(
-        ..., min_length=1, max_length=64, description="Scopes the audited event log."
+        ..., min_length=1, max_length=64, description="Scopes the archived quiz lookup."
     )
-    questions: list[QuizQuestion] = Field(
-        ...,
-        min_length=1,
-        max_length=30,
-        description=(
-            "The questions to grade. Only ``fill_blank`` and ``short_answer`` "
-            "items are actually graded; ``single`` stays a client-side match."
-        ),
+    quiz_id: str = Field(
+        ..., min_length=1, max_length=64, description="The archived quiz to grade."
     )
     student_answers: list[StudentAnswerItem] = Field(
         default_factory=list,

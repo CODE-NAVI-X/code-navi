@@ -15,7 +15,7 @@
  *   ``graded=false`` prompting self-grading — never a faked verdict.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -171,13 +171,8 @@ export function QuizView({
   const [withAnswer, setWithAnswer] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
-  // A fresh quiz (or the first one) resets the answer / grading state.
-  useEffect(() => {
-    setAnswers({});
-    setSubmitted(false);
-    setGradeResults({});
-    setGradeError(null);
-  }, [response?.quiz_id]);
+  // A fresh quiz resets answer / grading state via the parent's ``key`` on this
+  // component (remount), so no ``setState``-in-effect is needed here.
 
   const questions = response?.questions ?? [];
   const controlsDisabled = loading;
@@ -224,10 +219,9 @@ export function QuizView({
     try {
       const grade = await gradeQuizAnswers({
         session_id: sessionId,
-        questions: gradable,
+        quiz_id: response.quiz_id,
         student_answers: gradable.map((q) => ({
           question_id: q.id,
-          type: q.type,
           answer: answers[q.id] ?? [],
         })),
       });

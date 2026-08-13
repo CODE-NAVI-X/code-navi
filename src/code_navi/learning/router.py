@@ -183,18 +183,24 @@ async def generate_quiz(
 
 
 @router.post("/quiz/grade", response_model=GradeResponse, status_code=200)
-async def grade_quiz(request: GradeRequest) -> GradeResponse:
+async def grade_quiz(
+    request: GradeRequest,
+    db: Session = _db_dependency,
+) -> GradeResponse:
     """Grade fill_blank / short_answer answers through the LLM.
 
-    Stateless: the client sends the exact questions it rendered plus the
-    student's answers; the endpoint scores them via one audited kernel run and
-    returns per-question scores with Chinese analysis comments.  ``single`` is
-    graded client-side, not here.  When no online provider is configured the
-    service degrades to honest offline grading (exact match for fill blanks,
-    ``graded=false`` + self-check hint for short answers) and never fakes an
-    LLM verdict.
+    The scoring rubric is loaded from the archived quiz strictly within the
+    requesting ``session_id`` — the client submits only the quiz id and the
+    student's answers, so it cannot alter the correct answers or points.
+    ``single`` is graded client-side, not here.  When no online provider is
+    configured the service degrades to honest offline grading (exact match for
+    fill blanks, ``graded=false`` + self-check hint for short answers) and
+    never fakes an LLM verdict.
     """
-    return _quiz_generator.grade_quiz(request)
+    try:
+        return _quiz_generator.grade_quiz(request, db)
+    except QuizNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/quiz/export-docx")

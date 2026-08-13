@@ -8,6 +8,7 @@
  * (ExplanationCard, SlideViewer, DownstreamGoCard) from drifting apart.
  */
 
+import { createLearningToResearchContext } from "@/lib/api/context-transfers";
 import { setFlowPayload } from "@/lib/store/flow-store";
 
 /** Minimal push shape — accepts the Next `AppRouterInstance` without importing it. */
@@ -62,30 +63,25 @@ export function navigateToPractice(
 }
 
 export interface ResearchFlowOptions {
-  knowledgePoint: string;
-  knowledgePointId: string;
+  notebookItemId: string;
   sessionId: string;
-  researchTopic?: string;
 }
 
-/** Leave learning for the research module, carrying the mastered context. */
-export function navigateToResearch(
+/**
+ * Leave learning for research through the persisted context-transfer flow.
+ *
+ * The summary is already archived as a notebook item server-side; this creates
+ * a learning → research context draft from that exact item and hands the
+ * student to the confirm page.  The research session is thus backed by a real
+ * source record rather than a browser-only payload that no module consumes.
+ */
+export async function navigateToResearch(
   navigator: Navigator,
   options: ResearchFlowOptions,
-): void {
-  const { knowledgePoint, knowledgePointId, sessionId } = options;
-  setFlowPayload({
-    sessionId,
-    masteredKnowledgePoint: { id: knowledgePointId, name: knowledgePoint },
-    studentPersona: "academic",
-    targetModule: "research",
-    payloadData: {
-      researchTopic: options.researchTopic ?? knowledgePoint,
-    },
-  });
-  const params = new URLSearchParams({
-    knowledge_name: knowledgePoint,
-    session_id: sessionId,
-  });
-  navigator.push(`/student/research?${params.toString()}`);
+): Promise<void> {
+  const context = await createLearningToResearchContext(
+    options.notebookItemId,
+    options.sessionId,
+  );
+  navigator.push(`/student/research/confirm/${encodeURIComponent(context.id)}`);
 }

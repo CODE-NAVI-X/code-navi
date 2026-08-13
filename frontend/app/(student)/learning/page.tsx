@@ -556,6 +556,7 @@ export default function LearningPage(): JSX.Element {
             />
           ) : view === "quiz" ? (
             <QuizView
+              key={quizResponse?.quiz_id ?? "empty"}
               knowledgePoint={result?.knowledge_point || query}
               sessionId={sessionId}
               params={quizParams}
@@ -632,6 +633,7 @@ export default function LearningPage(): JSX.Element {
           knowledgePoint={result?.knowledge_point || query || "DHCP 四阶段报文交互"}
           knowledgePointId={buildKnowledgeId(query || result?.knowledge_point || "DHCP 四阶段报文交互")}
           sessionId={sessionId}
+          notebookItemId={result?.notebook_item_id ?? undefined}
           onDismiss={() => setGoCardVisible(false)}
         />
       )}

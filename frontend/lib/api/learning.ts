@@ -33,6 +33,8 @@ export interface CitationItem {
 export interface ExplainResponse {
   knowledge_point: string;
   session_id: string;
+  /** Id of the archived summary notebook item, used for learning → research. */
+  notebook_item_id?: string | null;
   summary: string;
   detail?: string | null;
   citations: CitationItem[];
@@ -164,7 +166,7 @@ export async function gradeQuizAnswers(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session_id: request.session_id,
-        questions: request.questions,
+        quiz_id: request.quiz_id,
         student_answers: request.student_answers,
       }),
     });
@@ -241,6 +243,10 @@ function validateExplainResponse(raw: unknown): ExplainResponse {
   return {
     knowledge_point: obj.knowledge_point as string,
     session_id: obj.session_id as string,
+    notebook_item_id:
+      typeof obj.notebook_item_id === "string"
+        ? (obj.notebook_item_id as string)
+        : undefined,
     summary: obj.summary as string,
     detail:
       typeof obj.detail === "string" ? (obj.detail as string) : undefined,

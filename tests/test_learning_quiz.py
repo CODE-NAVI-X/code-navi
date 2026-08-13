@@ -14,6 +14,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 import zipfile
 from collections.abc import Generator
 from pathlib import Path
@@ -315,6 +317,17 @@ class TestDocxExporter:
         assert "参考答案" not in plain
         assert "参考答案" in answered
 
+    def test_export_answer_does_not_duplicate_short_answer_analysis(self) -> None:
+        xml = _read_document_xml(
+            export_quiz_docx(
+                knowledge_point="集合", questions=self._quiz(), with_answer=True
+            )
+        )
+        # The short-answer's reference answer embeds its analysis; a separate
+        # 解析 line would print it twice. Only single + fill_blank get one.
+        assert xml.count("解析：") == 2
+        assert xml.count("充分性") == 1  # appears only once, inside 参考答案
+
     def test_export_falls_back_to_text_for_bad_latex(self) -> None:
         questions = [
             QuizQuestion(
@@ -554,16 +567,32 @@ class TestSourceAndReview:
 class TestQuizGrader:
     """Service-level grading: offline mode never fakes an LLM verdict."""
 
-    def test_grade_fill_blank_correct_in_mock_mode(self) -> None:
-        questions = _mock_questions("集合")  # q2 fill_blank answer ["3"], 10 pts
-        response = QuizGenerator().grade_quiz(
+    def _grade(
+        self,
+        db: Session,
+        session_id: str,
+        student_answers: list[StudentAnswerItem],
+    ) -> object:
+        """Generate a quiz (archives it), then grade it server-side by quiz id."""
+        gen = QuizGenerator()
+        quiz = gen.generate(
+            QuizGenerateRequest(knowledge_point="集合", session_id=session_id),
+            db,
+        )
+        return gen.grade_quiz(
             GradeRequest(
-                session_id="sess-g",
-                questions=questions,
-                student_answers=[
-                    StudentAnswerItem(question_id="q2", type="fill_blank", answer=["3"]),
-                ],
-            )
+                session_id=session_id,
+                quiz_id=quiz.quiz_id,
+                student_answers=student_answers,
+            ),
+            db,
+        )
+
+    def test_grade_fill_blank_correct_in_mock_mode(self, db: Session) -> None:
+        response = self._grade(
+            db,
+            "sess-g",
+            [StudentAnswerItem(question_id="q2", answer=["3"])],
         )
         assert response.generation_mode == "rules"
         assert response.provider_name == "mock"
@@ -576,36 +605,22 @@ class TestQuizGrader:
         assert result.graded is True
         assert "离线 Mock 判分" in (result.comment or "")
 
-    def test_grade_fill_blank_wrong_in_mock_mode(self) -> None:
-        questions = _mock_questions("集合")
-        response = QuizGenerator().grade_quiz(
-            GradeRequest(
-                session_id="sess-g",
-                questions=questions,
-                student_answers=[
-                    StudentAnswerItem(question_id="q2", type="fill_blank", answer=["999"]),
-                ],
-            )
+    def test_grade_fill_blank_wrong_in_mock_mode(self, db: Session) -> None:
+        response = self._grade(
+            db,
+            "sess-g",
+            [StudentAnswerItem(question_id="q2", answer=["999"])],
         )
         result = response.results[0]
         assert result.score == 0
         assert result.is_correct is False
         assert result.is_mock is True
 
-    def test_grade_short_answer_is_ungraded_in_mock_mode(self) -> None:
-        questions = _mock_questions("集合")  # q3 short_answer 20 pts
-        response = QuizGenerator().grade_quiz(
-            GradeRequest(
-                session_id="sess-g",
-                questions=questions,
-                student_answers=[
-                    StudentAnswerItem(
-                        question_id="q3",
-                        type="short_answer",
-                        answer=["因为 A⊆B，所以 A∩B=A…"],
-                    ),
-                ],
-            )
+    def test_grade_short_answer_is_ungraded_in_mock_mode(self, db: Session) -> None:
+        response = self._grade(
+            db,
+            "sess-g",
+            [StudentAnswerItem(question_id="q3", answer=["因为 A⊆B，所以 A∩B=A…"])],
         )
         result = response.results[0]
         assert result.graded is False  # must prompt self-grading, never fake a score
@@ -613,21 +628,14 @@ class TestQuizGrader:
         assert result.score == 0
         assert "请对照参考答案自评" in (result.comment or "")
 
-    def test_grade_aggregates_over_graded_results_only(self) -> None:
-        questions = _mock_questions("集合")
-        response = QuizGenerator().grade_quiz(
-            GradeRequest(
-                session_id="sess-g",
-                questions=questions,
-                student_answers=[
-                    StudentAnswerItem(question_id="q2", type="fill_blank", answer=["3"]),
-                    StudentAnswerItem(
-                        question_id="q3",
-                        type="short_answer",
-                        answer=["证明：…"],
-                    ),
-                ],
-            )
+    def test_grade_aggregates_over_graded_results_only(self, db: Session) -> None:
+        response = self._grade(
+            db,
+            "sess-g",
+            [
+                StudentAnswerItem(question_id="q2", answer=["3"]),
+                StudentAnswerItem(question_id="q3", answer=["证明：…"]),
+            ],
         )
         assert len(response.results) == 2
         # q3 is ungraded → excluded from the auto totals so a self-graded short
@@ -635,20 +643,23 @@ class TestQuizGrader:
         assert response.total_score == 10
         assert response.total_max_score == 10
 
-    def test_grade_skips_single_and_unanswered_questions(self) -> None:
-        questions = _mock_questions("集合")
-        response = QuizGenerator().grade_quiz(
-            GradeRequest(
-                session_id="sess-g",
-                questions=questions,
-                student_answers=[
-                    StudentAnswerItem(question_id="q1", type="single", answer=["B"]),
-                ],
-            )
+    def test_grade_skips_single_and_unanswered_questions(self, db: Session) -> None:
+        response = self._grade(
+            db,
+            "sess-g",
+            [StudentAnswerItem(question_id="q1", answer=["B"])],
         )
         assert response.results == []
         assert response.total_score == 0
         assert response.total_max_score == 0
+
+    def test_grade_unknown_quiz_raises(self, db: Session) -> None:
+        gen = QuizGenerator()
+        with pytest.raises(QuizNotFoundError):
+            gen.grade_quiz(
+                GradeRequest(session_id="sess-g", quiz_id="quiz-nope", student_answers=[]),
+                db,
+            )
 
 
 class TestParseGradeResults:
@@ -709,19 +720,29 @@ class TestParseGradeResults:
 
 
 class TestGradeEndpoint:
-    def _grade_payload(self) -> dict:
-        questions = [q.model_dump(mode="json") for q in _mock_questions("集合")]
+    def _generate(self, client: TestClient, session_id: str) -> dict:
+        resp = client.post(
+            "/api/v1/learning/quiz/generate",
+            json={"knowledge_point": "集合", "session_id": session_id},
+        )
+        assert resp.status_code == 200
+        return resp.json()
+
+    def _grade_payload(self, client: TestClient, session_id: str = "sess-grade") -> dict:
+        quiz = self._generate(client, session_id)
         return {
-            "session_id": "sess-grade",
-            "questions": questions,
+            "session_id": session_id,
+            "quiz_id": quiz["quiz_id"],
             "student_answers": [
-                {"question_id": "q2", "type": "fill_blank", "answer": ["3"]},
-                {"question_id": "q3", "type": "short_answer", "answer": ["因为…"]},
+                {"question_id": "q2", "answer": ["3"]},
+                {"question_id": "q3", "answer": ["因为…"]},
             ],
         }
 
     def test_grade_returns_results(self, client: TestClient) -> None:
-        resp = client.post("/api/v1/learning/quiz/grade", json=self._grade_payload())
+        resp = client.post(
+            "/api/v1/learning/quiz/grade", json=self._grade_payload(client)
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["session_id"] == "sess-grade"
@@ -735,23 +756,73 @@ class TestGradeEndpoint:
         assert data["total_score"] == 10
 
     def test_grade_requires_session_id(self, client: TestClient) -> None:
-        payload = self._grade_payload()
+        payload = self._grade_payload(client)
         payload.pop("session_id")
         resp = client.post("/api/v1/learning/quiz/grade", json=payload)
         assert resp.status_code == 422
 
-    def test_grade_requires_at_least_one_question(self, client: TestClient) -> None:
+    def test_grade_requires_quiz_id(self, client: TestClient) -> None:
         resp = client.post(
             "/api/v1/learning/quiz/grade",
-            json={"session_id": "sess-x", "questions": [], "student_answers": []},
+            json={"session_id": "sess-x", "student_answers": []},
         )
         assert resp.status_code == 422
 
+    def test_grade_unknown_quiz_returns_404(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/learning/quiz/grade",
+            json={
+                "session_id": "sess-x",
+                "quiz_id": "quiz-nope",
+                "student_answers": [],
+            },
+        )
+        assert resp.status_code == 404
+
+    def test_grade_cross_session_returns_404(self, client: TestClient) -> None:
+        quiz = self._generate(client, "sess-alice")
+        resp = client.post(
+            "/api/v1/learning/quiz/grade",
+            json={
+                "session_id": "sess-bob",
+                "quiz_id": quiz["quiz_id"],
+                "student_answers": [{"question_id": "q2", "answer": ["3"]}],
+            },
+        )
+        assert resp.status_code == 404
+
     def test_grade_rejects_unknown_student_question_ids(self, client: TestClient) -> None:
-        payload = self._grade_payload()
+        payload = self._grade_payload(client)
         payload["student_answers"] = [
-            {"question_id": "ghost", "type": "fill_blank", "answer": ["x"]},
+            {"question_id": "ghost", "answer": ["x"]},
         ]
         resp = client.post("/api/v1/learning/quiz/grade", json=payload)
         assert resp.status_code == 200
         assert resp.json()["results"] == []  # unknown ids are filtered, not errors
+
+
+class TestPackageData:
+    """The OMML stylesheet must ship inside the built wheel (not just the source)."""
+
+    def test_mml2omml_xsl_is_in_wheel(self, tmp_path: Path) -> None:
+        root = Path(__file__).resolve().parents[1]
+        out_dir = tmp_path / "dist"
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--wheel",
+                "--no-isolation",
+                "--outdir",
+                str(out_dir),
+            ],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+        )
+        wheels = list(out_dir.glob("*.whl"))
+        assert wheels, "wheel build produced no artifact"
+        with zipfile.ZipFile(wheels[0]) as zf:
+            names = zf.namelist()
+        assert "code_navi/learning/quiz/MML2OMML.XSL" in names

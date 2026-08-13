@@ -34,6 +34,10 @@ dev = [
     "build>=1.3,<2",
     "pytest>=9,<10",
     "ruff>=0.15,<0.16",
+    # Needed by the offline (--no-isolation) wheel-build regression test that
+    # verifies package-data (MML2OMML.XSL) is actually shipped in the wheel.
+    "setuptools>=75",
+    "wheel",
 ]
 
 [tool.setuptools.packages.find]
@@ -41,6 +45,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "code_navi.research" = ["skills/*/SKILL.md"]
+"code_navi.learning.quiz" = ["MML2OMML.XSL"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
