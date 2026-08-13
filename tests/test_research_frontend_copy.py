@@ -93,13 +93,15 @@ def test_model_backed_conversation_turn_allows_more_time_than_restore() -> None:
 
 def test_next_development_server_allows_documented_loopback_host() -> None:
     config_source = NEXT_CONFIG.read_text(encoding="utf-8")
+    env_example = Path("frontend/.env.example").read_text(encoding="utf-8")
 
     assert "allowedDevOrigins" in config_source
-    # Loopback hosts are required for the documented local launcher. The LAN
-    # IP is added when the dev server is exposed to other devices on the
-    # network; keep both documented loopback hosts present.
     assert '"127.0.0.1"' in config_source
     assert '"localhost"' in config_source
+    assert "CODE_NAVI_ALLOWED_DEV_ORIGINS" in config_source
+    assert "CODE_NAVI_ALLOWED_DEV_ORIGINS" in env_example
+    assert "192.168.0.32" not in config_source
+    assert "agentRules: false" in config_source
 
 
 def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:
