@@ -20,13 +20,14 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 
 | 路径 | 当前职责 |
 | --- | --- |
-| `src/code_navi/cli.py`、`application.py`、`context.py`、`assistant.py` | CLI 入口、上下文装配和学习问答用例 |
+| `src/code_navi/cli.py`、`application.py`、`context.py`、`assistant.py`、`cli_conversation.py` | CLI 入口、上下文装配、学习问答和 shell 主对话持久化 |
 | `src/code_navi/server.py` | FastAPI 装配、CORS、统一异常边界和 `/health` |
 | `src/code_navi/learning/` | 知识讲解 API、Runtime 编排和学习笔记 |
 | `src/code_navi/context_transfer/` | 跨模块上下文的来源校验、可编辑快照、会话范围读取、取消和确认消费 |
 | `src/code_navi/online_compiler/` | Python/Piston 接线、服务端判题、规则反馈、可选 AI 指导和匿名学习记录 |
 | `src/code_navi/research/` | 动态科研对话、Provider 状态、兼容澄清流程、检索计划和学术证据 |
 | `src/code_navi/providers.py` | Mock、OpenAI 与 DeepSeek Provider 的统一选择 |
+| `src/code_navi/conversations.py` | Host 之间共享的显式状态加载与上下文装配最小协议；不定义统一存储模型 |
 | `src/code_navi/db.py` | 所有业务模块共享的 SQLAlchemy Base、engine 和 session |
 | `src/code_navi/domains/` | 旧领域接口兼容；新业务优先进入实际模块 |
 | `src/kernel/` | Runtime、Event、Provider 契约、工具注册与运行级授权 |
@@ -42,7 +43,8 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 
 | 入口 | 输入 | 输出与副作用 |
 | --- | --- | --- |
-| `code-navi ask`、`code-navi shell` | 问题、项目上下文、Provider 配置 | `RuntimeResult` 和 Event JSONL；不修改项目文件 |
+| `code-navi ask` | 问题、项目上下文、Provider 配置 | 无状态的 `RuntimeResult` 和 Event JSONL；不修改项目文件 |
+| `code-navi shell [--resume conversation-id]` | 问题、项目上下文、显式 CLI 对话标识、Provider 配置 | 项目作用域内的主对话状态、`RuntimeResult` 和 Event JSONL；branch 只在当前进程存在 |
 | `POST /api/v1/learning/explain` | `ExplainRequest` | `ExplainResponse`、Runtime Event，并写入 `notebook_items` |
 | `GET /api/v1/learning/notebook?session_id=...` | 学习 `session_id` | 该学习会话的 `NotebookItem` 列表 |
 | `POST /api/v1/context-transfers` | Learning 笔记 ID、学习 `session_id`、目标模块和选择内容 | 从真实笔记派生并持久化 `context-transfer.v1` 待确认上下文 |
@@ -81,6 +83,10 @@ Evidence 引用使用 Bundle ID、论文 URL、标题、来源平台、年份、
 
 由跨模块确认创建的科研会话额外返回 `context_provenance`，完整保存服务端来源引用、确认时间和用户最终确认内容。科研对话服务在每轮消息处理时从会话记录加载该快照：Runtime 请求通过 `confirmed_learning_context` 接收完整背景，离线规则也识别其存在并只追问画像中尚未明确的研究选择。来源快照不随后续对话修改，普通科研会话的该字段为 `null`。
 
+科研对话历史由业务数据库的 `messages_data` 恢复并显式转换为 Kernel `Message`。当完整 system、结构化画像、confirmed context、当前用户输入和历史超过 Research 上下文预算时，应用只压缩摘要边界后尚未覆盖的旧消息；`context_summary_data` 保存可复用摘要、覆盖边界、来源消息数、更新时间、生成方式和审计 run id。压缩失败继续使用原始消息并保留上一份有效摘要。
+
+Research 与 CLI 共同依赖 `ConversationStateStore` 的“业务 ID + Host scope”显式加载契约，并通过泛型 `ContextAssembler` 注入各自上下文策略。Research 使用可持久化摘要和画像/confirmed context 预算；CLI 首期保留完整最近主对话轮次。共享协议不统一两者的 ORM schema、业务字段或恢复权限。
+
 ## 4. Runtime、Provider 与工具接口
 
 ### Runtime
@@ -92,6 +98,8 @@ AgentSpec + RuntimeRequest
           ↓ AgentRuntime.run(...)
 RuntimeResult + Event JSONL
 ```
+
+`RuntimeRequest.conversation_history` 由业务 Host 显式提供。Runtime 按 system → conversation history → current user 组装消息；system 与当前 user 固定 pinned，历史可由上下文策略处理。`session_id` 仍只组织 Event 文件，不触发历史读取或恢复。
 
 动态科研对话、显式触发的研究产物个性化、Provider 连接测试，以及可选的练习评价与引导使用该接口，均不授予工具权限。模型不可用或结构无效时，科研回退到规则，练习保留执行器与规则结果并把 AI 标记为禁用或不可用。对话 reducer 完成画像校验后，`research-plan.v1` 由应用规则派生，不产生新的 Agent run，也不访问 Provider 或网络。兼容五字段流程仍通过统一 Provider 契约调用 `complete()`；超时由供应商 SDK 传输层配置。
 
@@ -117,6 +125,7 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 | 标识 | 作用 | 不代表什么 |
 | --- | --- | --- |
 | Runtime `session_id` | 组织同一来源的 Event JSONL | 业务状态、身份或自动恢复的对话 |
+| CLI `conversation_id` | 通过显式 `shell --resume` 恢复当前项目的主对话消息 | Runtime Event 分组、`run_id`、跨项目恢复或 branch 状态 |
 | 学习 `session_id` | 隔离 `notebook_items` 并关联学习 run | 用户账号或跨设备会话 |
 | 上下文 `id` + 来源 `session_id` | 恢复待确认快照，并在显式确认后绑定一个科研会话 | 身份授权、未经确认的 Research 写入或工具权限 |
 | 练习 `learner_id` | 筛选独立 SQLite 中的匿名练习摘要 | 身份、授权或防止他人读取已知 UUID |
@@ -127,11 +136,11 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 
 研究笔记仍由学习 `session_id` 隔离；其 `extra_data` 保存 `research-notebook-note.v1`，包括来源 Conversation、Bundle、选中 Evidence 和下一步建议。当前字符串 `item_type` 与 JSON 扩展列可直接承载该类型，不新增数据库列。
 
-业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。当前业务表包括 `notebook_items`、`context_transfers`、`research_sessions`、`research_conversations` 和 `research_evidence_bundles`。Runtime Event 单独写入 JSONL，不作为业务数据库。
+业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。`cli_conversations` 按规范化项目根目录隔离 shell 主对话；Research 与 CLI 分别保留 `research_conversations` 和 `cli_conversations`，不共用全局 Agent 会话表。Runtime Event 单独写入 JSONL，不作为业务数据库。
 
 练习记录当前例外地使用 `COMPILER_DATABASE_PATH` 指向独立 SQLite，并由模块自行创建 `learning_records` 表；它不进入共享 SQLAlchemy Base 或 Alembic。记录保存匿名 UUID、规则与 AI 摘要、代码哈希、代码大小和运行指标，不保存原始代码与标准输入。该路径属于本地原型，生产化前必须统一迁移、所有权和删除规则。
 
-schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
+schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；`research_context_summary_v1` 增加 Research 跨 run 摘要，`cli_conversations_v1` 增加项目作用域内的 CLI shell 主对话。启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
 
 ## 6. 架构变更条件
 

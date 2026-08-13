@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from code_navi.online_compiler.ai_evaluation import AiEvaluator
+from code_navi.online_compiler.ai_evaluation import AiEvaluator, ProblemOrganizer
 from code_navi.online_compiler.application import CompilerApplication
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
 from code_navi.online_compiler.piston import ExecutionLimits, ExecutionResult, RuntimeInfo
+from code_navi.online_compiler.problem_imports import ImportedProblem
 
 
 class FakePistonGateway:
@@ -56,6 +57,14 @@ class FakeAiEvaluator(AiEvaluator):
         assert source
         assert result.outcome == assessment.category == "success"
         return AiFeedback("命名清晰。", ("增加边界用例",), QualityRubric(90, 80, 70))
+
+
+class FakeProblemOrganizer(ProblemOrganizer):
+    def organize(
+        self, problems: list[ImportedProblem], learner_id: str | None = None
+    ) -> tuple[list[ImportedProblem], list[str]]:
+        assert learner_id == "learner-1"
+        return list(reversed(problems)), ["AI 仅调整了练习顺序。"]
 
 
 def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
@@ -216,3 +225,128 @@ def test_execute_can_disable_ai_for_one_run() -> None:
     assert response.body["ai"]["status"] == "disabled"
     assert "evaluationId" not in response.body["ai"]
     assert evaluator.calls == 0
+
+
+def test_problem_import_analyzes_and_orders_uploaded_text() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import(
+        {
+            "text": """
+题目一：括号序列校验
+描述：判断只包含圆括号、方括号和花括号的字符串是否正确闭合。
+输入：一行括号字符串
+输出：VALID 或 INVALID
+样例：{[()]}
+
+题目二：整数列表求和
+描述：读取一行以空格分隔的整数，输出所有整数之和。
+输入：空格分隔的整数
+输出：一个整数
+样例：12 8 -3 5
+"""
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "deterministic_rule"
+    titles = [item["title"] for item in response.body["problems"]]
+    assert titles == ["整数列表求和", "括号序列校验"]
+    first = response.body["problems"][0]
+    assert first["difficulty"] == "easy"
+    assert "列表" in first["tags"]
+    assert first["starterCode"]
+
+
+def test_problem_import_rejects_invalid_payload_before_gateway_call() -> None:
+    gateway = FakePistonGateway()
+    app = CompilerApplication(gateway, Settings())
+
+    response = app.analyze_problem_import({"text": ""})
+
+    assert response.status_code == 400
+    assert "text" in response.body["error"]
+    assert gateway.calls == []
+
+
+def test_problem_import_does_not_fabricate_problem_from_plain_notes() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import({"text": "今天下午讨论项目进度，记得带电脑。"})
+
+    assert response.status_code == 200
+    assert response.body["problems"] == []
+    assert "未能" in response.body["warnings"][0]
+
+
+def test_problem_import_does_not_fabricate_problem_from_empty_json() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import({"filename": "problems.json", "text": "[]"})
+
+    assert response.status_code == 200
+    assert response.body["problems"] == []
+    assert "未能" in response.body["warnings"][0]
+
+
+def test_problem_import_accepts_json_file_and_extracts_sample_tests() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import(
+        {
+            "filename": "题库.json",
+            "text": (
+                '[{"title":"回文","description":"判断字符串是否回文",'
+                '"input":"一行字符串","output":"YES 或 NO",'
+                '"sampleTests":[{"stdin":"level","expectedOutput":"YES"}]}]'
+            ),
+        }
+    )
+
+    assert response.status_code == 200
+    problem = response.body["problems"][0]
+    assert problem["title"] == "回文"
+    assert problem["sampleTests"] == [{"stdin": "level", "expectedOutput": "YES"}]
+
+
+def test_problem_import_accepts_csv_file() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import(
+        {
+            "filename": "题库.csv",
+            "text": "title,description,input,output\n求和,输出两个数之和,两个整数,一个整数\n",
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["problems"][0]["title"] == "求和"
+
+
+def test_problem_import_reports_ai_organization_source_when_changed() -> None:
+    app = CompilerApplication(
+        FakePistonGateway(),
+        Settings(),
+        organizer=FakeProblemOrganizer(),
+    )
+
+    response = app.analyze_problem_import(
+        {
+            "learnerId": "learner-1",
+            "text": """
+题目一：整数列表求和
+描述：读取一行以空格分隔的整数，输出所有整数之和。
+输入：空格分隔的整数
+输出：一个整数
+
+题目二：字符串回文判断
+描述：判断字符串是否为回文。
+输入：一行字符串
+输出：YES 或 NO
+""",
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "rules_with_ai_organization"
+    assert response.body["warnings"] == ["AI 仅调整了练习顺序。"]

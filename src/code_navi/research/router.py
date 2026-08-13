@@ -39,6 +39,8 @@ from .conversation_schemas import (
     SaveResearchNotebookNoteRequest,
     SelectedCitation,
     SendResearchMessageRequest,
+    SubmissionProfile,
+    SubmissionProfileInput,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
@@ -183,6 +185,43 @@ def get_conversation(
     """Restore a conversation without performing another Agent run."""
     try:
         return _conversation_service.get(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.put(
+    "/conversations/{conversation_id}/submission-profile",
+    response_model=SubmissionProfile,
+)
+def save_submission_profile(
+    conversation_id: str,
+    request: SubmissionProfileInput,
+    db: Session = _db_dependency,
+) -> SubmissionProfile:
+    """Save only user-known submission constraints; this route never fetches venue rules."""
+    try:
+        return _conversation_service.save_submission_profile(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/submission-profile",
+    response_model=SubmissionProfile | None,
+)
+def get_submission_profile(
+    conversation_id: str,
+    db: Session = _db_dependency,
+) -> SubmissionProfile | None:
+    """Restore a local submission profile without a model call or network activity."""
+    try:
+        return _conversation_service.get_submission_profile(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

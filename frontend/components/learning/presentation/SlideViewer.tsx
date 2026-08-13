@@ -15,6 +15,7 @@ import {
   Loader2,
   Presentation as PresentationIcon,
   Download,
+  FileQuestion,
 } from "lucide-react";
 import type {
   PresentationGenerationMode,
@@ -34,6 +35,12 @@ interface SlideViewerProps {
   exporting?: boolean;
   generationMode?: PresentationGenerationMode;
   providerName?: string;
+  /**
+   * When provided, a "generate companion exercises" action is rendered in the
+   * top bar. Optional so the read-only preview in the notebook drawer stays
+   * without it.
+   */
+  onGenerateQuiz?: () => void;
 }
 
 function ThumbPlaceholder() {
@@ -55,6 +62,7 @@ export function SlideViewer({
   exporting,
   generationMode,
   providerName,
+  onGenerateQuiz,
 }: SlideViewerProps) {
   const mainRef = useRef<HTMLDivElement>(null);
   const [mainWidth, setMainWidth] = useState(800);
@@ -163,6 +171,16 @@ export function SlideViewer({
               下一页
               <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.5} />
             </button>
+            {onGenerateQuiz && (
+              <button
+                type="button"
+                onClick={onGenerateQuiz}
+                className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-purple-600 px-3 py-1.5 text-xs font-medium text-white transition hover:from-violet-500 hover:to-purple-500 dark:from-violet-500 dark:to-purple-500"
+              >
+                <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
+                根据 PPT 生成配套练习题
+              </button>
+            )}
             {onExport && (
               <button
                 type="button"

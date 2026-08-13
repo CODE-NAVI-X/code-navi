@@ -7,7 +7,7 @@ description: 以可恢复对话收集学生确认的研究画像，并在规则�
 
 ## 版本与用途
 
-- 版本：`0.3.0`
+- 版本：`1.2.0`
 - 用途：将模糊想法整理为可审阅的 `ResearchProfile`，为规则研究计划和用户主动的学术检索提供输入。
 
 ## 对话策略
@@ -39,7 +39,7 @@ description: 以可恢复对话收集学生确认的研究画像，并在规则�
 
 ## 输入与输出
 
-- 输入：`research-conversation.v1` 的会话标识、历史消息、用户自由文本或推荐项，以及已保存画像。
+- 输入：Runtime 显式 `conversation_history`、当前用户消息、已保存 `ResearchProfile`，以及可选的 `confirmed_learning_context`。当前用户消息只出现在本轮结构化输入中，历史不再重复编码为 JSON 字段。
 - 输出：更新后的会话、`ResearchProfile`、下一轮问题/三个可选建议、`generation_mode`；画像可支撑规划时由应用生成规则 `research-plan.v1`。
 
 ## 规则层与模型层边界

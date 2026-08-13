@@ -9,12 +9,13 @@ from time import monotonic, perf_counter
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from .ai_evaluation import AiEvaluationError, AiEvaluator, AiTutor
+from .ai_evaluation import AiEvaluationError, AiEvaluator, AiTutor, ProblemOrganizer
 from .config import Settings
 from .evaluation import AiFeedback, RuleAssessment, classify_execution
 from .judging import JudgeResult, judge_submission
 from .learning_records import LearningRecordStore
 from .piston import ExecutionLimits, ExecutionResult, PistonError, RuntimeInfo
+from .problem_imports import ImportedProblem, analyze_problem_text
 from .problems.catalog import build_default_problem_repository
 from .problems.repository import ProblemRepository
 
@@ -77,6 +78,18 @@ PENDING_SUBMISSION_TTL_SECONDS = 900.0
 MAX_PENDING_SUBMISSIONS = 256
 
 
+def _problem_organization_changed(
+    original: list[ImportedProblem], organized: list[ImportedProblem]
+) -> bool:
+    return [
+        (problem.import_id, problem.difficulty, problem.tags, problem.order_reason)
+        for problem in original
+    ] != [
+        (problem.import_id, problem.difficulty, problem.tags, problem.order_reason)
+        for problem in organized
+    ]
+
+
 class CompilerApplication:
     """Validate public requests and expose stable compiler responses."""
 
@@ -87,6 +100,7 @@ class CompilerApplication:
         *,
         evaluator: AiEvaluator | None = None,
         tutor: AiTutor | None = None,
+        organizer: ProblemOrganizer | None = None,
         ai_status: str = "disabled",
         ai_message: str = "未配置 AI 模型，规则识别仍可使用。",
         record_store: LearningRecordStore | None = None,
@@ -96,6 +110,7 @@ class CompilerApplication:
         self._settings = settings
         self._evaluator = evaluator
         self._tutor = tutor
+        self._organizer = organizer
         self._ai_status = ai_status
         self._ai_message = ai_message
         self._record_store = record_store
@@ -356,6 +371,59 @@ class CompilerApplication:
         except (OSError, ValueError, sqlite3.Error):
             return ApiResponse(503, {"error": "学习记录服务暂时不可用。"})
         return ApiResponse(200, {"records": [record.as_dict() for record in records]})
+
+    def analyze_problem_import(self, payload: Any) -> ApiResponse:
+        """Convert uploaded exercise text into a reviewable ordered problem list."""
+
+        try:
+            text, filename, learner_id = self._validate_problem_import_payload(payload)
+        except ValidationError as error:
+            return ApiResponse(400, {"error": str(error)})
+        problems = analyze_problem_text(text, filename=filename)
+        organizer_warnings: list[str] = []
+        source = "deterministic_rule"
+        if self._organizer is not None and problems:
+            try:
+                organized, organizer_warnings = self._organizer.organize(problems, learner_id)
+                if _problem_organization_changed(problems, organized):
+                    source = "rules_with_ai_organization"
+                problems = organized
+            except AiEvaluationError:
+                organizer_warnings = ["AI 整理暂不可用，当前结果来自规则解析。"]
+        return ApiResponse(
+            200,
+            {
+                "source": source,
+                "problems": [problem.as_dict() for problem in problems],
+                "warnings": (
+                    organizer_warnings
+                    if problems and organizer_warnings
+                    else []
+                    if problems
+                    else ["未能从上传内容中识别到题目，请补充题目描述、输入和输出说明。"]
+                ),
+            },
+        )
+
+    def _validate_problem_import_payload(self, payload: Any) -> tuple[str, str | None, str | None]:
+        if not isinstance(payload, dict):
+            raise ValidationError("request body must be a JSON object")
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValidationError("text is required")
+        if "\x00" in text:
+            raise ValidationError("text must not contain null bytes")
+        if len(text.encode("utf-8")) > 64 * 1024:
+            raise ValidationError("text exceeds the 64 KiB import limit")
+        filename = payload.get("filename")
+        if filename is not None and (
+            not isinstance(filename, str) or len(filename) > 160 or "\x00" in filename
+        ):
+            raise ValidationError("filename is invalid")
+        learner_id = payload.get("learnerId")
+        if learner_id is not None and not isinstance(learner_id, str):
+            raise ValidationError("learnerId must be a string")
+        return text.strip(), filename, learner_id
 
     def _validate_submit_payload(self, payload: Any) -> tuple[str, int, str, str | None]:
         if not isinstance(payload, dict):

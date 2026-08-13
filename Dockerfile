@@ -24,6 +24,8 @@ RUN groupadd --system --gid 10001 code-navi \
     && chown -R code-navi:code-navi /workspace /data
 
 COPY --from=builder /opt/venv /opt/venv
+COPY migrations/ /opt/code-navi/migrations/
+COPY alembic.ini /opt/code-navi/alembic.ini
 
 USER code-navi
 WORKDIR /workspace

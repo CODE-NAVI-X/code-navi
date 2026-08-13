@@ -25,7 +25,7 @@ npm ci
 
 | 任务 | 先定位 |
 | --- | --- |
-| CLI 问答 | `src/code_navi/cli.py`、`application.py`、`context.py` |
+| CLI 问答 | `src/code_navi/cli.py`、`application.py`、`context.py`、`cli_conversation.py` |
 | 学习 API | `src/code_navi/learning/`、`frontend/lib/api/learning.ts`、学习页面 |
 | 跨模块上下文 | `src/code_navi/context_transfer/`、`frontend/lib/api/context-transfers.ts`、来源页面和目标确认页面 |
 | Python 练习与判题 | `src/code_navi/online_compiler/`、`frontend/lib/api/compiler.ts`、练习页面、`tests/online_compiler/` |
