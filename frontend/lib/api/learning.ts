@@ -7,6 +7,14 @@
  * All requests go to ``POST /api/v1/learning/explain``.
  */
 
+// Type-only imports are erased at compile time, so ``quiz.ts`` may keep
+// importing ``API_BASE`` from this module without a runtime import cycle.
+import type {
+  GradeQuizRequest,
+  QuizGradeResponse,
+  QuizQuestionGradeResult,
+} from "@/lib/api/quiz";
+
 // ── Data types (mirrors backend ExplainRequest / Citation / ExplainResponse) ────
 
 export interface ExplainRequest {
@@ -25,6 +33,8 @@ export interface CitationItem {
 export interface ExplainResponse {
   knowledge_point: string;
   session_id: string;
+  /** Id of the archived summary notebook item, used for learning → research. */
+  notebook_item_id?: string | null;
   summary: string;
   detail?: string | null;
   citations: CitationItem[];
@@ -71,7 +81,7 @@ function newSessionId(): string {
 
 // ── API base URL ───────────────────────────────────────────────────────────────
 
-const API_BASE =
+export const API_BASE =
   process.env.NEXT_PUBLIC_CODE_NAVI_API_URL ??
   process.env.NEXT_PUBLIC_API_BASE ??
   "http://localhost:8000";
@@ -132,6 +142,53 @@ export async function explainKnowledgePoint(
   return validateExplainResponse(body);
 }
 
+// ── Quiz grading (LLM 判分) ─────────────────────────────────────────────────────
+// The request/response types live in ``quiz.ts``; the method lives here so the
+// learning client owns the quiz-grade call, matching the module's API layout.
+
+/**
+ * POST /api/v1/learning/quiz/grade — grade fill_blank / short_answer answers
+ * through the LLM and return per-question scores plus Chinese analysis
+ * comments (or an honest offline fallback, never a faked verdict).
+ *
+ * Single-choice items are graded client-side and must not be included in
+ * ``student_answers``.
+ */
+export async function gradeQuizAnswers(
+  request: GradeQuizRequest,
+): Promise<QuizGradeResponse> {
+  const url = `${API_BASE}/api/v1/learning/quiz/grade`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: request.session_id,
+        quiz_id: request.quiz_id,
+        student_answers: request.student_answers,
+      }),
+    });
+  } catch (networkError) {
+    throw new LearningApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new LearningApiError(
+      response.status,
+      detail ?? `Request failed with status ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response.json();
+  return validateGradeResponse(body);
+}
+
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
 async function extractErrorDetail(response: Response): Promise<string | null> {
@@ -186,10 +243,60 @@ function validateExplainResponse(raw: unknown): ExplainResponse {
   return {
     knowledge_point: obj.knowledge_point as string,
     session_id: obj.session_id as string,
+    notebook_item_id:
+      typeof obj.notebook_item_id === "string"
+        ? (obj.notebook_item_id as string)
+        : undefined,
     summary: obj.summary as string,
     detail:
       typeof obj.detail === "string" ? (obj.detail as string) : undefined,
     citations,
+  };
+}
+
+function validateGradeResponse(raw: unknown): QuizGradeResponse {
+  if (!raw || typeof raw !== "object") {
+    throw new LearningApiError(502, "Server returned a non-object response.");
+  }
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.session_id !== "string") {
+    throw new LearningApiError(502, "Response missing 'session_id' field.");
+  }
+
+  const results: QuizQuestionGradeResult[] = [];
+  if (Array.isArray(obj.results)) {
+    for (const item of obj.results) {
+      if (item && typeof item === "object") {
+        const r = item as Record<string, unknown>;
+        results.push({
+          question_id: typeof r.question_id === "string" ? r.question_id : "",
+          type: r.type === "fill_blank" ? "fill_blank" : "short_answer",
+          score: typeof r.score === "number" ? r.score : 0,
+          max_score: typeof r.max_score === "number" ? r.max_score : 0,
+          is_correct: r.is_correct === true,
+          comment: typeof r.comment === "string" ? (r.comment as string) : null,
+          is_mock: r.is_mock === true,
+          graded: r.graded !== false,
+        });
+      }
+    }
+  }
+
+  return {
+    session_id: obj.session_id as string,
+    results,
+    generation_mode:
+      typeof obj.generation_mode === "string" ? (obj.generation_mode as string) : "mock",
+    provider_name:
+      typeof obj.provider_name === "string" ? (obj.provider_name as string) : "mock",
+    total_score:
+      typeof obj.total_score === "number"
+        ? (obj.total_score as number)
+        : results.reduce((sum, r) => sum + (r.graded ? r.score : 0), 0),
+    total_max_score:
+      typeof obj.total_max_score === "number"
+        ? (obj.total_max_score as number)
+        : results.reduce((sum, r) => sum + (r.graded ? r.max_score : 0), 0),
   };
 }
 

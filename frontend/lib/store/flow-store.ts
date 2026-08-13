@@ -7,9 +7,11 @@ export interface FlowPayload {
     name: string;
   };
   studentPersona: "academic" | "software_coursework" | "cross_disciplinary";
-  targetModule: "practice";
+  targetModule: "practice" | "research";
   payloadData: {
     exerciseIds?: string[];
+    /** Seed topic handed to the research conversation, when leaving from learning. */
+    researchTopic?: string;
   };
 }
 

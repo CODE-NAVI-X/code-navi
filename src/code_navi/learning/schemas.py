@@ -60,6 +60,14 @@ class ExplainResponse(BaseModel):
         ...,
         description="Effective session identifier; persist it to scope later notebook reads.",
     )
+    notebook_item_id: str | None = Field(
+        default=None,
+        description=(
+            "Id of the archived summary notebook item backing this explanation; "
+            "the client uses it to open the learning → research context-transfer "
+            "confirm flow for this exact record."
+        ),
+    )
     summary: str = Field(..., description="Concise explanation of the knowledge point.")
     detail: str | None = Field(
         default=None,
