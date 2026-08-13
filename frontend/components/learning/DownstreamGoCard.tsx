@@ -2,9 +2,12 @@
 
 import { useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { setFlowPayload } from "@/lib/store/flow-store";
 import { getLearningSessionId } from "@/lib/api/learning";
-import { Target, Terminal, X } from "lucide-react";
+import {
+  navigateToPractice,
+  navigateToResearch,
+} from "@/lib/learning-context";
+import { Target, Terminal, GraduationCap, X } from "lucide-react";
 
 interface DownstreamGoCardProps {
   knowledgePoint: string;
@@ -24,21 +27,21 @@ export function DownstreamGoCard({
   const handleGoToPractice = useCallback(() => {
     // Resolved on click, so an unmounted-yet parent never forwards an empty id.
     const effectiveSessionId = sessionId || getLearningSessionId();
-    setFlowPayload({
+    navigateToPractice(router, {
+      knowledgePoint,
+      knowledgePointId,
       sessionId: effectiveSessionId,
-      masteredKnowledgePoint: {
-        id: knowledgePointId,
-        name: knowledgePoint,
-      },
-      studentPersona: "software_coursework",
-      targetModule: "practice",
-      payloadData: {
-        exerciseIds: ["ex_practice_01", "ex_practice_02"],
-      },
+      exerciseIds: ["ex_practice_01", "ex_practice_02"],
     });
-    router.push(
-      `/student/practice?knowledge_id=${encodeURIComponent(knowledgePointId)}&session_id=${encodeURIComponent(effectiveSessionId)}`
-    );
+  }, [knowledgePoint, knowledgePointId, sessionId, router]);
+
+  const handleGoToResearch = useCallback(() => {
+    const effectiveSessionId = sessionId || getLearningSessionId();
+    navigateToResearch(router, {
+      knowledgePoint,
+      knowledgePointId,
+      sessionId: effectiveSessionId,
+    });
   }, [knowledgePoint, knowledgePointId, sessionId, router]);
 
   return (
@@ -67,7 +70,7 @@ export function DownstreamGoCard({
         已掌握知识点：<span className="font-semibold text-slate-900 dark:text-zinc-100">{knowledgePoint}</span>
       </p>
 
-      <div>
+      <div className="grid grid-cols-1 gap-2">
         <button
           onClick={handleGoToPractice}
           className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-2xs transition hover:bg-slate-800 active:scale-98 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
@@ -75,8 +78,14 @@ export function DownstreamGoCard({
           <Terminal className="h-3.5 w-3.5" strokeWidth={1.5} />
           软件工程实践
         </button>
+        <button
+          onClick={handleGoToResearch}
+          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3 py-2 text-xs font-medium text-white shadow-2xs transition hover:from-indigo-500 hover:to-violet-500 active:scale-98 dark:from-indigo-500 dark:to-violet-500"
+        >
+          <GraduationCap className="h-3.5 w-3.5" strokeWidth={1.5} />
+          学术科研路线
+        </button>
       </div>
     </div>
   );
 }
-
