@@ -134,7 +134,7 @@ class QuizGenerateRequest(BaseModel):
         ),
     )
     question_count: int = Field(
-        default=5, ge=1, le=30, description="Total number of questions to generate."
+        default=5, ge=1, le=5, description="Total number of questions to generate."
     )
     question_types: list[QuestionType] | None = Field(
         default=None,

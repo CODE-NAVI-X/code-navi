@@ -160,6 +160,80 @@ class TestQuizGenerator:
         )
         assert response.session_id.startswith("sess-")
 
+    @pytest.mark.parametrize("question_count", [1, 3, 5])
+    def test_generate_honors_requested_count(
+        self, db: Session, question_count: int
+    ) -> None:
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                session_id=f"sess-count-{question_count}",
+                question_count=question_count,
+            ),
+            db,
+        )
+
+        assert len(response.questions) == question_count
+        assert len({question.id for question in response.questions}) == question_count
+
+    def test_generate_honors_selected_question_type(self, db: Session) -> None:
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                session_id="sess-single-only",
+                question_count=5,
+                question_types=["single"],
+            ),
+            db,
+        )
+
+        assert len(response.questions) == 5
+        assert {question.type for question in response.questions} == {"single"}
+        assert len({question.question for question in response.questions}) == 5
+
+    def test_generate_rejects_unstable_large_paper(self) -> None:
+        with pytest.raises(ValueError):
+            QuizGenerateRequest(knowledge_point="集合", question_count=6)
+
+    def test_parse_questions_rejects_partial_model_paper(self) -> None:
+        questions = QuizGenerator()._parse_questions(
+            json.dumps(
+                [
+                    {
+                        "id": "q1",
+                        "type": "fill_blank",
+                        "question": "x = ______",
+                        "answer": ["1"],
+                        "analysis": "解析",
+                        "points": 10,
+                    }
+                ]
+            ),
+            requested_count=2,
+            allowed_types=["fill_blank"],
+            default_web=False,
+        )
+
+        assert questions == []
+
+    def test_parse_questions_rejects_duplicate_ids(self) -> None:
+        raw_question = {
+            "id": "duplicate",
+            "type": "fill_blank",
+            "question": "x = ______",
+            "answer": ["1"],
+            "analysis": "解析",
+            "points": 10,
+        }
+        questions = QuizGenerator()._parse_questions(
+            json.dumps([raw_question, raw_question]),
+            requested_count=2,
+            allowed_types=["fill_blank"],
+            default_web=False,
+        )
+
+        assert questions == []
+
     def test_load_quiz_is_session_scoped(self, db: Session) -> None:
         gen = QuizGenerator()
         quiz_a = gen.generate(
@@ -527,7 +601,7 @@ class TestSourceAndReview:
             '{"summary": "修订完成", "questions": [{"type": "single", "question": "x?", '
             '"options": ["甲", "乙"], "answer": ["A"], "analysis": "…", "points": 10}]}',
             ["single"],
-            5,
+            1,
             default_web=False,
         )
         assert summary == "修订完成"
@@ -663,8 +737,16 @@ class TestQuizGrader:
 
 
 class TestParseGradeResults:
+    @staticmethod
+    def _questions() -> list[QuizQuestion]:
+        return [
+            question
+            for question in _mock_questions("集合")
+            if question.type in ("fill_blank", "short_answer")
+        ]
+
     def test_accepts_valid_json(self) -> None:
-        questions = _mock_questions("集合")
+        questions = self._questions()
         results = _parse_grade_results(
             '[{"question_id": "q2", "score": 10, "comment": "答对了"}, '
             '{"question_id": "q3", "score": 15, "comment": "思路清晰，缺一步"}]',
@@ -678,7 +760,7 @@ class TestParseGradeResults:
         assert by_id["q3"].score == 15 and by_id["q3"].is_correct is False  # 20 pts max
 
     def test_clamps_score_to_question_bounds(self) -> None:
-        questions = _mock_questions("集合")
+        questions = self._questions()
         results = _parse_grade_results(
             '[{"question_id": "q2", "score": 99, "comment": "超分"}, '
             '{"question_id": "q3", "score": -5, "comment": "负分"}]',
@@ -690,24 +772,41 @@ class TestParseGradeResults:
         assert by_id["q3"].score == 0  # q3 max 20, floor 0
 
     def test_rejects_invalid_payloads(self) -> None:
-        questions = _mock_questions("集合")
+        questions = self._questions()
         assert _parse_grade_results("not json", questions) is None
         assert _parse_grade_results('{"not": "an array"}', questions) is None
         assert _parse_grade_results("[]", questions) is None
 
-    def test_ignores_unknown_question_ids(self) -> None:
-        questions = _mock_questions("集合")
+    def test_rejects_partial_results(self) -> None:
+        questions = self._questions()
+        assert _parse_grade_results(
+            '[{"question_id": "q2", "score": 10}]',
+            questions,
+        ) is None
+
+    def test_rejects_duplicate_results(self) -> None:
+        questions = self._questions()
+        assert _parse_grade_results(
+            '[{"question_id": "q2", "score": 10}, '
+            '{"question_id": "q2", "score": 10}, '
+            '{"question_id": "q3", "score": 15}]',
+            questions,
+        ) is None
+
+    def test_ignores_unknown_question_ids_when_expected_results_are_complete(self) -> None:
+        questions = self._questions()
         results = _parse_grade_results(
             '[{"question_id": "nope", "score": 10}, '
-            '{"question_id": "q2", "score": 10}]',
+            '{"question_id": "q2", "score": 10}, '
+            '{"question_id": "q3", "score": 15}]',
             questions,
         )
+
         assert results is not None
-        assert len(results) == 1
-        assert results[0].question_id == "q2"
+        assert {result.question_id for result in results} == {"q2", "q3"}
 
     def test_mock_payload_round_trips_graded_and_is_mock(self) -> None:
-        questions = _mock_questions("集合")
+        questions = self._questions()
         answers_map = {"q2": ["3"], "q3": ["证明"]}
         mock = _mock_grade_results(questions, answers_map)
         raw = json.dumps([r.model_dump() for r in mock], ensure_ascii=False)

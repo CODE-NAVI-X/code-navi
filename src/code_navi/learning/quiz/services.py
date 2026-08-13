@@ -85,54 +85,118 @@ class QuizNotFoundError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _mock_questions(knowledge_point: str) -> list[QuizQuestion]:
+def _mock_questions(
+    knowledge_point: str,
+    question_count: int = 3,
+    question_types: list[QuestionType] | None = None,
+) -> list[QuizQuestion]:
     """Deterministic offline quiz used when no online provider is configured.
 
-    Contains all three types and real LaTeX so the exporter can be exercised
-    end-to-end with zero credentials.
+    Honors the requested count and type selection so offline mode exercises the
+    same public contract as an online provider. The default keeps the original
+    three-question fixture used by focused parser and grading tests.
     """
-    return [
-        QuizQuestion(
-            id="q1",
-            type="single",
-            question=(
-                "设集合 $A = \\{1, 2, 3\\}$，$B = \\{3, 4, 5\\}$，则 $A \\cap B$ 为（　）"
-            ),
-            options=[
-                QuizOption(label="$\\{1, 3\\}$", value="A"),
-                QuizOption(label="$\\{3\\}$", value="B"),
-                QuizOption(label="$\\{1, 2, 3, 4, 5\\}$", value="C"),
-                QuizOption(label="$\\varnothing$", value="D"),
-            ],
-            answer=["B"],
-            analysis="两集合共有的元素只有 3。",
-            points=10,
-        ),
-        QuizQuestion(
-            id="q2",
-            type="fill_blank",
-            question=f"关于「{knowledge_point}」，若 $x + 2 = 5$，则 $x = $ ______。",
-            answer=["3"],
-            analysis="移项得 x = 5 - 2 = 3。",
-            points=10,
-        ),
-        QuizQuestion(
-            id="q3",
-            type="short_answer",
-            question=(
-                f"证明：关于「{knowledge_point}」的集合 $A$ 与 $B$ 满足 "
-                f"$A \\subseteq B$ 当且仅当 $A \\cap B = A$。"
-            ),
-            answer=None,
-            analysis=(
-                "必要性：若 A⊆B，则 A∩B 中任一元素同时属于 A 与 B，故 A∩B⊆A；"
-                "又 A⊆B 且 A⊆A，所以 A⊆A∩B，故 A∩B=A。"
-                "充分性：若 A∩B=A，则任一 a∈A 也属于 A∩B⊆B，故 A⊆B。"
-            ),
-            points=20,
-            comment_prompt="(1) 证明必要性与充分性两个方向 - 60% (2) 集合运算正确性 - 40%",
-        ),
-    ]
+    types = question_types or list(_ALL_TYPES)
+    occurrences = {question_type: 0 for question_type in _ALL_TYPES}
+    questions: list[QuizQuestion] = []
+
+    for index in range(question_count):
+        question_type = types[index % len(types)]
+        occurrence = occurrences[question_type]
+        occurrences[question_type] += 1
+        question_id = f"q{index + 1}"
+
+        if question_type == "single" and occurrence == 0:
+            question = QuizQuestion(
+                id=question_id,
+                type="single",
+                question=(
+                    "设集合 $A = \\{1, 2, 3\\}$，$B = \\{3, 4, 5\\}$，则 $A \\cap B$ 为（　）"
+                ),
+                options=[
+                    QuizOption(label="$\\{1, 3\\}$", value="A"),
+                    QuizOption(label="$\\{3\\}$", value="B"),
+                    QuizOption(label="$\\{1, 2, 3, 4, 5\\}$", value="C"),
+                    QuizOption(label="$\\varnothing$", value="D"),
+                ],
+                answer=["B"],
+                analysis="两集合共有的元素只有 3。",
+                points=10,
+            )
+        elif question_type == "single":
+            question = QuizQuestion(
+                id=question_id,
+                type="single",
+                question=(
+                    f"学习「{knowledge_point}」时，以下哪项最能检验对第 {occurrence + 1} "
+                    "个核心概念的理解？"
+                ),
+                options=[
+                    QuizOption(label="只背诵标题", value="A"),
+                    QuizOption(label="解释原理并应用到新例子", value="B"),
+                    QuizOption(label="跳过推导过程", value="C"),
+                    QuizOption(label="只核对最终答案", value="D"),
+                ],
+                answer=["B"],
+                analysis="能够解释原理并迁移应用，才能直接检验概念理解。",
+                points=10,
+            )
+        elif question_type == "fill_blank" and occurrence == 0:
+            question = QuizQuestion(
+                id=question_id,
+                type="fill_blank",
+                question=f"关于「{knowledge_point}」，若 $x + 2 = 5$，则 $x = $ ______。",
+                answer=["3"],
+                analysis="移项得 x = 5 - 2 = 3。",
+                points=10,
+            )
+        elif question_type == "fill_blank":
+            addend = occurrence + 2
+            question = QuizQuestion(
+                id=question_id,
+                type="fill_blank",
+                question=(
+                    f"运用「{knowledge_point}」完成计算：若 $x + {addend} = {addend + 3}$，"
+                    "则 $x = $ ______。"
+                ),
+                answer=["3"],
+                analysis=f"等式两边同时减去 {addend}，得到 x = 3。",
+                points=10,
+            )
+        elif occurrence == 0:
+            question = QuizQuestion(
+                id=question_id,
+                type="short_answer",
+                question=(
+                    f"证明：关于「{knowledge_point}」的集合 $A$ 与 $B$ 满足 "
+                    "$A \\subseteq B$ 当且仅当 $A \\cap B = A$。"
+                ),
+                answer=None,
+                analysis=(
+                    "必要性：若 A⊆B，则 A∩B 中任一元素同时属于 A 与 B，故 A∩B⊆A；"
+                    "又 A⊆B 且 A⊆A，所以 A⊆A∩B，故 A∩B=A。"
+                    "充分性：若 A∩B=A，则任一 a∈A 也属于 A∩B⊆B，故 A⊆B。"
+                ),
+                points=20,
+                comment_prompt="(1) 证明必要性与充分性两个方向 - 60% (2) 集合运算正确性 - 40%",
+            )
+        else:
+            question = QuizQuestion(
+                id=question_id,
+                type="short_answer",
+                question=(
+                    f"请用自己的话说明「{knowledge_point}」的第 {occurrence + 1} 个核心原理，"
+                    "并给出应用示例。"
+                ),
+                answer=None,
+                analysis="答案应准确说明一个核心原理，并给出与原理一致的具体应用示例。",
+                points=20,
+                comment_prompt="(1) 原理表述准确 - 60% (2) 示例与原理一致 - 40%",
+            )
+
+        questions.append(question)
+
+    return questions
 
 
 def _mock_audit() -> dict:
@@ -335,6 +399,7 @@ def _parse_grade_results(
         return None
     by_id = {q.id: q for q in questions}
     results: list[QuestionGradeResult] = []
+    seen_ids: set[str] = set()
     for entry in data:
         if not isinstance(entry, dict):
             continue
@@ -342,6 +407,9 @@ def _parse_grade_results(
         q = by_id.get(qid)
         if q is None:
             continue
+        if qid in seen_ids:
+            return None
+        seen_ids.add(qid)
         try:
             score = int(entry.get("score") or 0)
         except (TypeError, ValueError):
@@ -362,6 +430,8 @@ def _parse_grade_results(
                 graded=graded,
             )
         )
+    if seen_ids != set(by_id):
+        return None
     return results or None
 
 
@@ -391,7 +461,11 @@ def _parse_revised(
         questions.append(q)
         if len(questions) >= requested_count:
             break
-    return (questions or None), summary
+    if len(questions) != requested_count or len({question.id for question in questions}) != len(
+        questions
+    ):
+        return None, None
+    return questions, summary
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +543,12 @@ class QuizGenerator:
                 # No key / network failure — degrade to honest pure generation.
                 source_mode = "generated"
 
-        offline = json.dumps([q.model_dump() for q in _mock_questions(request.knowledge_point)])
+        offline_questions = _mock_questions(
+            request.knowledge_point,
+            request.question_count,
+            types,
+        )
+        offline = json.dumps([q.model_dump() for q in offline_questions])
         system = build_quiz_system_prompt(
             types,
             student_profile=request.student_profile,
@@ -494,7 +573,7 @@ class QuizGenerator:
         )
         if not questions:
             logger.warning("Quiz payload unparseable; falling back to mock questions.")
-            questions = _mock_questions(request.knowledge_point)[: request.question_count]
+            questions = offline_questions
             generation_mode = "rules_fallback"
         else:
             generation_mode = "rules" if provider_name == "mock" else "model"
@@ -632,6 +711,10 @@ class QuizGenerator:
             questions.append(q)
             if len(questions) >= requested_count:
                 break
+        if len(questions) != requested_count or len(
+            {question.id for question in questions}
+        ) != len(questions):
+            return []
         return questions
 
     def _audit(

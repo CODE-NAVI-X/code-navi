@@ -309,7 +309,7 @@ export function QuizView({
               }
               className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-violet-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
             >
-              {Array.from({ length: 30 }, (_, index) => index + 1).map((count) => (
+              {Array.from({ length: 5 }, (_, index) => index + 1).map((count) => (
                 <option key={count} value={count}>
                   {count} 题
                 </option>
