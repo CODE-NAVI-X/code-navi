@@ -66,6 +66,8 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `GET /api/v1/research/conversations/{conversation_id}/search-plan` | `conversation_id` | 不联网的 `ResearchSearchPlan` |
 | `POST /api/v1/research/conversations/{conversation_id}/evidence-bundles` | 用户确认、查询和允许来源 | OpenAlex、Crossref、arXiv 元数据与摘要组成的 `ConversationEvidenceBundle` |
 | `GET /api/v1/research/conversations/{conversation_id}/evidence-bundles` | `conversation_id` | 已保存的 evidence bundle 列表，不触发联网 |
+| `POST /api/v1/research/conversations/{conversation_id}/citation-quality-checks` | `conversation_id` | 用户显式触发、仅基于当前会话已选择证据的引用完整性快照；不联网、不读全文、不改写正文 |
+| `GET /api/v1/research/conversations/{conversation_id}/citation-quality-checks` | `conversation_id` | 恢复该会话已保存的引用完整性检查历史，不重新执行检查 |
 | `POST /api/v1/research/conversations/{conversation_id}/evidence-bundles/{bundle_id}/notebook-notes` | Learning `session_id` 与用户选择的论文 URL | 校验 Conversation、Bundle 与论文归属，幂等写入可追溯的 `research_note` |
 | `GET /api/v1/research/provider/status` | 无 | 不含密钥的 `ProviderStatusResponse` |
 | `PUT /api/v1/research/provider/configuration`、`POST /api/v1/research/provider/test` | 本机显式配置或测试 | 默认禁用且仅允许 loopback 的 Provider 状态或测试结果 |

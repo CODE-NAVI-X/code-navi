@@ -121,6 +121,17 @@ class ResearchSelectedCitationModel(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
 
+class ResearchCitationQualityCheckModel(Base):
+    """Persisted offline checks over one conversation's selected citations."""
+
+    __tablename__ = "research_citation_quality_checks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String(36), nullable=False, index=True)
+    check_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+
 class ResearchSubmissionReadinessModel(Base):
     __tablename__ = "research_submission_readiness_checks"
 

@@ -12,6 +12,7 @@ from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ApplyRevisionSuggestionRequest,
     CitationCandidate,
+    CitationQualityCheck,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
@@ -350,6 +351,35 @@ def list_reference_entry_drafts(
     """Return readable drafts only for sources the user explicitly retained."""
     try:
         return _conversation_service.list_reference_entry_drafts(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/citation-quality-checks",
+    response_model=CitationQualityCheck,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_citation_quality_check(
+    conversation_id: str, db: Session = _db_dependency
+) -> CitationQualityCheck:
+    """Explicitly inspect saved citation choices without network or draft mutation."""
+    try:
+        return _conversation_service.create_citation_quality_check(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/citation-quality-checks",
+    response_model=list[CitationQualityCheck],
+)
+def list_citation_quality_checks(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[CitationQualityCheck]:
+    """Restore persisted citation checks without re-running them."""
+    try:
+        return _conversation_service.list_citation_quality_checks(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 

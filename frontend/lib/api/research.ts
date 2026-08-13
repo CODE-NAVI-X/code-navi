@@ -477,6 +477,28 @@ export interface SelectedCitation {
   paragraph_anchor: string; citation_placeholder: string; user_note: string | null;
   status: SelectedCitationStatus; reference_entry: ReferenceEntryDraft; created_at: string;
 }
+export type CitationQualityStatus = "empty" | "needs_review" | "review_ready";
+export interface CitationQualityIssue {
+  issue_code: string; message: string; selected_citation_ids: string[];
+  classification: AnalysisClassification; basis: string;
+}
+export interface CitationCoverageItem {
+  target_document: CitationTargetDocument; target_section: string;
+  selected_citation_ids: string[]; source_titles: string[]; citation_placeholders: string[];
+  status: "mapped" | "needs_verification"; classification: "inference";
+  information_scopes: ("metadata_only" | "metadata_and_abstract")[];
+  basis: string; to_verify_items: string[];
+}
+export interface CitationQualityCheck {
+  schema_version: "citation-quality-check.v1"; check_id: string; session_id: string;
+  checked_at: string; quality_status: CitationQualityStatus; selected_source_count: number;
+  unique_source_count: number; mapped_section_count: number;
+  core_section_coverage_percent: number; coverage_items: CitationCoverageItem[];
+  unmapped_core_sections: string[]; uninserted_placeholders: CitationQualityIssue[];
+  duplicate_selections: CitationQualityIssue[]; metadata_gaps: CitationQualityIssue[];
+  author_verification_items: CitationQualityIssue[]; empty_state_message: string | null;
+  boundary_note: string; source_scope: "local_selected_evidence_only";
+}
 export interface SubmissionProfileInput {
   target_venue?: string | null;
   anonymity_required?: boolean | null;
@@ -746,6 +768,12 @@ export async function updateSelectedCitation(selectedCitationId: string, status:
 }
 export async function listReferenceEntryDrafts(conversationId: string): Promise<ReferenceEntryDraft[]> {
   return request<ReferenceEntryDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-entry-drafts`);
+}
+export async function createCitationQualityCheck(conversationId: string): Promise<CitationQualityCheck> {
+  return request<CitationQualityCheck>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`, { method: "POST" });
+}
+export async function listCitationQualityChecks(conversationId: string): Promise<CitationQualityCheck[]> {
+  return request<CitationQualityCheck[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`);
 }
 export async function getSubmissionProfile(conversationId: string): Promise<SubmissionProfile | null> {
   return request<SubmissionProfile | null>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`);
