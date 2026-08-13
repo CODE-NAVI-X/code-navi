@@ -38,6 +38,7 @@ from .conversation_paper_review import (
     parse_paper_sections,
 )
 from .conversation_plan import build_conversation_research_plan
+from .conversation_reference_draft import build_reference_draft_package
 from .conversation_schemas import (
     ApplyRevisionSuggestionRequest,
     CitationCandidate,
@@ -56,6 +57,7 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReferenceDraftPackage,
     ReferenceEntryDraft,
     ResearchContextSummary,
     ResearchConversationDecision,
@@ -542,6 +544,16 @@ class ResearchConversationService:
             for selected in self.list_selected_citations(conversation_id, db)
             if selected.status != "skipped"
         ]
+
+    def get_reference_draft_package(
+        self, conversation_id: str, db: Session
+    ) -> ReferenceDraftPackage:
+        """Return deterministic copy text without search, full text, or draft mutation."""
+        self._get_model(conversation_id, db)
+        return build_reference_draft_package(
+            conversation_id,
+            self.list_selected_citations(conversation_id, db),
+        )
 
     def create_citation_quality_check(
         self, conversation_id: str, db: Session

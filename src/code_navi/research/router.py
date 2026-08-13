@@ -30,6 +30,7 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReferenceDraftPackage,
     ReferenceEntryDraft,
     ResearchConversationResponse,
     ResearchSearchPlan,
@@ -351,6 +352,20 @@ def list_reference_entry_drafts(
     """Return readable drafts only for sources the user explicitly retained."""
     try:
         return _conversation_service.list_reference_entry_drafts(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reference-draft-package",
+    response_model=ReferenceDraftPackage,
+)
+def get_reference_draft_package(
+    conversation_id: str, db: Session = _db_dependency
+) -> ReferenceDraftPackage:
+    """Return stable, traceable text and one consolidated human-review checklist."""
+    try:
+        return _conversation_service.get_reference_draft_package(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 

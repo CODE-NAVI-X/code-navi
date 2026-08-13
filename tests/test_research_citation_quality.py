@@ -136,6 +136,7 @@ def _select(
     paper_index: int,
     target_section: str,
     paragraph_anchor: str,
+    user_note: str | None = None,
 ) -> dict[str, object]:
     paper = bundle["papers"][paper_index]
     response = client.post(
@@ -146,6 +147,7 @@ def _select(
             "target_document": "paper_draft",
             "target_section": target_section,
             "paragraph_anchor": paragraph_anchor,
+            "user_note": user_note,
         },
     )
     assert response.status_code == 201
@@ -277,3 +279,72 @@ def test_quality_check_is_conversation_scoped_and_respects_inserted_status(
     assert second_check.json()["selected_source_count"] == 1
     assert second_check.json()["metadata_gaps"]
     assert first_selection["selected_citation_id"] not in second_check.text
+
+
+def test_reference_draft_package_has_a_safe_empty_state(client: TestClient) -> None:
+    conversation_id = _conversation(client)
+
+    response = client.get(
+        f"/api/v1/research/conversations/{conversation_id}/reference-draft-package"
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["entries"] == []
+    assert result["copy_text"] == ""
+    assert result["verification_items"] == []
+    assert "先主动选择" in result["empty_state_message"]
+
+
+def test_reference_draft_package_is_stable_traceable_and_excludes_private_notes(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation_id = _conversation(client)
+    bundle = _bundle(client, conversation_id)
+    complete = _select(
+        client,
+        conversation_id,
+        bundle,
+        paper_index=0,
+        target_section="相关工作",
+        paragraph_anchor="相关工作-1",
+        user_note="DO_NOT_COPY_PRIVATE_NOTE",
+    )
+    incomplete = _select(
+        client,
+        conversation_id,
+        bundle,
+        paper_index=1,
+        target_section="方法",
+        paragraph_anchor="方法-1",
+    )
+    monkeypatch.setattr(
+        _conversation_search_service,
+        "search",
+        lambda *_args, **_kwargs: pytest.fail("参考文献草案不得联网检索"),
+    )
+
+    first = client.get(
+        f"/api/v1/research/conversations/{conversation_id}/reference-draft-package"
+    )
+    second = client.get(
+        f"/api/v1/research/conversations/{conversation_id}/reference-draft-package"
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    result = first.json()
+    assert [item["selected_citation_id"] for item in result["entries"]] == [
+        complete["selected_citation_id"],
+        incomplete["selected_citation_id"],
+    ]
+    assert all(item["source_url"].startswith("https://") for item in result["entries"])
+    assert all("非正式格式化参考文献" in item["format_notice"] for item in result["entries"])
+    assert incomplete["selected_citation_id"] in {
+        item["selected_citation_id"] for item in result["verification_items"]
+    }
+    assert "DO_NOT_COPY_PRIVATE_NOTE" not in first.text
+    assert complete["citation"]["url"] in result["copy_text"]
+    assert incomplete["citation"]["url"] in result["copy_text"]

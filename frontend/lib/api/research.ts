@@ -471,6 +471,22 @@ export interface ReferenceEntryDraft {
   metadata_fields: Record<string, string | number | null>; classification: AnalysisClassification;
   to_verify_items: string[]; source_scope: "metadata_and_abstract_only";
 }
+export interface ReferenceDraftItem {
+  selected_citation_id: string; source_url: string; citation_placeholder: string;
+  display_text: string; classification: AnalysisClassification; to_verify_items: string[];
+  format_notice: string;
+}
+export interface ReferenceDraftVerificationItem {
+  selected_citation_id: string; source_url: string; missing_fields: string[];
+  classification: "to_verify"; basis: string;
+}
+export interface ReferenceDraftPackage {
+  schema_version: "reference-draft-package.v1"; session_id: string;
+  entries: ReferenceDraftItem[]; copy_text: string;
+  verification_items: ReferenceDraftVerificationItem[];
+  empty_state_message: string | null; boundary_note: string;
+  source_scope: "local_selected_evidence_only";
+}
 export interface SelectedCitation {
   schema_version: "selected-citation.v1"; selected_citation_id: string; session_id: string;
   citation: CitationCandidate; target_document: CitationTargetDocument; target_section: string;
@@ -768,6 +784,9 @@ export async function updateSelectedCitation(selectedCitationId: string, status:
 }
 export async function listReferenceEntryDrafts(conversationId: string): Promise<ReferenceEntryDraft[]> {
   return request<ReferenceEntryDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-entry-drafts`);
+}
+export async function getReferenceDraftPackage(conversationId: string): Promise<ReferenceDraftPackage> {
+  return request<ReferenceDraftPackage>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-draft-package`);
 }
 export async function createCitationQualityCheck(conversationId: string): Promise<CitationQualityCheck> {
   return request<CitationQualityCheck>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`, { method: "POST" });
