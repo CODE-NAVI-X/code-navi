@@ -186,3 +186,19 @@ def test_explicit_non_anonymous_profile_does_not_report_anonymity_as_unconfirmed
         item["id"] == "identity-information-manual-check"
         for item in body["manual_checks"]
     )
+
+
+def test_submission_profile_rejects_api_keys_and_private_paths(client: TestClient) -> None:
+    conversation_id = _conversation(client)
+
+    key_response = client.put(
+        f"/api/v1/research/conversations/{conversation_id}/submission-profile",
+        json={"user_notes": "api_key=secret"},
+    )
+    path_response = client.put(
+        f"/api/v1/research/conversations/{conversation_id}/submission-profile",
+        json={"user_notes": "C:\\Users\\student\\private\\draft.md"},
+    )
+
+    assert key_response.status_code == 422
+    assert path_response.status_code == 422

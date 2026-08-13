@@ -977,6 +977,24 @@ class SubmissionProfileInput(BaseModel):
     ethics_and_data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
     user_notes: str | None = Field(default=None, min_length=1, max_length=1500)
 
+    @field_validator(
+        "target_venue",
+        "length_or_section_requirements",
+        "ethics_and_data_requirements",
+        "user_notes",
+    )
+    @classmethod
+    def reject_secrets_and_private_paths(cls, value: str | None) -> str | None:
+        """Keep local submission metadata free of credentials and personal file paths."""
+        if value is None:
+            return value
+        lowered = value.lower()
+        if "api_key=" in lowered or "api_key =" in lowered or "sk-" in lowered:
+            raise ValueError("Submission profile fields must not contain API keys or tokens.")
+        if re.search(r"(?i)[a-z]:\\(?:users|home|private)\\", value):
+            raise ValueError("Submission profile fields must not contain private local paths.")
+        return value
+
 
 class SubmissionProfile(SubmissionProfileInput):
     """Persisted local submission-profile data controlled by the user."""
