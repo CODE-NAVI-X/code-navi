@@ -8,11 +8,14 @@ import uuid
 from datetime import UTC, datetime
 
 from .conversation_schemas import (
+    ConversationResearchPlan,
     PaperDraft,
     PaperExportFile,
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ResearchProfile,
+    SelectedCitation,
     SubmissionProfile,
     SubmissionReadinessCheck,
     SubmissionReadinessItem,
@@ -322,8 +325,13 @@ def build_paper_export_package(
     review: PaperReview,
     revision: PaperRevision,
     readiness: SubmissionReadinessCheck,
+    *,
+    research_profile: ResearchProfile,
+    research_plan: ConversationResearchPlan | None,
+    revisions: list[PaperRevision],
+    selected_citations: list[SelectedCitation],
 ) -> PaperExportPackage:
-    """Build two browser-downloadable text files without ZIP, network access, or writes."""
+    """Build metadata-only browser downloads without network access or writes."""
     review_lines = "\n".join(
         "\n".join(
             (
@@ -345,29 +353,107 @@ def build_paper_export_package(
         )
         for item in group
     )
+    profile_summary = {
+        "topic": research_profile.topic,
+        "research_questions": research_profile.research_questions,
+        "methods": research_profile.methods,
+        "data_requirements": research_profile.data_requirements,
+        "constraints": research_profile.constraints,
+        "expected_output": research_profile.expected_output,
+    }
+    plan_summary = (
+        {
+            "research_title": research_plan.research_title.model_dump(mode="json"),
+            "research_goal": research_plan.research_goal.model_dump(mode="json"),
+            "pending_items": [item.model_dump(mode="json") for item in research_plan.pending_items],
+            "provenance_note": research_plan.provenance_note,
+        }
+        if research_plan is not None
+        else {"status": "待确认：研究计划尚未就绪"}
+    )
+    revision_chain = [
+        {
+            "revision_id": item.revision_id,
+            "parent_revision_id": item.parent_revision_id,
+            "version": item.version,
+            "review_id": item.review_id,
+            "applied_task_ids": item.applied_task_ids,
+            "applied_suggestion_ids": item.applied_suggestion_ids,
+            "change_summary": item.change_summary,
+            "created_at": item.created_at.isoformat(),
+            "source_scope": item.source_scope,
+        }
+        for item in revisions
+    ]
+    citation_summaries = [
+        {
+            "selected_citation_id": item.selected_citation_id,
+            "title": item.citation.paper_title,
+            "authors": item.citation.authors,
+            "year": item.citation.year,
+            "source_name": item.citation.source_name,
+            "url": item.citation.url,
+            "target_section": item.target_section,
+            "citation_placeholder": item.citation_placeholder,
+            "metadata_completeness": item.citation.metadata_completeness,
+            "to_verify_items": item.reference_entry.to_verify_items,
+            "source_scope": item.citation.source_scope,
+        }
+        for item in selected_citations
+    ]
+    package_data = {
+        "research_profile_summary": profile_summary,
+        "research_plan_summary": plan_summary,
+        "submission_profile": readiness.submission_profile.model_dump(mode="json")
+        if readiness.submission_profile is not None
+        else {"status": "待确认：尚未保存投稿准备档案"},
+        "submission_readiness": readiness.model_dump(mode="json"),
+        "draft_reference": {
+            "draft_id": draft.draft_id,
+            "title": draft.title,
+            "format": draft.format,
+            "version": draft.version,
+            "created_at": draft.created_at.isoformat(),
+            "source_scope": draft.source_scope,
+            "content_included": False,
+        },
+        "revision_chain": revision_chain,
+        "revision_task_basis": {
+            "latest_revision_id": revision.revision_id,
+            "applied_task_ids": revision.applied_task_ids,
+            "applied_suggestion_ids": revision.applied_suggestion_ids,
+            "change_summary": revision.change_summary,
+        },
+        "selected_citation_summaries": citation_summaries,
+        "review": review.model_dump(mode="json"),
+        "safety_notice": "不含初稿或修订稿全文；所有清单仍需作者或导师核对。",
+    }
+    citation_lines = "\n".join(
+        f"- {item['title']}（{item['target_section']}）：{item['citation_placeholder']}"
+        for item in citation_summaries
+    ) or "- 待确认：尚未选择可引用的受限证据来源。"
     markdown = _redact_export_text(
-        "# 本地论文辅助包（非最终投稿格式）\n\n"
-        "仅由用户明确导出；不包含会话历史、数据库、论文全文缓存或项目文件。"
-        "建议和待验证项不等于已验证实验结论、导师结论或投稿资格。\n\n"
-        f"## 初稿：{draft.title}\n\n{draft.content}\n\n"
-        f"## 修订稿预览（v{revision.version}）\n\n{revision.content}\n\n"
-        "## 已接受任务对应的修改说明\n\n"
+        "# 投稿前辅助包（非最终投稿格式）\n\n"
+        "仅由用户明确导出；仅含已保存的结构化摘要、档案和核对清单，"
+        "不含初稿或修订稿全文。建议和待验证项不等于已验证实验结论、导师结论或投稿资格。\n\n"
+        f"## 研究主题\n\n{research_profile.topic or '待确认'}\n\n"
+        f"## 研究计划摘要\n\n{plan_summary}\n\n"
+        f"## 投稿准备档案\n\n{package_data['submission_profile']}\n\n"
+        "## 修订版本链（仅元数据）\n\n"
+        + "\n".join(
+            f"- v{item['version']}：{'；'.join(item['change_summary'])}" for item in revision_chain
+        )
+        + "\n\n## 修订任务依据\n\n"
         + "\n".join(f"- {summary}" for summary in revision.change_summary)
+        + "\n\n## 已选受限证据来源摘要\n\n"
+        + citation_lines
         + "\n\n## 结构化审稿意见\n\n"
         + review_lines
         + f"\n\n## 投稿前检查：{readiness.readiness_status}\n\n"
         + check_lines
+        + "\n\n> 待作者或导师核对：本辅助包不代表符合任何 venue 要求，也不会自动投稿。"
     )
-    check_json = _redact_export_text(
-        json.dumps(
-            {
-                "review": review.model_dump(mode="json"),
-                "submission_readiness": readiness.model_dump(mode="json"),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    check_json = _redact_export_text(json.dumps(package_data, ensure_ascii=False, indent=2))
     return PaperExportPackage(
         draft_id=draft.draft_id,
         revision_id=revision.revision_id,
@@ -385,7 +471,7 @@ def build_paper_export_package(
             ),
         ],
         provenance_note=(
-            "仅包含当前本地保存的初稿、修订预览、审稿意见与投稿前检查；"
-            "浏览器下载仍需要用户主动点击。"
+            "仅包含当前本地保存的研究与计划摘要、投稿档案、检查清单、修订依据和"
+            "已选引用摘要；不含初稿或修订稿全文，浏览器下载仍需要用户主动点击。"
         ),
     )
