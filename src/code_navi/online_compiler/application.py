@@ -95,6 +95,11 @@ PENDING_SUBMISSION_TTL_SECONDS = 900.0
 MAX_PENDING_SUBMISSIONS = 256
 MAX_PROBLEM_IMPORT_TEXT_BYTES = 64 * 1024
 MAX_PROBLEM_IMPORT_FILE_BYTES = 2 * 1024 * 1024
+MAX_UPLOADED_PROBLEM_TEXT_BYTES = 8 * 1024
+MAX_UPLOADED_PROBLEM_HINT_BYTES = 1 * 1024
+MAX_UPLOADED_PROBLEM_ID_BYTES = 160
+MAX_UPLOADED_PROBLEM_TAG_BYTES = 64
+MAX_UPLOADED_PROBLEM_SAMPLE_BYTES = 4 * 1024
 
 
 def _problem_organization_changed(
@@ -588,6 +593,10 @@ class CompilerApplication:
         uploaded_problems = payload.get("uploadedProblems", [])
         if not isinstance(uploaded_problems, list):
             raise ValidationError("uploadedProblems must be an array")
+        validated_uploaded_problems = tuple(
+            self._validate_uploaded_practice_problem(item, index)
+            for index, item in enumerate(uploaded_problems[:MAX_PRACTICE_SET_SIZE])
+        )
         learner_id = payload.get("learnerId")
         if learner_id is not None and not isinstance(learner_id, str):
             raise ValidationError("learnerId must be a string")
@@ -597,9 +606,113 @@ class CompilerApplication:
             "difficulty_range": difficulty_range,
             "knowledge_tags": tuple(knowledge_tags),
             "include_uploaded": include_uploaded,
-            "uploaded_problems": tuple(uploaded_problems[:MAX_PRACTICE_SET_SIZE]),
+            "uploaded_problems": validated_uploaded_problems,
             "learner_id": learner_id,
         }
+
+    def _validate_uploaded_practice_problem(
+        self, value: Any, index: int
+    ) -> dict[str, object]:
+        if not isinstance(value, dict):
+            raise ValidationError(f"uploadedProblems[{index}] must be an object")
+        problem: dict[str, object] = {}
+        for field in ("id", "importId"):
+            text = self._optional_bounded_text(
+                value.get(field),
+                f"uploadedProblems[{index}].{field}",
+                MAX_UPLOADED_PROBLEM_ID_BYTES,
+            )
+            if text is not None:
+                problem[field] = text
+        for field in ("title", "description"):
+            text = self._optional_bounded_text(
+                value.get(field),
+                f"uploadedProblems[{index}].{field}",
+                MAX_UPLOADED_PROBLEM_TEXT_BYTES,
+            )
+            if text is not None:
+                problem[field] = text
+        difficulty = value.get("difficulty")
+        if difficulty is not None:
+            if difficulty not in {"easy", "medium", "hard"}:
+                raise ValidationError(f"uploadedProblems[{index}].difficulty is invalid")
+            problem["difficulty"] = difficulty
+        tags = value.get("tags")
+        if tags is not None:
+            if not isinstance(tags, list):
+                raise ValidationError(f"uploadedProblems[{index}].tags must be an array")
+            problem["tags"] = [
+                self._required_bounded_text(
+                    tag,
+                    f"uploadedProblems[{index}].tags[{tag_index}]",
+                    MAX_UPLOADED_PROBLEM_TAG_BYTES,
+                )
+                for tag_index, tag in enumerate(tags[:8])
+            ]
+        source = self._optional_bounded_text(
+            value.get("source"),
+            f"uploadedProblems[{index}].source",
+            self._settings.max_source_bytes,
+        )
+        if source is not None:
+            problem["source"] = source
+        for field in ("starterCode", "inputHint", "outputHint"):
+            limit = (
+                self._settings.max_source_bytes
+                if field == "starterCode"
+                else MAX_UPLOADED_PROBLEM_HINT_BYTES
+            )
+            text = self._optional_bounded_text(
+                value.get(field),
+                f"uploadedProblems[{index}].{field}",
+                limit,
+            )
+            if text is not None:
+                problem[field] = text
+        sample_tests = value.get("sampleTests")
+        if sample_tests is not None:
+            if not isinstance(sample_tests, list):
+                raise ValidationError(f"uploadedProblems[{index}].sampleTests must be an array")
+            problem["sampleTests"] = [
+                self._validate_uploaded_sample_test(sample, index, sample_index)
+                for sample_index, sample in enumerate(sample_tests[:4])
+            ]
+        return problem
+
+    def _validate_uploaded_sample_test(
+        self, value: Any, problem_index: int, sample_index: int
+    ) -> dict[str, str]:
+        if not isinstance(value, dict):
+            raise ValidationError(
+                f"uploadedProblems[{problem_index}].sampleTests[{sample_index}] must be an object"
+            )
+        return {
+            "stdin": self._required_bounded_text(
+                value.get("stdin"),
+                f"uploadedProblems[{problem_index}].sampleTests[{sample_index}].stdin",
+                MAX_UPLOADED_PROBLEM_SAMPLE_BYTES,
+            ),
+            "expectedOutput": self._required_bounded_text(
+                value.get("expectedOutput"),
+                f"uploadedProblems[{problem_index}].sampleTests[{sample_index}].expectedOutput",
+                MAX_UPLOADED_PROBLEM_SAMPLE_BYTES,
+            ),
+        }
+
+    @staticmethod
+    def _optional_bounded_text(value: Any, field: str, limit: int) -> str | None:
+        if value is None:
+            return None
+        return CompilerApplication._required_bounded_text(value, field, limit)
+
+    @staticmethod
+    def _required_bounded_text(value: Any, field: str, limit: int) -> str:
+        if not isinstance(value, str):
+            raise ValidationError(f"{field} must be a string")
+        text = value.strip()
+        if "\x00" in text or len(text.encode("utf-8")) > limit:
+            raise ValidationError(f"{field} exceeds the server limit")
+        return text
 
     def _validate_difficulty_range(self, value: Any) -> tuple[str, str]:
         if value is None:

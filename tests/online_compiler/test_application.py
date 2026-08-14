@@ -7,7 +7,10 @@ from uuid import UUID
 from docx import Document
 
 from code_navi.online_compiler.ai_evaluation import AiEvaluator, ProblemOrganizer
-from code_navi.online_compiler.application import CompilerApplication
+from code_navi.online_compiler.application import (
+    MAX_UPLOADED_PROBLEM_TEXT_BYTES,
+    CompilerApplication,
+)
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
@@ -527,6 +530,26 @@ def test_problem_set_generation_can_include_uploaded_session_problems() -> None:
     uploaded = next(problem for problem in problems if problem["source"] == "uploaded")
     assert uploaded["judgeable"] is False
     assert uploaded["limitations"] == ["未进入服务端题库，不支持隐藏测试判题。"]
+
+
+def test_problem_set_generation_rejects_oversized_uploaded_problem_fields() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "练习数组",
+            "uploadedProblems": [
+                {
+                    "id": "oversized",
+                    "title": "超长题面",
+                    "description": "x" * (MAX_UPLOADED_PROBLEM_TEXT_BYTES + 1),
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 400
+    assert "uploadedProblems[0].description" in response.body["error"]
 
 
 def test_problem_set_generation_reports_ai_planning_source_when_available() -> None:
