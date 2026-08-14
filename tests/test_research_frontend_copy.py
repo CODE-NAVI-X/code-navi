@@ -195,3 +195,11 @@ def test_submission_profile_is_explicit_and_never_claims_venue_compliance() -> N
     assert "投稿准备档案" in panel_source
     assert "本地规则辅助，不代表满足任何会议或期刊要求" in panel_source
     assert "我确认执行投稿前检查" in panel_source
+
+
+def test_submission_export_is_labeled_as_a_metadata_only_pre_submission_package() -> None:
+    panel_source = PAPER_DRAFT_REVIEW.read_text(encoding="utf-8")
+
+    assert "导出投稿前辅助包" in panel_source
+    assert "不含初稿/修订稿全文" in panel_source
+    assert "待作者或导师核对" in panel_source

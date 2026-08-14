@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import base64
+import io
 from uuid import UUID
 
+from docx import Document
+
 from code_navi.online_compiler.ai_evaluation import AiEvaluator, ProblemOrganizer
-from code_navi.online_compiler.application import CompilerApplication
+from code_navi.online_compiler.application import (
+    MAX_UPLOADED_PROBLEM_TEXT_BYTES,
+    CompilerApplication,
+)
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
@@ -65,6 +72,62 @@ class FakeProblemOrganizer(ProblemOrganizer):
     ) -> tuple[list[ImportedProblem], list[str]]:
         assert learner_id == "learner-1"
         return list(reversed(problems)), ["AI 仅调整了练习顺序。"]
+
+
+def _base64_bytes(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _docx_bytes(lines: list[str]) -> bytes:
+    document = Document()
+    for line in lines:
+        document.add_paragraph(line)
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _minimal_pdf_bytes(text_lines: list[str]) -> bytes:
+    escaped = [
+        line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        for line in text_lines
+    ]
+    stream = (
+        "BT /F1 12 Tf 72 720 Td "
+        + " Tj T* ".join(f"({line})" for line in escaped)
+        + " Tj ET"
+    ).encode("ascii")
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            b"5 0 obj\n<< /Length "
+            + str(len(stream)).encode("ascii")
+            + b" >>\nstream\n"
+            + stream
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(pdf))
+        pdf.extend(obj)
+    xref_at = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    trailer = (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_at}\n%%EOF\n"
+    )
+    pdf.extend(trailer.encode("ascii"))
+    return bytes(pdf)
 
 
 class FakePracticeSetPlanner:
@@ -345,6 +408,48 @@ def test_problem_import_accepts_csv_file() -> None:
     assert response.body["problems"][0]["title"] == "求和"
 
 
+def test_problem_import_accepts_docx_file() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+    raw = _docx_bytes(
+        [
+            "题目：矩阵行和",
+            "描述：读取一个矩阵，输出每一行的和。",
+            "输入：第一行包含 n 和 m，后续 n 行包含整数。",
+            "输出：每行一个整数。",
+        ]
+    )
+
+    response = app.analyze_problem_import(
+        {"filename": "题库.docx", "text": "", "contentBase64": _base64_bytes(raw)}
+    )
+
+    assert response.status_code == 200
+    problem = response.body["problems"][0]
+    assert problem["title"] == "矩阵行和"
+    assert problem["inputHint"] == "第一行包含 n 和 m，后续 n 行包含整数。"
+
+
+def test_problem_import_accepts_pdf_file() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+    raw = _minimal_pdf_bytes(
+        [
+            "Problem: Sum Two Numbers",
+            "Description: Add two integers.",
+            "Input: two integers",
+            "Output: one integer",
+        ]
+    )
+
+    response = app.analyze_problem_import(
+        {"filename": "problems.pdf", "text": "", "contentBase64": _base64_bytes(raw)}
+    )
+
+    assert response.status_code == 200
+    problem = response.body["problems"][0]
+    assert problem["title"] == "Sum Two Numbers"
+    assert problem["outputHint"] == "one integer"
+
+
 def test_problem_import_reports_ai_organization_source_when_changed() -> None:
     app = CompilerApplication(
         FakePistonGateway(),
@@ -425,6 +530,26 @@ def test_problem_set_generation_can_include_uploaded_session_problems() -> None:
     uploaded = next(problem for problem in problems if problem["source"] == "uploaded")
     assert uploaded["judgeable"] is False
     assert uploaded["limitations"] == ["未进入服务端题库，不支持隐藏测试判题。"]
+
+
+def test_problem_set_generation_rejects_oversized_uploaded_problem_fields() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "练习数组",
+            "uploadedProblems": [
+                {
+                    "id": "oversized",
+                    "title": "超长题面",
+                    "description": "x" * (MAX_UPLOADED_PROBLEM_TEXT_BYTES + 1),
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 400
+    assert "uploadedProblems[0].description" in response.body["error"]
 
 
 def test_problem_set_generation_reports_ai_planning_source_when_available() -> None:

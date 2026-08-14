@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import io
+import re
 import sqlite3
 from dataclasses import dataclass
 from threading import Lock
@@ -89,6 +93,13 @@ PENDING_EVALUATION_TTL_SECONDS = 300.0
 MAX_PENDING_EVALUATIONS = 256
 PENDING_SUBMISSION_TTL_SECONDS = 900.0
 MAX_PENDING_SUBMISSIONS = 256
+MAX_PROBLEM_IMPORT_TEXT_BYTES = 64 * 1024
+MAX_PROBLEM_IMPORT_FILE_BYTES = 2 * 1024 * 1024
+MAX_UPLOADED_PROBLEM_TEXT_BYTES = 8 * 1024
+MAX_UPLOADED_PROBLEM_HINT_BYTES = 1 * 1024
+MAX_UPLOADED_PROBLEM_ID_BYTES = 160
+MAX_UPLOADED_PROBLEM_TAG_BYTES = 64
+MAX_UPLOADED_PROBLEM_SAMPLE_BYTES = 4 * 1024
 
 
 def _problem_organization_changed(
@@ -101,6 +112,67 @@ def _problem_organization_changed(
         (problem.import_id, problem.difficulty, problem.tags, problem.order_reason)
         for problem in organized
     ]
+
+
+def _filename_suffix(filename: str | None) -> str:
+    return (filename or "").lower().rsplit(".", 1)[-1] if filename and "." in filename else ""
+
+
+def _decode_problem_import_file(content_base64: str, filename: str | None) -> str:
+    try:
+        raw = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValidationError("contentBase64 must be valid base64") from error
+    if len(raw) > MAX_PROBLEM_IMPORT_FILE_BYTES:
+        raise ValidationError("uploaded file exceeds the 2 MiB import limit")
+
+    suffix = _filename_suffix(filename)
+    if suffix == "docx":
+        return _extract_docx_text(raw)
+    if suffix == "pdf":
+        return _extract_pdf_text(raw)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("uploaded file must be UTF-8 text, DOCX, or PDF") from error
+
+
+def _extract_docx_text(raw: bytes) -> str:
+    try:
+        from docx import Document
+
+        document = Document(io.BytesIO(raw))
+    except Exception as error:
+        raise ValidationError("could not read DOCX problem file") from error
+
+    lines: list[str] = [paragraph.text.strip() for paragraph in document.paragraphs]
+    for table in document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                lines.append(" ".join(cells))
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _extract_pdf_text(raw: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(raw))
+        lines = [_normalize_pdf_text(page.extract_text() or "") for page in reader.pages]
+    except Exception as error:
+        raise ValidationError("could not read PDF problem file") from error
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _normalize_pdf_text(text: str) -> str:
+    compact = re.sub(r"[ \t]+", " ", text).strip()
+    return re.sub(
+        r"(?<!^)(?=(?:题目|练习|Problem|Exercise|描述|Description|输入|Input|输出|Output)\s*[：:])",
+        "\n",
+        compact,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def _practice_set_candidate(problem: PracticeSetProblem) -> dict[str, object]:
@@ -479,18 +551,23 @@ class CompilerApplication:
     def _validate_problem_import_payload(self, payload: Any) -> tuple[str, str | None, str | None]:
         if not isinstance(payload, dict):
             raise ValidationError("request body must be a JSON object")
-        text = payload.get("text")
-        if not isinstance(text, str) or not text.strip():
-            raise ValidationError("text is required")
-        if "\x00" in text:
-            raise ValidationError("text must not contain null bytes")
-        if len(text.encode("utf-8")) > 64 * 1024:
-            raise ValidationError("text exceeds the 64 KiB import limit")
         filename = payload.get("filename")
         if filename is not None and (
             not isinstance(filename, str) or len(filename) > 160 or "\x00" in filename
         ):
             raise ValidationError("filename is invalid")
+        text = payload.get("text")
+        content_base64 = payload.get("contentBase64")
+        if content_base64 is not None:
+            if not isinstance(content_base64, str) or not content_base64.strip():
+                raise ValidationError("contentBase64 must be a non-empty string")
+            text = _decode_problem_import_file(content_base64, filename)
+        if not isinstance(text, str) or not text.strip():
+            raise ValidationError("text is required")
+        if "\x00" in text:
+            raise ValidationError("text must not contain null bytes")
+        if len(text.encode("utf-8")) > MAX_PROBLEM_IMPORT_TEXT_BYTES:
+            raise ValidationError("text exceeds the 64 KiB import limit")
         learner_id = payload.get("learnerId")
         if learner_id is not None and not isinstance(learner_id, str):
             raise ValidationError("learnerId must be a string")
@@ -516,6 +593,10 @@ class CompilerApplication:
         uploaded_problems = payload.get("uploadedProblems", [])
         if not isinstance(uploaded_problems, list):
             raise ValidationError("uploadedProblems must be an array")
+        validated_uploaded_problems = tuple(
+            self._validate_uploaded_practice_problem(item, index)
+            for index, item in enumerate(uploaded_problems[:MAX_PRACTICE_SET_SIZE])
+        )
         learner_id = payload.get("learnerId")
         if learner_id is not None and not isinstance(learner_id, str):
             raise ValidationError("learnerId must be a string")
@@ -525,9 +606,113 @@ class CompilerApplication:
             "difficulty_range": difficulty_range,
             "knowledge_tags": tuple(knowledge_tags),
             "include_uploaded": include_uploaded,
-            "uploaded_problems": tuple(uploaded_problems[:MAX_PRACTICE_SET_SIZE]),
+            "uploaded_problems": validated_uploaded_problems,
             "learner_id": learner_id,
         }
+
+    def _validate_uploaded_practice_problem(
+        self, value: Any, index: int
+    ) -> dict[str, object]:
+        if not isinstance(value, dict):
+            raise ValidationError(f"uploadedProblems[{index}] must be an object")
+        problem: dict[str, object] = {}
+        for field in ("id", "importId"):
+            text = self._optional_bounded_text(
+                value.get(field),
+                f"uploadedProblems[{index}].{field}",
+                MAX_UPLOADED_PROBLEM_ID_BYTES,
+            )
+            if text is not None:
+                problem[field] = text
+        for field in ("title", "description"):
+            text = self._optional_bounded_text(
+                value.get(field),
+                f"uploadedProblems[{index}].{field}",
+                MAX_UPLOADED_PROBLEM_TEXT_BYTES,
+            )
+            if text is not None:
+                problem[field] = text
+        difficulty = value.get("difficulty")
+        if difficulty is not None:
+            if difficulty not in {"easy", "medium", "hard"}:
+                raise ValidationError(f"uploadedProblems[{index}].difficulty is invalid")
+            problem["difficulty"] = difficulty
+        tags = value.get("tags")
+        if tags is not None:
+            if not isinstance(tags, list):
+                raise ValidationError(f"uploadedProblems[{index}].tags must be an array")
+            problem["tags"] = [
+                self._required_bounded_text(
+                    tag,
+                    f"uploadedProblems[{index}].tags[{tag_index}]",
+                    MAX_UPLOADED_PROBLEM_TAG_BYTES,
+                )
+                for tag_index, tag in enumerate(tags[:8])
+            ]
+        source = self._optional_bounded_text(
+            value.get("source"),
+            f"uploadedProblems[{index}].source",
+            self._settings.max_source_bytes,
+        )
+        if source is not None:
+            problem["source"] = source
+        for field in ("starterCode", "inputHint", "outputHint"):
+            limit = (
+                self._settings.max_source_bytes
+                if field == "starterCode"
+                else MAX_UPLOADED_PROBLEM_HINT_BYTES
+            )
+            text = self._optional_bounded_text(
+                value.get(field),
+                f"uploadedProblems[{index}].{field}",
+                limit,
+            )
+            if text is not None:
+                problem[field] = text
+        sample_tests = value.get("sampleTests")
+        if sample_tests is not None:
+            if not isinstance(sample_tests, list):
+                raise ValidationError(f"uploadedProblems[{index}].sampleTests must be an array")
+            problem["sampleTests"] = [
+                self._validate_uploaded_sample_test(sample, index, sample_index)
+                for sample_index, sample in enumerate(sample_tests[:4])
+            ]
+        return problem
+
+    def _validate_uploaded_sample_test(
+        self, value: Any, problem_index: int, sample_index: int
+    ) -> dict[str, str]:
+        if not isinstance(value, dict):
+            raise ValidationError(
+                f"uploadedProblems[{problem_index}].sampleTests[{sample_index}] must be an object"
+            )
+        return {
+            "stdin": self._required_bounded_text(
+                value.get("stdin"),
+                f"uploadedProblems[{problem_index}].sampleTests[{sample_index}].stdin",
+                MAX_UPLOADED_PROBLEM_SAMPLE_BYTES,
+            ),
+            "expectedOutput": self._required_bounded_text(
+                value.get("expectedOutput"),
+                f"uploadedProblems[{problem_index}].sampleTests[{sample_index}].expectedOutput",
+                MAX_UPLOADED_PROBLEM_SAMPLE_BYTES,
+            ),
+        }
+
+    @staticmethod
+    def _optional_bounded_text(value: Any, field: str, limit: int) -> str | None:
+        if value is None:
+            return None
+        return CompilerApplication._required_bounded_text(value, field, limit)
+
+    @staticmethod
+    def _required_bounded_text(value: Any, field: str, limit: int) -> str:
+        if not isinstance(value, str):
+            raise ValidationError(f"{field} must be a string")
+        text = value.strip()
+        if "\x00" in text or len(text.encode("utf-8")) > limit:
+            raise ValidationError(f"{field} exceeds the server limit")
+        return text
 
     def _validate_difficulty_range(self, value: Any) -> tuple[str, str]:
         if value is None:

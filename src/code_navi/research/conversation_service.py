@@ -902,7 +902,22 @@ class ResearchConversationService:
                 "The submission checklist is stale; create a new checklist for the latest "
                 "revision before exporting."
             )
-        return build_paper_export_package(draft, review, revision, readiness)
+        conversation = self._get_model(draft.conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        plan = build_conversation_research_plan(
+            profile,
+            ready_for_plan=assess_readiness(profile).stage == "ready_for_plan",
+        )
+        return build_paper_export_package(
+            draft,
+            review,
+            revision,
+            readiness,
+            research_profile=profile,
+            research_plan=plan,
+            revisions=self.list_paper_revisions(draft_id, db),
+            selected_citations=self.list_selected_citations(draft.conversation_id, db),
+        )
 
     @staticmethod
     def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:

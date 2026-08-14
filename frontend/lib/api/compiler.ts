@@ -221,6 +221,7 @@ export async function requestCompilerGuidance(payload: {
 export async function analyzeProblemImport(payload: {
   text: string;
   filename?: string;
+  contentBase64?: string;
   learnerId?: string;
 }): Promise<{
   source: "deterministic_rule" | "rules_with_ai_organization";
