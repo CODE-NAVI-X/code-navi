@@ -131,6 +131,24 @@ export interface ImportedCompilerProblem {
   orderReason: string;
 }
 
+export interface GeneratedPracticeProblem {
+  id: string;
+  source: "built_in" | "uploaded" | "generated";
+  title: string;
+  description: string;
+  difficulty: "easy" | "medium" | "hard";
+  tags: string[];
+  starterCode: string;
+  inputHint: string;
+  outputHint: string;
+  sampleTests: Array<{ stdin: string; expectedOutput: string }>;
+  judgeable: boolean;
+  generationReason: string;
+  limitations: string[];
+  problemId?: string;
+  problemVersion?: number;
+}
+
 export class CompilerApiError extends Error {
   constructor(
     public readonly status: number,
@@ -210,6 +228,37 @@ export async function analyzeProblemImport(payload: {
   warnings: string[];
 }> {
   return request("/api/v1/compiler/problem-imports/analyze", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateProblemSet(payload: {
+  prompt: string;
+  learnerId: string;
+  targetCount: number;
+  difficultyRange: ["easy" | "medium" | "hard", "easy" | "medium" | "hard"];
+  knowledgeTags: string[];
+  includeUploadedProblems: boolean;
+  uploadedProblems: Array<{
+    id: string;
+    title: string;
+    description: string;
+    difficulty: "easy" | "medium" | "hard";
+    tags: string[];
+    source: string;
+    inputHint: string;
+    outputHint: string;
+    sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
+  }>;
+}): Promise<{
+  source: "deterministic_rule" | "rules_with_ai_planning";
+  orderedProblems: GeneratedPracticeProblem[];
+  rationale: string;
+  coverage: string[];
+  warnings: string[];
+}> {
+  return request("/api/v1/compiler/problem-sets/generate", {
     method: "POST",
     body: JSON.stringify(payload),
   });

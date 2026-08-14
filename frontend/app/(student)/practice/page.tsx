@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  Sparkles,
 } from "lucide-react";
 import {
   CompilerAiFeedback,
@@ -24,11 +25,13 @@ import {
   CompilerRecord,
   CompilerRuntimeStatus,
   CompilerJudgeResult,
+  GeneratedPracticeProblem,
   analyzeProblemImport,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
   fetchCompilerRuntime,
+  generateProblemSet,
   requestCompilerGuidance,
   submitPython,
 } from "@/lib/api/compiler";
@@ -47,7 +50,10 @@ interface PracticeExercise {
   outputHint: string;
   source: string;
   stdin: string;
-  origin?: "built_in" | "python_file" | "uploaded_problem";
+  origin?: "built_in" | "python_file" | "uploaded_problem" | "generated_problem";
+  judgeable?: boolean;
+  problemId?: string;
+  problemVersion?: number;
   orderReason?: string;
   warnings?: string[];
   sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
@@ -165,8 +171,41 @@ function importedProblemToExercise(
     source: problem.starterCode,
     stdin: "",
     origin: "uploaded_problem",
+    judgeable: false,
     orderReason: problem.orderReason,
     warnings: problem.warnings,
+    sampleTests: problem.sampleTests,
+  };
+}
+
+function generatedProblemToExercise(
+  problem: GeneratedPracticeProblem,
+  batchId: string,
+): PracticeExercise {
+  return {
+    id: `${batchId}-${problem.id}`,
+    title: problem.title,
+    summary: `${problem.tags.join(" · ")} · ${
+      problem.source === "built_in" ? "内置" : problem.source === "uploaded" ? "上传" : "生成"
+    }`,
+    difficulty: problem.difficulty,
+    tags: [problem.source === "built_in" ? "内置" : problem.source === "uploaded" ? "上传" : "生成", ...problem.tags],
+    description: problem.description,
+    inputHint: problem.inputHint,
+    outputHint: problem.outputHint,
+    source: problem.starterCode,
+    stdin: problem.sampleTests[0]?.stdin ?? "",
+    origin:
+      problem.source === "built_in"
+        ? "built_in"
+        : problem.source === "uploaded"
+          ? "uploaded_problem"
+          : "generated_problem",
+    judgeable: problem.judgeable,
+    problemId: problem.problemId,
+    problemVersion: problem.problemVersion,
+    orderReason: problem.generationReason,
+    warnings: problem.limitations,
     sampleTests: problem.sampleTests,
   };
 }
@@ -192,6 +231,14 @@ function PracticeContent() {
   const [problemImportPreview, setProblemImportPreview] = useState<ImportedCompilerProblem[]>([]);
   const [problemImportBusy, setProblemImportBusy] = useState(false);
   const [problemImportMessage, setProblemImportMessage] = useState<string | null>(null);
+  const [setPrompt, setSetPrompt] = useState("围绕当前知识点生成 5 道递进练习");
+  const [setTargetCount, setSetTargetCount] = useState(5);
+  const [setDifficultyLow, setSetDifficultyLow] = useState<"easy" | "medium" | "hard">("easy");
+  const [setDifficultyHigh, setSetDifficultyHigh] = useState<"easy" | "medium" | "hard">("hard");
+  const [setKnowledgeTags, setSetKnowledgeTags] = useState("");
+  const [setIncludeUploaded, setSetIncludeUploaded] = useState(true);
+  const [setBusy, setSetBusy] = useState(false);
+  const [setMessage, setSetMessage] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<CompilerRuntimeStatus | null>(null);
   const [source, setSource] = useState(EXERCISES[0].source);
   const [stdin, setStdin] = useState(EXERCISES[0].stdin);
@@ -281,11 +328,73 @@ function PracticeContent() {
       source: await file.text(),
       stdin: "",
       origin: "python_file",
+      judgeable: false,
     };
     setImportedExercises((items) => [imported, ...items.filter((item) => item.id !== imported.id)]);
     setSelectedExerciseId(imported.id);
     setQuery("");
     setDifficulty("all");
+  }
+
+  async function generatePracticeSet() {
+    if (!setPrompt.trim()) {
+      setSetMessage("请先填写学习目标。");
+      return;
+    }
+    setSetBusy(true);
+    setSetMessage(null);
+    try {
+      const response = await generateProblemSet({
+        prompt: setPrompt,
+        learnerId,
+        targetCount: setTargetCount,
+        difficultyRange: [setDifficultyLow, setDifficultyHigh],
+        knowledgeTags: setKnowledgeTags
+          .split(/[，,]/)
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        includeUploadedProblems: setIncludeUploaded,
+        uploadedProblems: importedExercises
+          .filter((exercise) => exercise.origin === "uploaded_problem")
+          .map((exercise) => ({
+            id: exercise.id,
+            title: exercise.title,
+            description: exercise.description,
+            difficulty:
+              exercise.difficulty === "custom" ? "medium" : exercise.difficulty,
+            tags: exercise.tags.filter((tag) => tag !== "上传"),
+            source: exercise.source,
+            inputHint: exercise.inputHint,
+            outputHint: exercise.outputHint,
+            sampleTests: exercise.sampleTests,
+          })),
+      });
+      const batchId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? `set-${crypto.randomUUID()}`
+          : `set-${Date.now()}`;
+      const generated = response.orderedProblems.map((problem) =>
+        generatedProblemToExercise(problem, batchId),
+      );
+      setImportedExercises((items) => [
+        ...generated,
+        ...items.filter((item) => !generated.some((next) => next.id === item.id)),
+      ]);
+      if (generated[0]) {
+        setSelectedExerciseId(generated[0].id);
+        setQuery("");
+        setDifficulty("all");
+      }
+      setSetMessage(
+        `${response.source === "rules_with_ai_planning" ? "AI 已规划" : "已生成"} ${
+          generated.length
+        } 道练习；覆盖：${response.coverage.join("、") || "综合"}`,
+      );
+    } catch (generationError) {
+      setSetMessage(generationError instanceof Error ? generationError.message : "练习集生成失败。");
+    } finally {
+      setSetBusy(false);
+    }
   }
 
   async function importProblemTextFile(file: File | null) {
@@ -398,7 +507,8 @@ function PracticeContent() {
     setError(null);
     try {
       const judged = await submitPython({
-        problemId: activeExercise.id,
+        problemId: activeExercise.problemId ?? activeExercise.id,
+        problemVersion: activeExercise.problemVersion,
         source,
         learnerId,
       });
@@ -502,6 +612,13 @@ function PracticeContent() {
               >
                 <Import className="h-3.5 w-3.5" strokeWidth={1.5} />
                 上传题目
+              </a>
+              <a
+                href="#practice-set-generation"
+                className="inline-flex items-center gap-2 rounded-full border border-[#d9dfd2] bg-white px-4 py-2 text-xs font-semibold text-[#35443b] shadow-sm transition hover:bg-[#eef2e8]"
+              >
+                <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
+                生成练习集
               </a>
               {(["all", "easy", "medium", "hard"] as const).map((item) => (
                 <button
@@ -626,6 +743,105 @@ function PracticeContent() {
                 </div>
               ) : null}
             </section>
+
+            <section id="practice-set-generation" className="mt-8 rounded-2xl border border-[#d9dfd2] bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] font-semibold uppercase text-[#7b857d]">
+                    Practice Set Generator
+                  </p>
+                  <h2 className="mt-1 text-xl font-bold">生成练习集</h2>
+                  <p className="mt-2 max-w-2xl text-xs leading-5 text-[#667168]">
+                    根据学习目标从内置题库和本次上传题中生成递进练习顺序。内置题可提交判题，上传题和生成题只支持运行与 AI 评析。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void generatePracticeSet()}
+                  disabled={setBusy}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#17201b] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#2f3c34] disabled:opacity-50"
+                >
+                  {setBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  )}
+                  {setBusy ? "生成中" : "生成并排列"}
+                </button>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
+                <label className="text-xs font-semibold text-[#35443b]">
+                  学习目标
+                  <textarea
+                    value={setPrompt}
+                    onChange={(event) => setSetPrompt(event.target.value)}
+                    className="mt-1 min-h-24 w-full resize-y rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] p-3 text-sm font-normal leading-6 text-[#17201b] outline-none focus:border-[#9fb49d]"
+                  />
+                </label>
+                <label className="text-xs font-semibold text-[#35443b]">
+                  题目数量
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={setTargetCount}
+                    onChange={(event) => setSetTargetCount(Number(event.target.value))}
+                    className="mt-1 h-11 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b] outline-none focus:border-[#9fb49d]"
+                  />
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <label className="text-xs font-semibold text-[#35443b]">
+                  最低难度
+                  <select
+                    value={setDifficultyLow}
+                    onChange={(event) =>
+                      setSetDifficultyLow(event.target.value as "easy" | "medium" | "hard")
+                    }
+                    className="mt-1 h-10 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b]"
+                  >
+                    <option value="easy">入门</option>
+                    <option value="medium">进阶</option>
+                    <option value="hard">挑战</option>
+                  </select>
+                </label>
+                <label className="text-xs font-semibold text-[#35443b]">
+                  最高难度
+                  <select
+                    value={setDifficultyHigh}
+                    onChange={(event) =>
+                      setSetDifficultyHigh(event.target.value as "easy" | "medium" | "hard")
+                    }
+                    className="mt-1 h-10 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b]"
+                  >
+                    <option value="easy">入门</option>
+                    <option value="medium">进阶</option>
+                    <option value="hard">挑战</option>
+                  </select>
+                </label>
+                <label className="text-xs font-semibold text-[#35443b]">
+                  知识点
+                  <input
+                    value={setKnowledgeTags}
+                    onChange={(event) => setSetKnowledgeTags(event.target.value)}
+                    placeholder="循环, 列表, 字符串"
+                    className="mt-1 h-10 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b] outline-none focus:border-[#9fb49d]"
+                  />
+                </label>
+              </div>
+              <label className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-[#35443b]">
+                <input
+                  type="checkbox"
+                  checked={setIncludeUploaded}
+                  onChange={(event) => setSetIncludeUploaded(event.target.checked)}
+                  className="h-4 w-4"
+                />
+                纳入本次上传题目
+              </label>
+              {setMessage ? (
+                <p className="mt-3 text-xs text-[#667168]">{setMessage}</p>
+              ) : null}
+            </section>
           </section>
         </div>
       </main>
@@ -658,6 +874,8 @@ function PracticeContent() {
             ? "自定义练习"
             : activeExercise.origin === "uploaded_problem"
               ? "上传题目"
+              : activeExercise.origin === "generated_problem"
+                ? "生成题目"
               : `练习 ${String(exercises.findIndex((item) => item.id === activeExercise.id) + 1).padStart(2, "0")}`}
           </span>
           <strong className="block truncate text-sm text-[#17201b]">{activeExercise.title}</strong>

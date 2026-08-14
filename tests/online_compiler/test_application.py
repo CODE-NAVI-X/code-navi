@@ -67,6 +67,28 @@ class FakeProblemOrganizer(ProblemOrganizer):
         return list(reversed(problems)), ["AI 仅调整了练习顺序。"]
 
 
+class FakePracticeSetPlanner:
+    def plan_practice_set(
+        self,
+        request: dict[str, object],
+        candidates: list[dict[str, object]],
+        learner_id: str | None = None,
+    ) -> dict[str, object]:
+        assert request["prompt"]
+        assert learner_id == "learner-1"
+        return {
+            "orderedProblems": [
+                {
+                    "id": candidates[-1]["id"],
+                    "generationReason": "AI 建议先做这道题来承接学习目标。",
+                }
+            ],
+            "rationale": "AI 按目标重新排列了练习顺序。",
+            "coverage": ["AI 覆盖"],
+            "warnings": ["AI 未生成隐藏测试。"],
+        }
+
+
 def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
     app = CompilerApplication(FakePistonGateway(), Settings())
 
@@ -350,3 +372,83 @@ def test_problem_import_reports_ai_organization_source_when_changed() -> None:
     assert response.status_code == 200
     assert response.body["source"] == "rules_with_ai_organization"
     assert response.body["warnings"] == ["AI 仅调整了练习顺序。"]
+
+
+def test_problem_set_generation_uses_built_in_judgeable_problems() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "我想练习循环和列表",
+            "targetCount": 3,
+            "difficultyRange": ["easy", "hard"],
+            "knowledgeTags": ["循环", "列表"],
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "deterministic_rule"
+    problems = response.body["orderedProblems"]
+    assert len(problems) == 3
+    assert problems[0]["source"] == "built_in"
+    assert problems[0]["judgeable"] is True
+    assert "problemId" in problems[0]
+    assert response.body["coverage"]
+
+
+def test_problem_set_generation_can_include_uploaded_session_problems() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "练习栈",
+            "targetCount": 2,
+            "includeUploadedProblems": True,
+            "uploadedProblems": [
+                {
+                    "id": "uploaded-brackets",
+                    "title": "自定义括号题",
+                    "description": "判断括号是否匹配。",
+                    "difficulty": "hard",
+                    "tags": ["栈"],
+                    "source": "text = input().strip()\n",
+                    "inputHint": "一行括号",
+                    "outputHint": "VALID 或 INVALID",
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 200
+    problems = response.body["orderedProblems"]
+    assert any(problem["source"] == "uploaded" for problem in problems)
+    uploaded = next(problem for problem in problems if problem["source"] == "uploaded")
+    assert uploaded["judgeable"] is False
+    assert uploaded["limitations"] == ["未进入服务端题库，不支持隐藏测试判题。"]
+
+
+def test_problem_set_generation_reports_ai_planning_source_when_available() -> None:
+    app = CompilerApplication(
+        FakePistonGateway(),
+        Settings(),
+        practice_set_planner=FakePracticeSetPlanner(),
+    )
+
+    response = app.generate_problem_set(
+        {"prompt": "练习输入输出", "targetCount": 2, "learnerId": "learner-1"}
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "rules_with_ai_planning"
+    assert response.body["rationale"] == "AI 按目标重新排列了练习顺序。"
+    assert "AI 未生成隐藏测试。" in response.body["warnings"]
+    assert response.body["orderedProblems"][0]["generationReason"].startswith("AI 建议")
+
+
+def test_problem_set_generation_rejects_invalid_payload() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set({"prompt": ""})
+
+    assert response.status_code == 400
+    assert "prompt" in response.body["error"]
