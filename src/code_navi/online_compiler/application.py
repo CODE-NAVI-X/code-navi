@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import io
+import re
 import sqlite3
 from dataclasses import dataclass
 from threading import Lock
@@ -76,6 +80,8 @@ PENDING_EVALUATION_TTL_SECONDS = 300.0
 MAX_PENDING_EVALUATIONS = 256
 PENDING_SUBMISSION_TTL_SECONDS = 900.0
 MAX_PENDING_SUBMISSIONS = 256
+MAX_PROBLEM_IMPORT_TEXT_BYTES = 64 * 1024
+MAX_PROBLEM_IMPORT_FILE_BYTES = 2 * 1024 * 1024
 
 
 def _problem_organization_changed(
@@ -88,6 +94,67 @@ def _problem_organization_changed(
         (problem.import_id, problem.difficulty, problem.tags, problem.order_reason)
         for problem in organized
     ]
+
+
+def _filename_suffix(filename: str | None) -> str:
+    return (filename or "").lower().rsplit(".", 1)[-1] if filename and "." in filename else ""
+
+
+def _decode_problem_import_file(content_base64: str, filename: str | None) -> str:
+    try:
+        raw = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValidationError("contentBase64 must be valid base64") from error
+    if len(raw) > MAX_PROBLEM_IMPORT_FILE_BYTES:
+        raise ValidationError("uploaded file exceeds the 2 MiB import limit")
+
+    suffix = _filename_suffix(filename)
+    if suffix == "docx":
+        return _extract_docx_text(raw)
+    if suffix == "pdf":
+        return _extract_pdf_text(raw)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("uploaded file must be UTF-8 text, DOCX, or PDF") from error
+
+
+def _extract_docx_text(raw: bytes) -> str:
+    try:
+        from docx import Document
+
+        document = Document(io.BytesIO(raw))
+    except Exception as error:
+        raise ValidationError("could not read DOCX problem file") from error
+
+    lines: list[str] = [paragraph.text.strip() for paragraph in document.paragraphs]
+    for table in document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                lines.append(" ".join(cells))
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _extract_pdf_text(raw: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(raw))
+        lines = [_normalize_pdf_text(page.extract_text() or "") for page in reader.pages]
+    except Exception as error:
+        raise ValidationError("could not read PDF problem file") from error
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _normalize_pdf_text(text: str) -> str:
+    compact = re.sub(r"[ \t]+", " ", text).strip()
+    return re.sub(
+        r"(?<!^)(?=(?:题目|练习|Problem|Exercise|描述|Description|输入|Input|输出|Output)\s*[：:])",
+        "\n",
+        compact,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 class CompilerApplication:
@@ -408,18 +475,23 @@ class CompilerApplication:
     def _validate_problem_import_payload(self, payload: Any) -> tuple[str, str | None, str | None]:
         if not isinstance(payload, dict):
             raise ValidationError("request body must be a JSON object")
-        text = payload.get("text")
-        if not isinstance(text, str) or not text.strip():
-            raise ValidationError("text is required")
-        if "\x00" in text:
-            raise ValidationError("text must not contain null bytes")
-        if len(text.encode("utf-8")) > 64 * 1024:
-            raise ValidationError("text exceeds the 64 KiB import limit")
         filename = payload.get("filename")
         if filename is not None and (
             not isinstance(filename, str) or len(filename) > 160 or "\x00" in filename
         ):
             raise ValidationError("filename is invalid")
+        text = payload.get("text")
+        content_base64 = payload.get("contentBase64")
+        if content_base64 is not None:
+            if not isinstance(content_base64, str) or not content_base64.strip():
+                raise ValidationError("contentBase64 must be a non-empty string")
+            text = _decode_problem_import_file(content_base64, filename)
+        if not isinstance(text, str) or not text.strip():
+            raise ValidationError("text is required")
+        if "\x00" in text:
+            raise ValidationError("text must not contain null bytes")
+        if len(text.encode("utf-8")) > MAX_PROBLEM_IMPORT_TEXT_BYTES:
+            raise ValidationError("text exceeds the 64 KiB import limit")
         learner_id = payload.get("learnerId")
         if learner_id is not None and not isinstance(learner_id, str):
             raise ValidationError("learnerId must be a string")

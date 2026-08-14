@@ -171,6 +171,22 @@ function importedProblemToExercise(
   };
 }
 
+function isBinaryProblemFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".docx") || name.endsWith(".pdf");
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
 function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -188,6 +204,7 @@ function PracticeContent() {
   const [activeExercise, setActiveExercise] = useState<PracticeExercise>(EXERCISES[0]);
   const [importedExercises, setImportedExercises] = useState<PracticeExercise[]>([]);
   const [problemImportText, setProblemImportText] = useState("");
+  const [problemImportContentBase64, setProblemImportContentBase64] = useState<string | null>(null);
   const [problemImportFileName, setProblemImportFileName] = useState<string | null>(null);
   const [problemImportPreview, setProblemImportPreview] = useState<ImportedCompilerProblem[]>([]);
   const [problemImportBusy, setProblemImportBusy] = useState(false);
@@ -295,8 +312,17 @@ function PracticeContent() {
   async function importProblemTextFile(file: File | null) {
     if (!file) return;
     try {
+      if (isBinaryProblemFile(file)) {
+        setProblemImportText("");
+        setProblemImportContentBase64(await fileToBase64(file));
+        setProblemImportFileName(file.name);
+        setProblemImportPreview([]);
+        setProblemImportMessage(`已读取题目文件：${file.name}`);
+        return;
+      }
       const text = await file.text();
       setProblemImportText(text);
+      setProblemImportContentBase64(null);
       setProblemImportFileName(file.name);
       setProblemImportPreview([]);
       setProblemImportMessage(`已读取题目文件：${file.name}`);
@@ -306,8 +332,8 @@ function PracticeContent() {
   }
 
   async function analyzeUploadedProblems() {
-    if (!problemImportText.trim()) {
-      setProblemImportMessage("请先粘贴题目文本。");
+    if (!problemImportText.trim() && !problemImportContentBase64) {
+      setProblemImportMessage("请先上传题目文件或粘贴题目文本。");
       return;
     }
     setProblemImportBusy(true);
@@ -316,6 +342,7 @@ function PracticeContent() {
       const analyzed = await analyzeProblemImport({
         text: problemImportText,
         filename: problemImportFileName ?? undefined,
+        contentBase64: problemImportContentBase64 ?? undefined,
         learnerId,
       });
       setProblemImportPreview(analyzed.problems);
@@ -594,7 +621,7 @@ function PracticeContent() {
                   选择题目文件
                   <input
                     type="file"
-                    accept=".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json"
+                    accept=".txt,.md,.markdown,.json,.csv,.docx,.pdf,text/plain,text/markdown,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
                     className="hidden"
                     onChange={(event) => void importProblemTextFile(event.target.files?.[0] ?? null)}
                   />
@@ -607,7 +634,10 @@ function PracticeContent() {
               </div>
               <textarea
                 value={problemImportText}
-                onChange={(event) => setProblemImportText(event.target.value)}
+                onChange={(event) => {
+                  setProblemImportText(event.target.value);
+                  setProblemImportContentBase64(null);
+                }}
                 placeholder={"题目一：字符串回文判断\n描述：读取一行文本，判断是否为回文。\n输入：一行字符串\n输出：YES 或 NO"}
                 className="mt-4 min-h-36 w-full resize-y rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] p-3 text-sm leading-6 text-[#17201b] outline-none focus:border-[#9fb49d]"
               />
