@@ -12,6 +12,7 @@ from kernel.runtime import AgentRuntime, RuntimeRequest
 from .agents import (
     code_result_explainer_agent,
     guided_code_tutor_agent,
+    practice_set_planner_agent,
     problem_import_organizer_agent,
 )
 from .evaluation import AiFeedback, RuleAssessment, parse_ai_feedback
@@ -52,6 +53,16 @@ class ProblemOrganizer(Protocol):
         self, problems: list[ImportedProblem], learner_id: str | None = None
     ) -> tuple[list[ImportedProblem], list[str]]:
         """Return validated metadata suggestions and organizer warnings."""
+
+
+class PracticeSetPlanner(Protocol):
+    def plan_practice_set(
+        self,
+        request: dict[str, object],
+        candidates: list[dict[str, object]],
+        learner_id: str | None = None,
+    ) -> dict[str, object]:
+        """Return JSON practice-set ordering suggestions for known candidate IDs."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +186,39 @@ class KernelAiEvaluator:
         except Exception as exc:
             raise AiEvaluationError("AI problem organization is temporarily unavailable") from exc
 
+    def plan_practice_set(
+        self,
+        request: dict[str, object],
+        candidates: list[dict[str, object]],
+        learner_id: str | None = None,
+    ) -> dict[str, object]:
+        prompt = json.dumps(
+            {
+                "request": request,
+                "candidates": candidates,
+                "instruction": (
+                    "只能返回 candidates 中已有 id。不要新增隐藏测试；"
+                    "非 built_in 来源必须说明只支持运行和 AI 评析。"
+                ),
+            },
+            ensure_ascii=False,
+        )
+        try:
+            runtime_result = self.runtime.run(
+                practice_set_planner_agent,
+                RuntimeRequest(
+                    prompt,
+                    session_id=learner_id,
+                    run_id=f"practice-set-{uuid4()}",
+                    metadata={"language": "python", "mode": "practice_set"},
+                ),
+            )
+            if runtime_result.output_text is None:
+                raise ValueError("AI practice-set planner response did not contain text")
+            return _parse_json_object(runtime_result.output_text)
+        except Exception as exc:
+            raise AiEvaluationError("AI practice-set planning is temporarily unavailable") from exc
+
 
 def _bounded(value: str, limit: int) -> str:
     if len(value) <= limit:
@@ -183,11 +227,7 @@ def _bounded(value: str, limit: int) -> str:
 
 
 def _parse_tutor_reply(text: str) -> dict[str, object]:
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        lines = candidate.splitlines()
-        candidate = "\n".join(lines[1:-1]).strip()
-    payload = json.loads(candidate)
+    payload = _parse_json_object(text)
     if not isinstance(payload, dict):
         raise ValueError("AI tutor response must be an object")
     reply = payload.get("reply")
@@ -206,6 +246,17 @@ def _parse_tutor_reply(text: str) -> dict[str, object]:
     return {"reply": reply.strip(), "strategy": strategy, "blocked": blocked}
 
 
+def _parse_json_object(text: str) -> dict[str, object]:
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        candidate = "\n".join(lines[1:-1]).strip()
+    payload = json.loads(candidate)
+    if not isinstance(payload, dict):
+        raise ValueError("AI response must be a JSON object")
+    return payload
+
+
 def _looks_like_complete_solution(reply: str) -> bool:
     if "```" in reply:
         return True
@@ -222,11 +273,7 @@ def _looks_like_complete_solution(reply: str) -> bool:
 def _apply_organizer_suggestions(
     problems: list[ImportedProblem], text: str
 ) -> tuple[list[ImportedProblem], list[str]]:
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        lines = candidate.splitlines()
-        candidate = "\n".join(lines[1:-1]).strip()
-    payload = json.loads(candidate)
+    payload = _parse_json_object(text)
     if not isinstance(payload, dict) or not isinstance(payload.get("orderedProblems"), list):
         raise ValueError("AI organizer response must contain orderedProblems")
     known = {problem.import_id: problem for problem in problems}

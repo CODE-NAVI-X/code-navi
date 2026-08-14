@@ -12,7 +12,13 @@ from code_navi.providers import (
 )
 from kernel.runtime import AgentRuntime
 
-from .ai_evaluation import AiEvaluator, AiTutor, KernelAiEvaluator, ProblemOrganizer
+from .ai_evaluation import (
+    AiEvaluator,
+    AiTutor,
+    KernelAiEvaluator,
+    PracticeSetPlanner,
+    ProblemOrganizer,
+)
 from .config import Settings
 
 
@@ -21,6 +27,7 @@ class AiService:
     evaluator: AiEvaluator | None
     tutor: AiTutor | None
     organizer: ProblemOrganizer | None
+    practice_set_planner: PracticeSetPlanner | None
     status: str
     message: str
 
@@ -36,6 +43,7 @@ def create_ai_service(
             None,
             None,
             None,
+            None,
             "disabled",
             "未配置 AI 模型，规则识别与学习记录仍可使用。",
         )
@@ -48,10 +56,11 @@ def create_ai_service(
     try:
         provider = provider_factory(provider_settings)
     except ProviderConfigurationError as error:
-        return AiService(None, None, None, "disabled", str(error))
+        return AiService(None, None, None, None, "disabled", str(error))
     service = KernelAiEvaluator(AgentRuntime(provider))
     label = "DeepSeek" if settings.ai_provider == "deepseek" else "OpenAI"
     return AiService(
+        service,
         service,
         service,
         service,
