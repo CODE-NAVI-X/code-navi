@@ -80,6 +80,7 @@ class RuntimeRequest:
     session_id: str | None = None
     run_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    conversation_history: tuple[Message, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "user_input", _non_empty_string(self.user_input, "user_input"))
@@ -88,6 +89,25 @@ class RuntimeRequest:
             if value is not None:
                 object.__setattr__(self, field_name, _non_empty_string(value, field_name))
         object.__setattr__(self, "metadata", _json_object(self.metadata, "metadata"))
+        if isinstance(self.conversation_history, (str, bytes)):
+            raise TypeError("conversation_history must be a sequence of Message values")
+        try:
+            conversation_history = tuple(self.conversation_history)
+        except TypeError as exc:
+            raise TypeError(
+                "conversation_history must be a sequence of Message values"
+            ) from exc
+        if any(not isinstance(message, Message) for message in conversation_history):
+            raise TypeError("conversation_history must contain only Message values")
+        if any(message.pinned for message in conversation_history):
+            raise ValueError("conversation_history messages must not be pinned")
+        try:
+            normalized_history = tuple(
+                Message.from_json(message.to_json()) for message in conversation_history
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise TypeError("conversation_history contains an invalid Message") from exc
+        object.__setattr__(self, "conversation_history", normalized_history)
 
 
 @dataclass(frozen=True, slots=True)

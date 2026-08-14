@@ -10,13 +10,23 @@ from typing import Literal, Protocol
 from sqlalchemy.orm import Session
 
 from code_navi.context_transfer.schemas import ConfirmedContextProvenance
+from code_navi.conversations import ContextAssembler, ConversationStateStore
+from kernel.core import ContentBlock, Message
 
 from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
+    build_research_conversation_input,
+    research_conversation_agent,
 )
+from .conversation_citation_quality import build_citation_quality_check
 from .conversation_citation_scaffold import build_citation_candidate, build_selected_citation
 from .conversation_code_draft import build_experiment_code_draft
+from .conversation_context import (
+    ContextAssembly,
+    ResearchContextAssembler,
+    ResearchContextInput,
+)
 from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
@@ -28,9 +38,11 @@ from .conversation_paper_review import (
     parse_paper_sections,
 )
 from .conversation_plan import build_conversation_research_plan
+from .conversation_reference_draft import build_reference_draft_package
 from .conversation_schemas import (
     ApplyRevisionSuggestionRequest,
     CitationCandidate,
+    CitationQualityCheck,
     ConversationEvidenceBundle,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
@@ -45,7 +57,9 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReferenceDraftPackage,
     ReferenceEntryDraft,
+    ResearchContextSummary,
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
@@ -55,6 +69,8 @@ from .conversation_schemas import (
     RevisionSuggestion,
     SelectedCitation,
     SendResearchMessageRequest,
+    SubmissionProfile,
+    SubmissionProfileInput,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
@@ -62,6 +78,7 @@ from .conversation_schemas import (
 )
 from .conversation_submission import build_paper_export_package, build_submission_readiness
 from .models import (
+    ResearchCitationQualityCheckModel,
     ResearchConversationModel,
     ResearchEvidenceBundleModel,
     ResearchExperimentEvidenceBundleModel,
@@ -70,6 +87,7 @@ from .models import (
     ResearchPaperRevisionModel,
     ResearchRevisionSuggestionModel,
     ResearchSelectedCitationModel,
+    ResearchSubmissionProfileModel,
     ResearchSubmissionReadinessModel,
 )
 from .research_artifact_llm import (
@@ -97,11 +115,26 @@ class ConversationDecisionGenerator(Protocol):
         self,
         *,
         profile: ResearchProfile,
-        messages: list[ResearchConversationMessage],
+        conversation_history: tuple[Message, ...],
         user_message: str,
         conversation_id: str,
         confirmed_context: ConfirmedContextProvenance | None = None,
+        runtime_input: str | None = None,
     ) -> ConversationDecisionOutcome: ...
+
+
+class ResearchConversationStore:
+    """Load Research state by explicit business ID from the supplied DB session."""
+
+    def load(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> ResearchConversationModel:
+        conversation = db.get(ResearchConversationModel, conversation_id)
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        return conversation
 
 
 class ResearchConversationService:
@@ -111,9 +144,19 @@ class ResearchConversationService:
         self,
         decision_generator: ConversationDecisionGenerator | None = None,
         artifact_generator: ResearchArtifactGenerator | None = None,
+        context_assembler: ContextAssembler[
+            ResearchContextInput, ContextAssembly
+        ]
+        | None = None,
+        conversation_store: ConversationStateStore[
+            Session, ResearchConversationModel
+        ]
+        | None = None,
     ) -> None:
         self.decision_generator = decision_generator or RuntimeConversationDecisionGenerator()
         self.artifact_generator = artifact_generator or RuntimeResearchArtifactGenerator()
+        self.context_assembler = context_assembler or ResearchContextAssembler()
+        self.conversation_store = conversation_store or ResearchConversationStore()
 
     def create(
         self,
@@ -502,6 +545,53 @@ class ResearchConversationService:
             if selected.status != "skipped"
         ]
 
+    def get_reference_draft_package(
+        self, conversation_id: str, db: Session
+    ) -> ReferenceDraftPackage:
+        """Return deterministic copy text without search, full text, or draft mutation."""
+        self._get_model(conversation_id, db)
+        return build_reference_draft_package(
+            conversation_id,
+            self.list_selected_citations(conversation_id, db),
+        )
+
+    def create_citation_quality_check(
+        self, conversation_id: str, db: Session
+    ) -> CitationQualityCheck:
+        """Persist one explicit offline check over this conversation's saved selections."""
+        self._get_model(conversation_id, db)
+        checked_at = datetime.now(UTC)
+        check_id = str(uuid.uuid4())
+        check = build_citation_quality_check(
+            conversation_id,
+            self.list_selected_citations(conversation_id, db),
+            check_id=check_id,
+            checked_at=checked_at,
+        )
+        db.add(
+            ResearchCitationQualityCheckModel(
+                id=check_id,
+                conversation_id=conversation_id,
+                check_data=check.model_dump(mode="json"),
+                created_at=checked_at,
+            )
+        )
+        db.commit()
+        return check
+
+    def list_citation_quality_checks(
+        self, conversation_id: str, db: Session
+    ) -> list[CitationQualityCheck]:
+        """Restore checks for one conversation without running search or changing a draft."""
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchCitationQualityCheckModel)
+            .filter(ResearchCitationQualityCheckModel.conversation_id == conversation_id)
+            .order_by(ResearchCitationQualityCheckModel.created_at.desc())
+            .all()
+        )
+        return [CitationQualityCheck.model_validate(record.check_data) for record in records]
+
     def create_paper_review(self, draft_id: str, db: Session) -> PaperReview:
         draft = self._get_paper_draft(draft_id, db)
         conversation = self._get_model(draft.conversation_id, db)
@@ -694,11 +784,69 @@ class ResearchConversationService:
         )
         return [PaperRevision.model_validate(record.revision_data) for record in records]
 
+    def save_submission_profile(
+        self,
+        conversation_id: str,
+        request: SubmissionProfileInput,
+        db: Session,
+    ) -> SubmissionProfile:
+        """Persist only user-supplied local constraints; no venue lookup is performed."""
+        self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchSubmissionProfileModel)
+            .filter(ResearchSubmissionProfileModel.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        now = datetime.now(UTC)
+        if record is None:
+            profile = SubmissionProfile(
+                profile_id=str(uuid.uuid4()),
+                conversation_id=conversation_id,
+                created_at=now,
+                updated_at=now,
+                **request.model_dump(),
+            )
+            db.add(
+                ResearchSubmissionProfileModel(
+                    id=profile.profile_id,
+                    conversation_id=conversation_id,
+                    profile_data=profile.model_dump(mode="json"),
+                    created_at=profile.created_at,
+                    updated_at=profile.updated_at,
+                )
+            )
+        else:
+            current = SubmissionProfile.model_validate(record.profile_data)
+            profile = SubmissionProfile(
+                profile_id=current.profile_id,
+                conversation_id=conversation_id,
+                created_at=current.created_at,
+                updated_at=now,
+                **request.model_dump(),
+            )
+            record.profile_data = profile.model_dump(mode="json")
+            record.updated_at = profile.updated_at
+        db.commit()
+        return profile
+
+    def get_submission_profile(
+        self, conversation_id: str, db: Session
+    ) -> SubmissionProfile | None:
+        """Restore the user's local profile without invoking a provider or network tool."""
+        self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchSubmissionProfileModel)
+            .filter(ResearchSubmissionProfileModel.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        return SubmissionProfile.model_validate(record.profile_data) if record is not None else None
+
     def create_submission_readiness(self, draft_id: str, db: Session) -> SubmissionReadinessCheck:
         """Persist an explicit, rules-only checklist without evaluating acceptance."""
         draft = self._get_paper_draft(draft_id, db)
         review = self._latest_paper_review(draft_id, db)
         revision = self._latest_paper_revision(draft_id, db)
+        submission_profile = self.get_submission_profile(draft.conversation_id, db)
         check = build_submission_readiness(
             draft,
             review,
@@ -707,6 +855,7 @@ class ResearchConversationService:
             has_experiment_evidence=bool(
                 self._experiment_evidence_bundles(draft.conversation_id, db)
             ),
+            submission_profile=submission_profile,
         )
         db.add(
             ResearchSubmissionReadinessModel(
@@ -753,7 +902,22 @@ class ResearchConversationService:
                 "The submission checklist is stale; create a new checklist for the latest "
                 "revision before exporting."
             )
-        return build_paper_export_package(draft, review, revision, readiness)
+        conversation = self._get_model(draft.conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        plan = build_conversation_research_plan(
+            profile,
+            ready_for_plan=assess_readiness(profile).stage == "ready_for_plan",
+        )
+        return build_paper_export_package(
+            draft,
+            review,
+            revision,
+            readiness,
+            research_profile=profile,
+            research_plan=plan,
+            revisions=self.list_paper_revisions(draft_id, db),
+            selected_citations=self.list_selected_citations(draft.conversation_id, db),
+        )
 
     @staticmethod
     def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:
@@ -789,12 +953,8 @@ class ResearchConversationService:
         )
         return PaperRevision.model_validate(record.revision_data) if record is not None else None
 
-    @staticmethod
-    def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:
-        conversation = db.get(ResearchConversationModel, conversation_id)
-        if conversation is None:
-            raise ConversationNotFoundError(conversation_id)
-        return conversation
+    def _get_model(self, conversation_id: str, db: Session) -> ResearchConversationModel:
+        return self.conversation_store.load(conversation_id, db)
 
     def _process_message(
         self,
@@ -805,13 +965,39 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         existing_messages = _messages(conversation)
         confirmed_context = _confirmed_context(conversation)
+        persisted_summary = (
+            ResearchContextSummary.model_validate(conversation.context_summary_data)
+            if conversation.context_summary_data
+            else None
+        )
+        runtime_input = build_research_conversation_input(
+            profile,
+            user_message,
+            confirmed_context,
+        )
+        try:
+            context = self.context_assembler.assemble(
+                ResearchContextInput(
+                    existing_messages,
+                    research_conversation_agent.system_prompt,
+                    runtime_input,
+                    persisted_summary,
+                )
+            )
+        except Exception:
+            context = None
         self._append_user(conversation, user_message)
         outcome = self.decision_generator.generate(
             profile=profile,
-            messages=existing_messages,
+            conversation_history=(
+                context.conversation_history
+                if context is not None
+                else _kernel_conversation_history(existing_messages)
+            ),
             user_message=user_message,
             conversation_id=conversation.id,
             confirmed_context=confirmed_context,
+            runtime_input=runtime_input,
         )
         if outcome.status == "generated" and outcome.decision is not None:
             decision = _enforce_runtime_decision(
@@ -831,6 +1017,8 @@ class ResearchConversationService:
             mode = "rules_fallback" if outcome.status == "failed" else "rules"
         updated_profile = _apply_decision(profile, decision)
         conversation.profile_data = updated_profile.model_dump(mode="json")
+        if context is not None and context.pending_summary is not None:
+            conversation.context_summary_data = context.pending_summary.model_dump(mode="json")
         self._append_assistant(
             conversation,
             decision,
@@ -969,6 +1157,22 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         ResearchConversationMessage.model_validate(message)
         for message in conversation.messages_data
     ]
+
+
+def _kernel_conversation_history(
+    messages: list[ResearchConversationMessage],
+) -> tuple[Message, ...]:
+    return tuple(
+        Message(
+            message.role,
+            (ContentBlock("text", {"text": message.content}),),
+            {
+                "message_id": message.message_id,
+                "created_at": message.created_at.isoformat(),
+            },
+        )
+        for message in messages
+    )
 
 
 def _classification_label(classification: str) -> str:

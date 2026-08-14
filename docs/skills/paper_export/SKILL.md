@@ -6,11 +6,11 @@
 
 ## 用途
 
-用户主动点击后，将当前本地初稿、修订预览、结构化审稿和投稿前检查清单导出为 Markdown 与 JSON 文本辅助包；不是会议或期刊最终投稿格式。
+用户主动点击后，将研究与计划摘要、投稿准备档案、结构化审稿、修订版本依据、已选引用摘要和投稿前检查清单导出为 Markdown 与 JSON 投稿前辅助包；不含初稿或修订稿全文，不是会议或期刊最终投稿格式。
 
 ## 输入与输出
 
-输入为最近 `PaperDraft`、`PaperReview`、`PaperRevision` 与 `SubmissionReadinessCheck`；输出为两个 `PaperExportFile` 的 `PaperExportPackage`。缺少前置工件时给出清晰错误。
+输入为最近 `PaperDraft`、`PaperReview`、`PaperRevision`、`SubmissionReadinessCheck`、研究画像/计划和用户已选来源；输出为两个 `PaperExportFile` 的 `PaperExportPackage`。缺少前置工件时给出清晰错误，草稿与修订稿只以元数据引用。
 
 ## 规则层与模型层边界
 
@@ -22,7 +22,7 @@
 
 ## 失败与规则降级
 
-未生成审稿、修订预览或投稿前检查时拒绝导出；会隐藏 Key 与私有路径，不导出会话历史、数据库、缓存或项目文件。
+未生成审稿、修订预览或投稿前检查时拒绝导出；会隐藏 Key 与私有路径，不导出初稿/修订稿全文、会话历史、数据库、缓存或项目文件。
 
 ## 测试样例
 

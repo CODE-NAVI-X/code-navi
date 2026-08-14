@@ -13,8 +13,17 @@ import TextSelectionPopover from "@/components/learning/TextSelectionPopover";
 import { StructuredNotebook } from "@/components/learning/StructuredNotebook";
 import { DownstreamGoCard } from "@/components/learning/DownstreamGoCard";
 import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
+import { QuizView } from "@/components/learning/QuizView";
+import {
+  DEFAULT_QUIZ_PARAMS,
+  exportQuizDocx,
+  generateQuiz,
+  type QuizGenerateParams,
+  type QuizGenerateResponse,
+} from "@/lib/api/quiz";
 import { exportSlidesToPptx } from "@/lib/export/export-pptx";
 import { type JSX, useState, useEffect, useRef } from "react";
+import { buildKnowledgeId } from "@/lib/learning-context";
 import {
   setLearningSnapshot,
   useLearningSessionId,
@@ -29,6 +38,7 @@ import {
   Loader2,
   AlertCircle,
   Presentation,
+  FileQuestion,
 } from "lucide-react";
 
 // ── UI helpers ─────────────────────────────────────────────────────────────────
@@ -48,10 +58,12 @@ function ExplanationCard({
   data,
   onGeneratePpt,
   generatingPpt,
+  onGenerateQuiz,
 }: {
   data: ExplainResponse;
   onGeneratePpt: () => void;
   generatingPpt?: boolean;
+  onGenerateQuiz: () => void;
 }) {
   return (
     <section className="rounded-2xl border border-slate-200/80 bg-white p-7 shadow-xs dark:border-zinc-800 dark:bg-zinc-900/90 transition-all">
@@ -59,19 +71,29 @@ function ExplanationCard({
         <h2 className="min-w-0 flex-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-100">
           {data.knowledge_point}
         </h2>
-        <button
-          type="button"
-          onClick={onGeneratePpt}
-          disabled={generatingPpt}
-          className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-indigo-500/20 transition hover:from-indigo-500 hover:to-violet-500 focus:ring-2 focus:ring-indigo-400/40 focus:outline-none active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:from-indigo-500 dark:to-violet-500 dark:shadow-indigo-950/40"
-        >
-          {generatingPpt ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
-          ) : (
-            <Presentation className="h-3.5 w-3.5" strokeWidth={1.5} />
-          )}
-          {generatingPpt ? "正在生成配套 PPT…" : "一键生成配套 PPT 课件"}
-        </button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onGeneratePpt}
+            disabled={generatingPpt}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-indigo-500/20 transition hover:from-indigo-500 hover:to-violet-500 focus:ring-2 focus:ring-indigo-400/40 focus:outline-none active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:from-indigo-500 dark:to-violet-500 dark:shadow-indigo-950/40"
+          >
+            {generatingPpt ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+            ) : (
+              <Presentation className="h-3.5 w-3.5" strokeWidth={1.5} />
+            )}
+            {generatingPpt ? "正在生成配套 PPT…" : "一键生成配套 PPT 课件"}
+          </button>
+          <button
+            type="button"
+            onClick={onGenerateQuiz}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-violet-500/20 transition hover:from-violet-500 hover:to-purple-500 focus:ring-2 focus:ring-violet-400/40 focus:outline-none active:scale-98 dark:from-violet-500 dark:to-purple-500 dark:shadow-violet-950/40"
+          >
+            <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
+            生成配套练习题
+          </button>
+        </div>
       </div>
 
       {/* Summary block */}
@@ -141,7 +163,7 @@ function ExplanationCard({
   );
 }
 
-type ResultView = "text" | "ppt";
+type ResultView = "text" | "ppt" | "quiz";
 
 // ── Page component ─────────────────────────────────────────────────────────────
 
@@ -175,6 +197,18 @@ export default function LearningPage(): JSX.Element {
     savedSnapshot?.presentationProviderName,
   );
 
+  // Quiz (配套练习题) state — restored from the snapshot so the third view and
+  // any already-generated paper survive a route switch.
+  const [quizParams, setQuizParams] = useState<QuizGenerateParams>(
+    savedSnapshot?.quizParams ?? DEFAULT_QUIZ_PARAMS,
+  );
+  const [quizResponse, setQuizResponse] = useState<QuizGenerateResponse | null>(
+    savedSnapshot?.quizResponse ?? null,
+  );
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [quizExporting, setQuizExporting] = useState(false);
+
   // Track whether the user is "following" the newest generated page so new
   // pages auto-advance, while manual navigation to earlier pages is respected.
   const generatedCountRef = useRef(0);
@@ -186,10 +220,17 @@ export default function LearningPage(): JSX.Element {
   // Empty during server rendering, real id after hydration.
   const sessionId = useLearningSessionId();
 
-  // Persist the full learning state (explain result + PPT deck + active view)
-  // so a route switch away and back restores everything, not just the text.
+  // Persist the full learning state (explain result + PPT deck + quiz paper +
+  // active view) so a route switch away and back restores everything, not just
+  // the text.
   useEffect(() => {
-    if (result || query || slides.length > 0 || outlines.length > 0) {
+    if (
+      result ||
+      query ||
+      slides.length > 0 ||
+      outlines.length > 0 ||
+      quizResponse
+    ) {
       setLearningSnapshot({
         query,
         result,
@@ -199,9 +240,11 @@ export default function LearningPage(): JSX.Element {
         currentIndex,
         presentationGenerationMode: pptGenerationMode,
         presentationProviderName: pptProviderName,
+        quizParams,
+        quizResponse,
       });
     }
-  }, [query, result, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName]);
+  }, [query, result, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName, quizParams, quizResponse]);
 
   const [notebookOpen, setNotebookOpen] = useState(false);
   const [notebookInitialTab, setNotebookInitialTab] = useState<"summary" | "research_note">("summary");
@@ -306,6 +349,54 @@ export default function LearningPage(): JSX.Element {
       setPptError(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(false);
+    }
+  }
+
+  /**
+   * Generate a companion exercise set for the current concept and switch to the
+   * 配套练习题 view. This stays on the learning page — the quiz module is a
+   * third view of this page, not a route into another module.
+   */
+  async function handleGenerateQuiz() {
+    const knowledgePoint = (result?.knowledge_point || query).trim();
+    if (!knowledgePoint) return;
+
+    setView("quiz");
+    setQuizLoading(true);
+    setQuizError(null);
+    try {
+      const data = await generateQuiz({
+        knowledge_point: knowledgePoint,
+        session_id: sessionId,
+        ...quizParams,
+      });
+      setQuizResponse(data);
+    } catch (err) {
+      setQuizError(
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setQuizLoading(false);
+    }
+  }
+
+  /** Download the latest generated paper as a Word exam (.docx). */
+  async function handleExportQuiz(withAnswer: boolean) {
+    if (!quizResponse) return;
+    setQuizExporting(true);
+    setQuizError(null);
+    try {
+      await exportQuizDocx({
+        quizId: quizResponse.quiz_id,
+        sessionId: quizResponse.session_id,
+        withAnswer,
+      });
+    } catch (err) {
+      setQuizError(
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setQuizExporting(false);
     }
   }
 
@@ -430,6 +521,18 @@ export default function LearningPage(): JSX.Element {
               <Presentation className="h-3.5 w-3.5" strokeWidth={1.5} />
               PPT 演示课件
             </button>
+            <button
+              type="button"
+              onClick={() => setView("quiz")}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium transition-all ${
+                view === "quiz"
+                  ? "bg-white text-slate-900 shadow-2xs dark:bg-zinc-900 dark:text-zinc-100 font-semibold"
+                  : "text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
+              配套练习题
+            </button>
           </div>
 
           {view === "text" ? (
@@ -437,6 +540,21 @@ export default function LearningPage(): JSX.Element {
               data={result}
               onGeneratePpt={handleGeneratePpt}
               generatingPpt={pptGenerating}
+              onGenerateQuiz={() => void handleGenerateQuiz()}
+            />
+          ) : view === "quiz" ? (
+            <QuizView
+              key={quizResponse?.quiz_id ?? "empty"}
+              knowledgePoint={result?.knowledge_point || query}
+              sessionId={sessionId}
+              params={quizParams}
+              onParamsChange={setQuizParams}
+              response={quizResponse}
+              loading={quizLoading}
+              error={quizError}
+              onGenerate={() => void handleGenerateQuiz()}
+              onExport={(withAnswer) => void handleExportQuiz(withAnswer)}
+              exporting={quizExporting}
             />
           ) : (
             <div>
@@ -452,6 +570,7 @@ export default function LearningPage(): JSX.Element {
                   exporting={exporting}
                   generationMode={pptGenerationMode}
                   providerName={pptProviderName}
+                  onGenerateQuiz={() => void handleGenerateQuiz()}
                 />
               ) : (
                 <div className="rounded-2xl border border-dashed border-slate-200 py-16 text-center text-slate-400 dark:border-zinc-800 dark:text-zinc-500">
@@ -475,8 +594,9 @@ export default function LearningPage(): JSX.Element {
           )}
           <DownstreamGoCard
             knowledgePoint={result.knowledge_point || query || "DHCP 四阶段报文交互"}
-            knowledgePointId="kp_dhcp_4stage"
+            knowledgePointId={buildKnowledgeId(query || result.knowledge_point || "DHCP 四阶段报文交互")}
             sessionId={sessionId}
+            notebookItemId={result.notebook_item_id ?? undefined}
             onOpenResearch={() => {
               setNotebookInitialTab("summary");
               setNotebookOpen(true);

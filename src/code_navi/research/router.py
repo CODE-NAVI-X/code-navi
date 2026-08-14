@@ -12,6 +12,7 @@ from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ApplyRevisionSuggestionRequest,
     CitationCandidate,
+    CitationQualityCheck,
     ConversationEvidenceBundle,
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
@@ -29,6 +30,7 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReferenceDraftPackage,
     ReferenceEntryDraft,
     ResearchConversationResponse,
     ResearchSearchPlan,
@@ -37,6 +39,8 @@ from .conversation_schemas import (
     SaveResearchNotebookNoteRequest,
     SelectedCitation,
     SendResearchMessageRequest,
+    SubmissionProfile,
+    SubmissionProfileInput,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
     UpdateRevisionTaskRequest,
@@ -188,6 +192,43 @@ def get_conversation(
         ) from error
 
 
+@router.put(
+    "/conversations/{conversation_id}/submission-profile",
+    response_model=SubmissionProfile,
+)
+def save_submission_profile(
+    conversation_id: str,
+    request: SubmissionProfileInput,
+    db: Session = _db_dependency,
+) -> SubmissionProfile:
+    """Save only user-known submission constraints; this route never fetches venue rules."""
+    try:
+        return _conversation_service.save_submission_profile(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/submission-profile",
+    response_model=SubmissionProfile | None,
+)
+def get_submission_profile(
+    conversation_id: str,
+    db: Session = _db_dependency,
+) -> SubmissionProfile | None:
+    """Restore a local submission profile without a model call or network activity."""
+    try:
+        return _conversation_service.get_submission_profile(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
 @router.get(
     "/conversations/{conversation_id}/search-plan",
     response_model=ResearchSearchPlan,
@@ -311,6 +352,49 @@ def list_reference_entry_drafts(
     """Return readable drafts only for sources the user explicitly retained."""
     try:
         return _conversation_service.list_reference_entry_drafts(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reference-draft-package",
+    response_model=ReferenceDraftPackage,
+)
+def get_reference_draft_package(
+    conversation_id: str, db: Session = _db_dependency
+) -> ReferenceDraftPackage:
+    """Return stable, traceable text and one consolidated human-review checklist."""
+    try:
+        return _conversation_service.get_reference_draft_package(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/citation-quality-checks",
+    response_model=CitationQualityCheck,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_citation_quality_check(
+    conversation_id: str, db: Session = _db_dependency
+) -> CitationQualityCheck:
+    """Explicitly inspect saved citation choices without network or draft mutation."""
+    try:
+        return _conversation_service.create_citation_quality_check(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/citation-quality-checks",
+    response_model=list[CitationQualityCheck],
+)
+def list_citation_quality_checks(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[CitationQualityCheck]:
+    """Restore persisted citation checks without re-running them."""
+    try:
+        return _conversation_service.list_citation_quality_checks(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 

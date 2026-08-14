@@ -1,45 +1,72 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import { setFlowPayload } from "@/lib/store/flow-store";
 import { getLearningSessionId } from "@/lib/api/learning";
-import { BookOpenCheck, Microscope, Target, Terminal } from "lucide-react";
+import {
+  navigateToPractice,
+  navigateToResearch,
+} from "@/lib/learning-context";
+import {
+  BookOpenCheck,
+  GraduationCap,
+  Loader2,
+  Microscope,
+  Target,
+  Terminal,
+} from "lucide-react";
 
 interface DownstreamGoCardProps {
   knowledgePoint: string;
   knowledgePointId?: string;
   sessionId?: string;
-  onOpenResearch: () => void;
+  /** Id of the archived summary backing this card, used for research transfer. */
+  notebookItemId?: string;
+  onOpenResearch?: () => void;
 }
 
 export function DownstreamGoCard({
   knowledgePoint,
   knowledgePointId = "kp_dhcp_4stage",
   sessionId = "",
+  notebookItemId,
   onOpenResearch,
 }: DownstreamGoCardProps) {
   const router = useRouter();
+  const [researching, setResearching] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
 
   const handleGoToPractice = useCallback(() => {
     // Resolved on click, so an unmounted-yet parent never forwards an empty id.
     const effectiveSessionId = sessionId || getLearningSessionId();
-    setFlowPayload({
+    navigateToPractice(router, {
+      knowledgePoint,
+      knowledgePointId,
       sessionId: effectiveSessionId,
-      masteredKnowledgePoint: {
-        id: knowledgePointId,
-        name: knowledgePoint,
-      },
-      studentPersona: "software_coursework",
-      targetModule: "practice",
-      payloadData: {
-        exerciseIds: ["ex_practice_01", "ex_practice_02"],
-      },
+      exerciseIds: ["ex_practice_01", "ex_practice_02"],
     });
-    router.push(
-      `/practice?knowledge_id=${encodeURIComponent(knowledgePointId)}&knowledge_name=${encodeURIComponent(knowledgePoint)}&session_id=${encodeURIComponent(effectiveSessionId)}`
-    );
   }, [knowledgePoint, knowledgePointId, sessionId, router]);
+
+  const handleGoToResearch = useCallback(async () => {
+    const effectiveSessionId = sessionId || getLearningSessionId();
+    if (!notebookItemId) {
+      setResearchError("当前学习摘要尚未归档，无法发起科研会话。");
+      return;
+    }
+    setResearching(true);
+    setResearchError(null);
+    try {
+      await navigateToResearch(router, {
+        notebookItemId,
+        sessionId: effectiveSessionId,
+      });
+    } catch (err) {
+      setResearchError(
+        err instanceof Error ? err.message : "发起科研会话失败，请重试。",
+      );
+      setResearching(false);
+    }
+  }, [notebookItemId, sessionId, router]);
 
   return (
     <section className="mt-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/95">
@@ -62,21 +89,42 @@ export function DownstreamGoCard({
       <div className="flex flex-wrap gap-2">
         <button
           onClick={handleGoToPractice}
-          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-2xs transition hover:bg-slate-800 active:scale-98 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          disabled={researching}
+          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white shadow-2xs transition hover:bg-slate-800 active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
         >
           <Terminal className="h-3.5 w-3.5" strokeWidth={1.5} />
           继续练习
         </button>
+        {onOpenResearch && (
+          <button
+            type="button"
+            onClick={onOpenResearch}
+            disabled={researching}
+            className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          >
+            <Microscope className="h-3.5 w-3.5" strokeWidth={1.5} />
+            查看已保存摘要
+          </button>
+        )}
         <button
-          type="button"
-          onClick={onOpenResearch}
-          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          onClick={() => void handleGoToResearch()}
+          disabled={researching}
+          className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 px-3 py-2 text-xs font-medium text-white shadow-2xs transition hover:from-indigo-500 hover:to-violet-500 active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:from-indigo-500 dark:to-violet-500"
         >
-          <Microscope className="h-3.5 w-3.5" strokeWidth={1.5} />
-          从已保存摘要继续研究
+          {researching ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+          ) : (
+            <GraduationCap className="h-3.5 w-3.5" strokeWidth={1.5} />
+          )}
+          {researching ? "正在创建科研会话…" : "学术科研路线"}
         </button>
       </div>
+
+      {researchError && (
+        <p className="mt-2 text-[11px] leading-relaxed text-rose-600 dark:text-rose-400">
+          {researchError}
+        </p>
+      )}
     </section>
   );
 }
-

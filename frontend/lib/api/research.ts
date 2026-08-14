@@ -471,11 +471,60 @@ export interface ReferenceEntryDraft {
   metadata_fields: Record<string, string | number | null>; classification: AnalysisClassification;
   to_verify_items: string[]; source_scope: "metadata_and_abstract_only";
 }
+export interface ReferenceDraftItem {
+  selected_citation_id: string; source_url: string; citation_placeholder: string;
+  display_text: string; classification: AnalysisClassification; to_verify_items: string[];
+  format_notice: string;
+}
+export interface ReferenceDraftVerificationItem {
+  selected_citation_id: string; source_url: string; missing_fields: string[];
+  classification: "to_verify"; basis: string;
+}
+export interface ReferenceDraftPackage {
+  schema_version: "reference-draft-package.v1"; session_id: string;
+  entries: ReferenceDraftItem[]; copy_text: string;
+  verification_items: ReferenceDraftVerificationItem[];
+  empty_state_message: string | null; boundary_note: string;
+  source_scope: "local_selected_evidence_only";
+}
 export interface SelectedCitation {
   schema_version: "selected-citation.v1"; selected_citation_id: string; session_id: string;
   citation: CitationCandidate; target_document: CitationTargetDocument; target_section: string;
   paragraph_anchor: string; citation_placeholder: string; user_note: string | null;
   status: SelectedCitationStatus; reference_entry: ReferenceEntryDraft; created_at: string;
+}
+export type CitationQualityStatus = "empty" | "needs_review" | "review_ready";
+export interface CitationQualityIssue {
+  issue_code: string; message: string; selected_citation_ids: string[];
+  classification: AnalysisClassification; basis: string;
+}
+export interface CitationCoverageItem {
+  target_document: CitationTargetDocument; target_section: string;
+  selected_citation_ids: string[]; source_titles: string[]; citation_placeholders: string[];
+  status: "mapped" | "needs_verification"; classification: "inference";
+  information_scopes: ("metadata_only" | "metadata_and_abstract")[];
+  basis: string; to_verify_items: string[];
+}
+export interface CitationQualityCheck {
+  schema_version: "citation-quality-check.v1"; check_id: string; session_id: string;
+  checked_at: string; quality_status: CitationQualityStatus; selected_source_count: number;
+  unique_source_count: number; mapped_section_count: number;
+  core_section_coverage_percent: number; coverage_items: CitationCoverageItem[];
+  unmapped_core_sections: string[]; uninserted_placeholders: CitationQualityIssue[];
+  duplicate_selections: CitationQualityIssue[]; metadata_gaps: CitationQualityIssue[];
+  author_verification_items: CitationQualityIssue[]; empty_state_message: string | null;
+  boundary_note: string; source_scope: "local_selected_evidence_only";
+}
+export interface SubmissionProfileInput {
+  target_venue?: string | null;
+  anonymity_required?: boolean | null;
+  length_or_section_requirements?: string | null;
+  ethics_and_data_requirements?: string | null;
+  user_notes?: string | null;
+}
+export interface SubmissionProfile extends SubmissionProfileInput {
+  schema_version: "submission-profile.v1"; profile_id: string; conversation_id: string;
+  created_at: string; updated_at: string;
 }
 export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
 export interface SubmissionReadinessItem {
@@ -484,7 +533,8 @@ export interface SubmissionReadinessItem {
 }
 export interface SubmissionReadinessCheck {
   schema_version: "submission-readiness.v1"; check_id: string; draft_id: string;
-  revision_id: string | null; conversation_id: string; readiness_status: SubmissionReadinessStatus;
+  revision_id: string | null; conversation_id: string; submission_profile: SubmissionProfile | null;
+  readiness_status: SubmissionReadinessStatus;
   blockers: SubmissionReadinessItem[]; warnings: SubmissionReadinessItem[];
   manual_checks: SubmissionReadinessItem[]; fact_boundary_notes: SubmissionReadinessItem[];
   recommended_next_actions: SubmissionReadinessItem[]; created_at: string;
@@ -734,6 +784,21 @@ export async function updateSelectedCitation(selectedCitationId: string, status:
 }
 export async function listReferenceEntryDrafts(conversationId: string): Promise<ReferenceEntryDraft[]> {
   return request<ReferenceEntryDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-entry-drafts`);
+}
+export async function getReferenceDraftPackage(conversationId: string): Promise<ReferenceDraftPackage> {
+  return request<ReferenceDraftPackage>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-draft-package`);
+}
+export async function createCitationQualityCheck(conversationId: string): Promise<CitationQualityCheck> {
+  return request<CitationQualityCheck>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`, { method: "POST" });
+}
+export async function listCitationQualityChecks(conversationId: string): Promise<CitationQualityCheck[]> {
+  return request<CitationQualityCheck[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`);
+}
+export async function getSubmissionProfile(conversationId: string): Promise<SubmissionProfile | null> {
+  return request<SubmissionProfile | null>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`);
+}
+export async function saveSubmissionProfile(conversationId: string, payload: SubmissionProfileInput): Promise<SubmissionProfile> {
+  return request<SubmissionProfile>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`, { method: "PUT", body: JSON.stringify(payload) });
 }
 export async function createSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck> {
   return request<SubmissionReadinessCheck>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });

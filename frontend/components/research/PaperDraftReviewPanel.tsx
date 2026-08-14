@@ -5,9 +5,9 @@ import { useEffect, useState } from "react";
 
 import {
   applyRevisionSuggestion, createPaperDraft, createPaperExportPackage, createPaperReview, createRevisionSuggestion, createSubmissionReadiness,
-  listPaperDrafts, listPaperReviews, listPaperRevisions, listRevisionSuggestions, listSubmissionReadiness,
+  getSubmissionProfile, listPaperDrafts, listPaperReviews, listPaperRevisions, listRevisionSuggestions, listSubmissionReadiness, saveSubmissionProfile,
   updatePaperRevisionTask, type PaperDraft, type PaperReview, type PaperRevision, type RevisionSuggestion,
-  type ReviewSeverity, type SubmissionReadinessCheck, type SubmissionReadinessItem,
+  type ReviewSeverity, type SubmissionProfile, type SubmissionReadinessCheck, type SubmissionReadinessItem,
 } from "@/lib/api/research";
 import { CitationScaffoldPanel } from "./CitationScaffoldPanel";
 import { ClassificationBadge } from "./ClassificationBadge";
@@ -34,6 +34,12 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
   const [editedCandidate, setEditedCandidate] = useState("");
   const [readiness, setReadiness] = useState<SubmissionReadinessCheck | null>(null);
+  const [submissionProfile, setSubmissionProfile] = useState<SubmissionProfile | null>(null);
+  const [targetVenue, setTargetVenue] = useState("");
+  const [anonymityRequired, setAnonymityRequired] = useState<"unset" | "true" | "false">("unset");
+  const [lengthOrSectionRequirements, setLengthOrSectionRequirements] = useState("");
+  const [ethicsAndDataRequirements, setEthicsAndDataRequirements] = useState("");
+  const [submissionNotes, setSubmissionNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -41,9 +47,15 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
 
   useEffect(() => {
     let active = true;
-    void listPaperDrafts(conversationId).then(async (saved) => {
+    void Promise.all([listPaperDrafts(conversationId), getSubmissionProfile(conversationId)]).then(async ([saved, profile]) => {
       if (!active) return;
       setDrafts(saved);
+      setSubmissionProfile(profile);
+      setTargetVenue(profile?.target_venue ?? "");
+      setAnonymityRequired(profile?.anonymity_required === true ? "true" : profile?.anonymity_required === false ? "false" : "unset");
+      setLengthOrSectionRequirements(profile?.length_or_section_requirements ?? "");
+      setEthicsAndDataRequirements(profile?.ethics_and_data_requirements ?? "");
+      setSubmissionNotes(profile?.user_notes ?? "");
       const latest = saved[0] ?? null;
       setDraft(latest);
       if (latest) {
@@ -107,6 +119,20 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
     try { setReadiness(await createSubmissionReadiness(draft.draft_id)); }
     catch (value) { setError(value instanceof Error ? value.message : "投稿前检查失败。请重试。"); } finally { setBusy(false); }
   }
+  async function persistSubmissionProfile() {
+    setBusy(true); setError(null);
+    try {
+      const saved = await saveSubmissionProfile(conversationId, {
+        target_venue: targetVenue.trim() || null,
+        anonymity_required: anonymityRequired === "unset" ? null : anonymityRequired === "true",
+        length_or_section_requirements: lengthOrSectionRequirements.trim() || null,
+        ethics_and_data_requirements: ethicsAndDataRequirements.trim() || null,
+        user_notes: submissionNotes.trim() || null,
+      });
+      setSubmissionProfile(saved);
+      setNotice("投稿准备档案已保存。它只记录你已知的约束，不会联网推断会议或期刊要求。");
+    } catch (value) { setError(value instanceof Error ? value.message : "保存投稿准备档案失败。请重试。"); } finally { setBusy(false); }
+  }
   async function exportAssistantPackage() {
     if (!draft) return;
     setBusy(true); setError(null);
@@ -118,13 +144,29 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
         link.href = href; link.download = file.filename; link.click();
         URL.revokeObjectURL(href);
       }
-    } catch (value) { setError(value instanceof Error ? value.message : "导出辅助包失败。请重试。"); } finally { setBusy(false); }
+      setNotice("投稿前辅助包已在浏览器中生成；仅含安全摘要与待核对清单，不含初稿或修订稿全文。");
+    } catch (value) { setError(value instanceof Error ? value.message : "导出投稿前辅助包失败。请重试。"); } finally { setBusy(false); }
   }
 
   return <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm dark:border-violet-900/70 dark:bg-zinc-900/80">
     <div className="flex items-center gap-3"><span className="rounded-xl bg-violet-100 p-2 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300"><FilePenLine className="h-4 w-4" /></span><div><p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-700 dark:text-violet-300">Local draft review</p><h2 className="mt-1 text-sm font-bold">论文初稿与结构化审稿</h2></div></div>
     <p className="mt-3 text-[11px] leading-5 text-slate-600 dark:text-zinc-400">仅接受当前本地会话主动粘贴的 Markdown/纯文本。DOCX/PDF 导入、最终格式导出留待后续；不会联网、写入项目、自动投稿，也不能替代导师或同行评审。</p>
     {loading && <p className="mt-3 text-[11px] text-slate-500 dark:text-zinc-400">正在恢复本地初稿与修订记录…</p>}
+    <details open className="mt-3 rounded-xl border border-violet-100 dark:border-violet-950">
+      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-bold text-slate-800 dark:text-zinc-200">投稿准备档案（用户已知要求）</summary>
+      <div className="border-t border-violet-100/70 px-2 pb-3 dark:border-violet-950/60">
+        <p className="mt-2 text-[11px] leading-5 text-slate-500">本地规则辅助，不代表满足任何会议或期刊要求；只在你保存档案和确认检查后使用，不会联网抓取投稿规则。</p>
+        <div className="mt-2 grid gap-2">
+          <input value={targetVenue} onChange={(event) => setTargetVenue(event.target.value)} maxLength={300} placeholder="目标投稿方向、会议或期刊（可留空，系统将标为待确认）" className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950" />
+          <select value={anonymityRequired} onChange={(event) => setAnonymityRequired(event.target.value as "unset" | "true" | "false")} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950"><option value="unset">匿名要求：待确认</option><option value="true">匿名要求：需要匿名</option><option value="false">匿名要求：暂不要求匿名</option></select>
+          <textarea value={lengthOrSectionRequirements} onChange={(event) => setLengthOrSectionRequirements(event.target.value)} maxLength={1000} rows={2} placeholder="已知篇幅或章节要求（可留空）" className="resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950" />
+          <textarea value={ethicsAndDataRequirements} onChange={(event) => setEthicsAndDataRequirements(event.target.value)} maxLength={1000} rows={2} placeholder="已知伦理、匿名化或数据许可要求（可留空）" className="resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950" />
+          <textarea value={submissionNotes} onChange={(event) => setSubmissionNotes(event.target.value)} maxLength={1500} rows={2} placeholder="作者备注（仅本地会话保存）" className="resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950" />
+        </div>
+        <button type="button" onClick={() => void persistSubmissionProfile()} disabled={busy} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300"><FileCheck2 className="h-3.5 w-3.5" />保存投稿准备档案</button>
+        {submissionProfile && <p className="mt-1 text-[10px] text-slate-500">已恢复本地档案 · 最近更新 {new Date(submissionProfile.updated_at).toLocaleString()}</p>}
+      </div>
+    </details>
     <details open className="mt-3 rounded-xl border border-violet-100 dark:border-violet-950">
       <summary className="cursor-pointer list-none px-3 py-2 text-xs font-bold text-slate-800 dark:text-zinc-200">引用占位（仅本会话已保存来源，需手动选择）</summary>
       <div className="border-t border-violet-100/70 px-2 pb-2 dark:border-violet-950/60">
@@ -157,7 +199,7 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
     {!revision && !readiness && <p className="mt-2 text-[11px] text-slate-500 dark:text-zinc-400">接受审稿任务并生成候选改写后，这里会展示修订预览；投稿前检查需你再次确认后才会执行。</p>}
     {revision && <div className="mt-3 rounded-xl border border-violet-200 p-3 text-xs dark:border-violet-900"><div className="flex items-center justify-between gap-2"><p className="font-semibold">修订预览 · v{revision.version}</p><button type="button" onClick={() => void copyRevision()} className="text-violet-700 dark:text-violet-300">复制文本</button></div><p className="mt-1 text-[10px] text-slate-500">原稿不会被覆盖；以下仅含已接受任务的建议，仍需人工核对。</p><details className="mt-2"><summary className="cursor-pointer font-semibold">查看变更摘要与差异</summary><ul className="mt-1 list-disc pl-4">{revision.change_summary.map((item) => <li key={item}>{item}</li>)}</ul><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[10px] dark:bg-zinc-950">{revision.diff_preview}</pre></details><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[11px] leading-5 dark:bg-zinc-950">{revision.content}</pre><button type="button" onClick={() => void runSubmissionReadiness()} disabled={busy} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300"><FileCheck2 className="h-3.5 w-3.5" />我确认执行投稿前检查</button></div>}
     {revisions.length > 1 && <details className="mt-2 text-xs"><summary className="cursor-pointer font-semibold">历史修订版本（{revisions.length}）</summary><ul className="mt-1 list-disc pl-4">{revisions.map((item) => <li key={item.revision_id}>v{item.version} · {item.change_summary.join("；")}</li>)}</ul></details>}
-    {readiness && <div className="mt-3 rounded-xl border border-amber-200 p-3 text-xs dark:border-amber-900"><p className={`font-semibold ${readinessClass[readiness.readiness_status]}`}>投稿前检查：{readinessLabel[readiness.readiness_status]}</p><p className="mt-1 text-[10px] text-slate-500">只检查本地已保存的草稿、修订预览和证据状态；不联网、不投稿，也不代表可被接收。</p>{readiness.blockers.length > 0 && <details className="mt-2" open><summary className="cursor-pointer font-semibold text-rose-700 dark:text-rose-300">阻塞项（{readiness.blockers.length}）</summary><ReadinessItems items={readiness.blockers} /></details>}{readiness.warnings.length > 0 && <details className="mt-2"><summary className="cursor-pointer font-semibold">警告（{readiness.warnings.length}）</summary><ReadinessItems items={readiness.warnings} /></details>}<details className="mt-2"><summary className="cursor-pointer font-semibold">人工核验项（{readiness.manual_checks.length}）</summary><ReadinessItems items={readiness.manual_checks} /></details><button type="button" onClick={() => void exportAssistantPackage()} disabled={busy} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300"><Download className="h-3.5 w-3.5" />我确认下载 Markdown + JSON 辅助包</button><p className="mt-1 text-[10px] text-slate-500">仅导出当前初稿、修订预览、审稿意见和检查清单；不含会话历史、数据库、论文全文或项目文件，不是最终投稿格式。</p></div>}
+    {readiness && <div className="mt-3 rounded-xl border border-amber-200 p-3 text-xs dark:border-amber-900"><p className={`font-semibold ${readinessClass[readiness.readiness_status]}`}>投稿前检查：{readinessLabel[readiness.readiness_status]}</p><p className="mt-1 text-[10px] text-slate-500">只检查本地已保存的草稿、修订预览和证据状态；不联网、不投稿，也不代表可被接收。</p>{readiness.blockers.length > 0 && <details className="mt-2" open><summary className="cursor-pointer font-semibold text-rose-700 dark:text-rose-300">阻塞项（{readiness.blockers.length}）</summary><ReadinessItems items={readiness.blockers} /></details>}{readiness.warnings.length > 0 && <details className="mt-2"><summary className="cursor-pointer font-semibold">警告（{readiness.warnings.length}）</summary><ReadinessItems items={readiness.warnings} /></details>}<details className="mt-2"><summary className="cursor-pointer font-semibold">人工核验项（{readiness.manual_checks.length}）</summary><ReadinessItems items={readiness.manual_checks} /></details><button type="button" onClick={() => void exportAssistantPackage()} disabled={busy} className="mt-3 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300"><Download className="h-3.5 w-3.5" />我确认导出投稿前辅助包</button><p className="mt-1 text-[10px] text-slate-500">仅导出研究与计划摘要、投稿档案、检查清单、修订依据和已选引用摘要；不含初稿/修订稿全文，均待作者或导师核对，不是最终投稿格式。</p></div>}
     {drafts.length > 1 && <p className="mt-3 text-[10px] text-slate-500">已恢复 {drafts.length} 个本地初稿版本；当前展示最近版本。</p>}
       </div>
     </details>

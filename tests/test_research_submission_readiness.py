@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 
@@ -236,3 +237,40 @@ def test_export_rejects_a_revision_from_an_older_review(client: TestClient) -> N
 
     assert exported.status_code == 409
     assert "latest review" in exported.json()["detail"]
+
+
+def test_export_is_a_safe_pre_submission_package_with_profile_and_gaps(
+    client: TestClient,
+) -> None:
+    draft, revision = _review_and_revision(client)
+    profile = client.put(
+        f"/api/v1/research/conversations/{draft['conversation_id']}/submission-profile",
+        json={
+            "target_venue": "本地演示会议",
+            "anonymity_required": True,
+            "ethics_and_data_requirements": "需要伦理与数据许可说明",
+        },
+    )
+    readiness = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+    exported = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/export-package",
+        json={"user_confirmed": True},
+    )
+
+    assert profile.status_code == 200
+    assert readiness.status_code == 201
+    assert exported.status_code == 200
+    files = {item["filename"]: item["content"] for item in exported.json()["files"]}
+    joined = "\n".join(files.values())
+    payload = json.loads(files["paper-assistant-checks.json"])
+    assert "本地演示会议" in joined
+    assert "投稿准备档案" in joined
+    assert "修订版本链" in joined
+    assert "待作者或导师核对" in joined
+    assert "实验显著提升了完成率" not in joined
+    assert revision["content"] not in joined
+    assert payload["selected_citation_summaries"] == []
+    assert payload["submission_profile"]["target_venue"] == "本地演示会议"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -160,6 +160,20 @@ class ResearchConversationMessage(BaseModel):
         ]
         | None
     ) = None
+
+
+class ResearchContextSummary(BaseModel):
+    """Persisted coverage boundary for reusable cross-run conversation compression."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["research-context-summary.v1"] = "research-context-summary.v1"
+    summary: str = Field(min_length=1, max_length=8000)
+    through_message_id: str = Field(min_length=1)
+    source_message_count: int = Field(ge=1)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    generation_mode: Literal["rules", "agent"]
+    run_id: str | None = None
 
 
 class ResearchReadiness(BaseModel):
@@ -888,6 +902,153 @@ class SelectedCitation(BaseModel):
     created_at: datetime
 
 
+CitationQualityStatus = Literal["empty", "needs_review", "review_ready"]
+CitationCoverageStatus = Literal["mapped", "needs_verification"]
+
+
+class CitationQualityIssue(BaseModel):
+    """One local citation gap with an explicit source and fact boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    issue_code: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=1500)
+    selected_citation_ids: list[str] = Field(default_factory=list, max_length=40)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1500)
+
+
+class CitationCoverageItem(BaseModel):
+    """A user-created source-to-section mapping, not proof that a claim is supported."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_document: CitationTargetDocument
+    target_section: str = Field(min_length=1, max_length=300)
+    selected_citation_ids: list[str] = Field(min_length=1, max_length=40)
+    source_titles: list[str] = Field(min_length=1, max_length=40)
+    citation_placeholders: list[str] = Field(min_length=1, max_length=40)
+    status: CitationCoverageStatus
+    classification: Literal["inference"] = "inference"
+    information_scopes: list[Literal["metadata_only", "metadata_and_abstract"]] = Field(
+        min_length=1, max_length=2
+    )
+    basis: str = Field(min_length=1, max_length=1500)
+    to_verify_items: list[str] = Field(default_factory=list, max_length=40)
+
+
+class CitationQualityCheck(BaseModel):
+    """A persisted rules-only check over citations explicitly selected by one user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["citation-quality-check.v1"] = "citation-quality-check.v1"
+    check_id: str = Field(min_length=1, max_length=100)
+    session_id: str = Field(min_length=1, max_length=100)
+    checked_at: datetime
+    quality_status: CitationQualityStatus
+    selected_source_count: int = Field(ge=0, le=1000)
+    unique_source_count: int = Field(ge=0, le=1000)
+    mapped_section_count: int = Field(ge=0, le=100)
+    core_section_coverage_percent: int = Field(ge=0, le=100)
+    coverage_items: list[CitationCoverageItem] = Field(default_factory=list, max_length=100)
+    unmapped_core_sections: list[str] = Field(default_factory=list, max_length=20)
+    uninserted_placeholders: list[CitationQualityIssue] = Field(
+        default_factory=list, max_length=100
+    )
+    duplicate_selections: list[CitationQualityIssue] = Field(default_factory=list, max_length=100)
+    metadata_gaps: list[CitationQualityIssue] = Field(default_factory=list, max_length=100)
+    author_verification_items: list[CitationQualityIssue] = Field(
+        default_factory=list, max_length=100
+    )
+    empty_state_message: str | None = Field(default=None, max_length=1000)
+    boundary_note: str = Field(min_length=1, max_length=1500)
+    source_scope: Literal["local_selected_evidence_only"] = "local_selected_evidence_only"
+
+
+class ReferenceDraftItem(BaseModel):
+    """One traceable, non-publication-style reference line."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    selected_citation_id: str = Field(min_length=1, max_length=100)
+    source_url: str = Field(min_length=1, max_length=2000)
+    citation_placeholder: str = Field(min_length=1, max_length=1000)
+    display_text: str = Field(min_length=1, max_length=3000)
+    classification: AnalysisClassification
+    to_verify_items: list[str] = Field(default_factory=list, max_length=12)
+    format_notice: str = Field(min_length=1, max_length=300)
+
+
+class ReferenceDraftVerificationItem(BaseModel):
+    """Missing saved metadata that an author or advisor must verify."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    selected_citation_id: str = Field(min_length=1, max_length=100)
+    source_url: str = Field(min_length=1, max_length=2000)
+    missing_fields: list[str] = Field(min_length=1, max_length=12)
+    classification: Literal["to_verify"] = "to_verify"
+    basis: str = Field(min_length=1, max_length=1000)
+
+
+class ReferenceDraftPackage(BaseModel):
+    """A stable copy surface derived only from active local selections."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["reference-draft-package.v1"] = "reference-draft-package.v1"
+    session_id: str = Field(min_length=1, max_length=100)
+    entries: list[ReferenceDraftItem] = Field(default_factory=list, max_length=1000)
+    copy_text: str = Field(default="", max_length=500_000)
+    verification_items: list[ReferenceDraftVerificationItem] = Field(
+        default_factory=list, max_length=1000
+    )
+    empty_state_message: str | None = Field(default=None, max_length=1000)
+    boundary_note: str = Field(min_length=1, max_length=1500)
+    source_scope: Literal["local_selected_evidence_only"] = "local_selected_evidence_only"
+
+
+class SubmissionProfileInput(BaseModel):
+    """User-known submission constraints; no venue rule is fetched or inferred."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_venue: str | None = Field(default=None, min_length=1, max_length=300)
+    anonymity_required: bool | None = None
+    length_or_section_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    ethics_and_data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    user_notes: str | None = Field(default=None, min_length=1, max_length=1500)
+
+    @field_validator(
+        "target_venue",
+        "length_or_section_requirements",
+        "ethics_and_data_requirements",
+        "user_notes",
+    )
+    @classmethod
+    def reject_secrets_and_private_paths(cls, value: str | None) -> str | None:
+        """Keep local submission metadata free of credentials and personal file paths."""
+        if value is None:
+            return value
+        lowered = value.lower()
+        if "api_key=" in lowered or "api_key =" in lowered or "sk-" in lowered:
+            raise ValueError("Submission profile fields must not contain API keys or tokens.")
+        if re.search(r"(?i)[a-z]:\\(?:users|home|private)\\", value):
+            raise ValueError("Submission profile fields must not contain private local paths.")
+        return value
+
+
+class SubmissionProfile(SubmissionProfileInput):
+    """Persisted local submission-profile data controlled by the user."""
+
+    schema_version: Literal["submission-profile.v1"] = "submission-profile.v1"
+    profile_id: str
+    conversation_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
 SubmissionReadinessStatus = Literal["not_ready", "needs_review", "checklist_complete"]
 SubmissionSourceScope = Literal[
     "draft_text",
@@ -895,6 +1056,7 @@ SubmissionSourceScope = Literal[
     "paper_review",
     "experiment_evidence",
     "academic_metadata_abstract",
+    "submission_profile",
     "manual_confirmation",
 ]
 
@@ -920,6 +1082,7 @@ class SubmissionReadinessCheck(BaseModel):
     draft_id: str
     revision_id: str | None = None
     conversation_id: str
+    submission_profile: SubmissionProfile | None = None
     readiness_status: SubmissionReadinessStatus
     blockers: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)
     warnings: list[SubmissionReadinessItem] = Field(default_factory=list, max_length=40)

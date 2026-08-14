@@ -10,6 +10,8 @@ PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
 MINDMAP = Path("frontend/components/research/ResearchMindMapPanel.tsx")
 DIFFICULTY = Path("frontend/components/research/ResearchDifficultyPanel.tsx")
 EXPERIMENT = Path("frontend/components/research/ExperimentDesignPanel.tsx")
+CITATION = Path("frontend/components/research/CitationScaffoldPanel.tsx")
+PAPER_DRAFT_REVIEW = Path("frontend/components/research/PaperDraftReviewPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -92,13 +94,15 @@ def test_model_backed_conversation_turn_allows_more_time_than_restore() -> None:
 
 def test_next_development_server_allows_documented_loopback_host() -> None:
     config_source = NEXT_CONFIG.read_text(encoding="utf-8")
+    env_example = Path("frontend/.env.example").read_text(encoding="utf-8")
 
     assert "allowedDevOrigins" in config_source
-    # Loopback hosts are required for the documented local launcher. The LAN
-    # IP is added when the dev server is exposed to other devices on the
-    # network; keep both documented loopback hosts present.
     assert '"127.0.0.1"' in config_source
     assert '"localhost"' in config_source
+    assert "CODE_NAVI_ALLOWED_DEV_ORIGINS" in config_source
+    assert "CODE_NAVI_ALLOWED_DEV_ORIGINS" in env_example
+    assert "192.168.0.32" not in config_source
+    assert "agentRules: false" in config_source
 
 
 def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:
@@ -151,3 +155,51 @@ def test_experiment_design_discloses_model_or_rules_generation_mode() -> None:
     assert "复制代码" in experiment_source
     assert "下载草案文本" in experiment_source
     assert "不写入项目" in experiment_source
+
+
+def test_citation_panel_requires_an_explicit_offline_quality_check() -> None:
+    citation_source = CITATION.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "运行引用完整性检查" in citation_source
+    assert "仅在你点击后检查当前选择" in citation_source
+    assert "不会自动联网" in citation_source
+    assert "标记为已人工插入" in citation_source
+    assert "下方是历史结果，请重新运行检查" in citation_source
+    assert "来源—章节映射" in citation_source
+    assert "不代表引用正确或论文可以投稿" in citation_source
+    assert "/citation-quality-checks" in api_source
+    assert "CitationQualityCheck" in api_source
+
+
+def test_citation_panel_exposes_a_traceable_copyable_reference_draft() -> None:
+    citation_source = CITATION.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "可核验参考文献草案" in citation_source
+    assert "复制文本草案" in citation_source
+    assert "查看原始来源" in citation_source
+    assert "作者 / 导师集中核验清单" in citation_source
+    assert "navigator.clipboard.writeText(referencePackage.copy_text)" in citation_source
+    assert "/reference-draft-package" in api_source
+    assert "ReferenceDraftPackage" in api_source
+
+
+def test_submission_profile_is_explicit_and_never_claims_venue_compliance() -> None:
+    panel_source = PAPER_DRAFT_REVIEW.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "SubmissionProfile" in api_source
+    assert "submission-profile" in api_source
+    assert "saveSubmissionProfile" in api_source
+    assert "投稿准备档案" in panel_source
+    assert "本地规则辅助，不代表满足任何会议或期刊要求" in panel_source
+    assert "我确认执行投稿前检查" in panel_source
+
+
+def test_submission_export_is_labeled_as_a_metadata_only_pre_submission_package() -> None:
+    panel_source = PAPER_DRAFT_REVIEW.read_text(encoding="utf-8")
+
+    assert "导出投稿前辅助包" in panel_source
+    assert "不含初稿/修订稿全文" in panel_source
+    assert "待作者或导师核对" in panel_source

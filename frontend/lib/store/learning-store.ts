@@ -6,6 +6,10 @@ import type {
   SceneOutline,
   Slide,
 } from "@/lib/api/learning";
+import type {
+  QuizGenerateParams,
+  QuizGenerateResponse,
+} from "@/lib/api/quiz";
 
 /**
  * Lightweight external-store snapshot for the learning page.
@@ -19,14 +23,18 @@ import type {
 export interface LearningSnapshot {
   query: string;
   result: unknown; // ExplainResponse
-  /** Which of the unified result views the user was on (text | ppt). */
-  view?: "text" | "ppt";
+  /** Which of the unified result views the user was on (text | ppt | quiz). */
+  view?: "text" | "ppt" | "quiz";
   /** PPT deck — set once generation starts, so it survives a route switch. */
   outlines?: SceneOutline[];
   slides?: Slide[];
   currentIndex?: number;
   presentationGenerationMode?: PresentationGenerationMode;
   presentationProviderName?: string;
+  /** Quiz-generation settings — survive a route switch so the third view restores. */
+  quizParams?: QuizGenerateParams;
+  /** Last generated exercise set — survives a route switch for review/export. */
+  quizResponse?: QuizGenerateResponse | null;
 }
 
 let currentSnapshot: LearningSnapshot | null = null;

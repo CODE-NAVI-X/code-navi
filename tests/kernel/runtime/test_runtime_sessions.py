@@ -37,10 +37,8 @@ def test_runtime_persists_event_only_session_logs(tmp_path: Path) -> None:
 
 
 def test_runtime_keeps_distinct_run_files_for_one_session(tmp_path: Path) -> None:
-    runtime = AgentRuntime(
-        MockProvider([ProviderResult(_assistant("one")), ProviderResult(_assistant("two"))]),
-        session_dir=tmp_path,
-    )
+    provider = MockProvider([ProviderResult(_assistant("one")), ProviderResult(_assistant("two"))])
+    runtime = AgentRuntime(provider, session_dir=tmp_path)
     agent = AgentSpec("helper", "Helps.", "Help.")
     first = runtime.run(agent, RuntimeRequest("one", session_id="shared", run_id="run-1"))
     second = runtime.run(agent, RuntimeRequest("two", session_id="shared", run_id="run-2"))
@@ -48,6 +46,34 @@ def test_runtime_keeps_distinct_run_files_for_one_session(tmp_path: Path) -> Non
     assert first.event_log_path != second.event_log_path
     assert Path(first.event_log_path or "").exists()
     assert Path(second.event_log_path or "").exists()
+    assert [message["role"] for message in provider.calls[1]["messages"]] == ["system", "user"]
+
+
+def test_runtime_uses_only_explicit_history_on_a_later_run(tmp_path: Path) -> None:
+    provider = MockProvider(
+        [ProviderResult(_assistant("first")), ProviderResult(_assistant("second"))]
+    )
+    runtime = AgentRuntime(provider, session_dir=tmp_path)
+    agent = AgentSpec("helper", "Helps.", "Help.")
+    runtime.run(agent, RuntimeRequest("one", session_id="shared", run_id="run-1"))
+    history = (
+        Message("user", (ContentBlock("text", {"text": "one"}),)),
+        _assistant("first"),
+    )
+
+    runtime.run(
+        agent,
+        RuntimeRequest(
+            "two",
+            session_id="different-runtime-session",
+            run_id="run-2",
+            conversation_history=history,
+        ),
+    )
+
+    sent = provider.calls[1]["messages"]
+    assert sent[1:3] == [message.to_json() for message in history]
+    assert sent[0]["metadata"]["session_id"] == "different-runtime-session"
 
 
 @pytest.mark.parametrize(

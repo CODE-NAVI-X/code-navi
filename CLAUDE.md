@@ -53,6 +53,11 @@ Code Navi（智教码航）面向学生自主学习、代码练习和项目科�
 8. **科研边界**：规则拥有画像、研究计划、确认和失败回退；模型个性化与外部检索只通过独立确认入口触发。代码草案是预览文本，不写入项目、不安装依赖、不执行命令。
 9. **容器状态**：`compose.yaml` 是 CLI + Piston 本地基线；`compose.web.yaml` 使用本地标签、特定 NAS 域名和证书挂载，但尚未接入 Piston。Basic Auth 不替代应用级认证和资源授权。
 10. **文档归属**：产品事实、架构接口、开发方法和部署状态分别进入 `docs/product/`、`docs/architecture/`、`docs/development/`、`docs/deployment/`；运行时 Skill 留在应用源码目录。
+11. **模块间上下文传递**：学习→科研等下游流转必须复用既有 `context-transfer` 确认流程（服务端以已归档 `notebook_item` 为来源记录），不得仅写浏览器内存状态（FlowPayload/URL 参数）作为跨模块上下文的唯一通道。新增跨模块入口先检查现有 `src/code_navi/context_transfer/` 服务。
+12. **服务端权威**：判分、审核等涉及信任边界的接口，评分依据（标准答案、满分、评分要点）必须由服务端从已归档数据加载；请求只携带对象 id 与用户提交内容，客户端不得重新提交评分标准。归档资源不存在或跨会话时返回 404。
+13. **打包资源**：运行时读取的资源文件（如 `MML2OMML.XSL`、模板、字体）必须列入 `pyproject.toml` 的 `[tool.setuptools.package-data]`；新增此类资源需同时添加「从构建 wheel 断言资源存在」的回归测试，避免 wheel 安装后静默退化为字面文本。
+14. **前端质量门**：`npm run lint`（react-hooks/set-state-in-effect）与 `npx tsc --noEmit`、`npm run build` 均为 CI 质量门；不要在 effect 内同步调用 setState。数据驱动的状态重置优先用「以变化键重挂载子组件」或事件处理器内重置，而不是 `useEffect` 里 setState。
+15. **导出去重**：同一条内容（参考答案、解析、来源等）在导出/渲染结果中只出现一次；若某类型题目「参考答案」即「解析」，不得再单独输出解析段。修改导出逻辑时用断言计数验证无重复内容。
 
 ## 本地运行
 
