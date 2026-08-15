@@ -386,6 +386,35 @@ export interface CreateExperimentEvidenceBundleRequest {
   }>;
 }
 
+export interface ReproductionPipelineItem {
+  content: string;
+  classification: "fact" | "inference" | "to_verify";
+  basis: string;
+  source_scope: string;
+}
+
+export interface ReproductionPipeline {
+  schema_version: "reproduction-pipeline.v1";
+  pipeline_id: string;
+  conversation_id: string;
+  source_bundle_id: string;
+  selected_paper: { url: string; title: string; source_name: string; year: number | null; abstract_scope: "metadata_and_abstract"; abstract_excerpt: string | null };
+  reproduction_goal: ReproductionPipelineItem;
+  research_question: ReproductionPipelineItem;
+  known_method: ReproductionPipelineItem;
+  data_and_sample_conditions: ReproductionPipelineItem[];
+  candidate_baselines: ReproductionPipelineItem[];
+  metrics: ReproductionPipelineItem[];
+  experiment_steps: ReproductionPipelineItem[];
+  resources: ReproductionPipelineItem[];
+  risks: ReproductionPipelineItem[];
+  ethics: ReproductionPipelineItem[];
+  confirmation_items: ReproductionPipelineItem[];
+  tasks: Array<{ task_id: string; title: string; description: string; classification: "fact" | "inference" | "to_verify"; source_scope: string; status: "not_started" | "evidence_linked"; evidence_links: Array<{ experiment_bundle_id: string; content: string }> }>;
+  two_week_mvp: ReproductionPipelineItem[];
+  provenance_note: string;
+}
+
 export interface PaperBlueprintReference {
   source_type: "research_profile" | "research_plan" | "academic_evidence" | "experiment_evidence";
   bundle_id: string | null;
@@ -730,6 +759,22 @@ export async function listExperimentEvidenceBundles(
 ): Promise<ExperimentEvidenceBundle[]> {
   return request<ExperimentEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+  );
+}
+
+export async function createReproductionPipeline(
+  conversationId: string,
+  payload: { evidence_bundle_id: string; paper_url: string },
+): Promise<ReproductionPipeline> {
+  return request<ReproductionPipeline>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listReproductionPipelines(conversationId: string): Promise<ReproductionPipeline[]> {
+  return request<ReproductionPipeline[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
   );
 }
 

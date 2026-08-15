@@ -48,6 +48,7 @@ import { ResearchMindMapPanel } from "./ResearchMindMapPanel";
 import { ResearchDifficultyPanel } from "./ResearchDifficultyPanel";
 import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
 import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
+import { ReproductionPipelinePanel } from "./ReproductionPipelinePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
 import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 
@@ -560,6 +561,15 @@ export function ResearchConversation() {
               description="只有你主动粘贴的实验记录才会成为事实来源；没有结果时仍可生成“待补充”的论文蓝图。"
             >
               <ExperimentEvidencePanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-reproduction"
+              title="论文复现辅助"
+              description="从已保存论文来源主动生成可核对的复现步骤；系统不自动执行代码或补造实验结果。"
+            >
+              <ReproductionPipelinePanel conversationId={conversation.conversation_id} />
             </PanelSection>
           )}
           {conversation.research_plan && (
