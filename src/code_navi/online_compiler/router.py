@@ -35,6 +35,7 @@ def create_compiler_application(settings: Settings | None = None) -> CompilerApp
         evaluator=ai_service.evaluator,
         tutor=ai_service.tutor,
         organizer=ai_service.organizer,
+        practice_set_planner=ai_service.practice_set_planner,
         ai_status=ai_service.status,
         ai_message=ai_service.message,
         record_store=LearningRecordStore(resolved.database_path),
@@ -117,6 +118,16 @@ def analyze_problem_import(
     """Analyze pasted exercise text into ordered practice items."""
 
     return _json_response(application.analyze_problem_import(payload))
+
+
+@router.post("/problem-sets/generate", status_code=200)
+def generate_problem_set(
+    payload: Any = _json_body,
+    application: CompilerApplication = _compiler_dependency,
+) -> JSONResponse:
+    """Generate an ordered practice set from known and session-owned problems."""
+
+    return _json_response(application.generate_problem_set(payload))
 
 
 @router.get("/records", status_code=200)

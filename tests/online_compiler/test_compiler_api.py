@@ -106,3 +106,23 @@ def test_compiler_api_analyzes_uploaded_problem_text() -> None:
     assert payload["source"] == "deterministic_rule"
     assert payload["problems"][0]["title"] == "字符串回文判断"
     assert "字符串" in payload["problems"][0]["tags"]
+
+
+def test_compiler_api_generates_practice_set() -> None:
+    compiler = CompilerApplication(FakePistonGateway(), Settings())
+    app.dependency_overrides[get_compiler_application] = lambda: compiler
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/compiler/problem-sets/generate",
+                json={"prompt": "练习循环和列表", "targetCount": 2},
+            )
+    finally:
+        app.dependency_overrides.pop(get_compiler_application, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "deterministic_rule"
+    assert len(payload["orderedProblems"]) == 2
+    assert payload["orderedProblems"][0]["source"] == "built_in"
