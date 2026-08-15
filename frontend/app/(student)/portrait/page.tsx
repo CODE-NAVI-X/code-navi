@@ -18,9 +18,15 @@ import {
   AlertCircle,
   ArrowLeft,
   BarChart3,
+  BookOpen,
   BookOpenCheck,
+  Check,
+  ChevronDown,
+  FileQuestion,
   HelpCircle,
   Inbox,
+  Loader2,
+  Presentation,
   RefreshCw,
   Sparkles,
   Target,
@@ -29,10 +35,13 @@ import {
 } from "lucide-react";
 import type {
   ConfusionItem,
+  ConfusionMarkItem,
+  MarkSourceType,
   ProfileMastery,
   ProfileResponse,
 } from "@/lib/api/profile";
-import { fetchProfile } from "@/lib/api/profile";
+import { fetchProfile, setConfusionMark } from "@/lib/api/profile";
+import { getLearningSessionId } from "@/lib/api/learning";
 import { getOrCreateLearnerId } from "@/lib/learner";
 
 // ── Thresholds mirror the backend service (learning_profile/service.py) ────────
@@ -101,34 +110,152 @@ function MasteryRow({ m }: { m: ProfileMastery }) {
   );
 }
 
-const SOURCE_LABELS: Record<ConfusionItem["source_types"][number], string> = {
+const SOURCE_LABELS: Record<MarkSourceType, string> = {
   ppt_page: "PPT 页",
   explain: "名词解析",
   quiz_question: "练习题",
 };
 
-function ConfusionRow({ item }: { item: ConfusionItem }) {
+//: Fixed column order (名词解析 → PPT 页 → 练习题) with per-surface icons.
+const SURFACE_COLUMNS: {
+  type: MarkSourceType;
+  icon: React.ReactNode;
+}[] = [
+  { type: "explain", icon: <BookOpen className="h-3 w-3" strokeWidth={1.5} /> },
+  { type: "ppt_page", icon: <Presentation className="h-3 w-3" strokeWidth={1.5} /> },
+  { type: "quiz_question", icon: <FileQuestion className="h-3 w-3" strokeWidth={1.5} /> },
+];
+
+function formatMarkedAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** "名词解析 2 · PPT 页 1" — per-surface count summary for the row header. */
+function sourceSummary(item: ConfusionItem): string {
+  return SURFACE_COLUMNS.flatMap(({ type }) => {
+    const count = (item.by_type[type] ?? []).length;
+    return count > 0 ? [`${SOURCE_LABELS[type]} ${count}`] : [];
+  }).join(" · ");
+}
+
+function ConfusionRow({
+  item,
+  onMarkCleared,
+}: {
+  item: ConfusionItem;
+  onMarkCleared: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [clearing, setClearing] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
+
+  /** 已懂 — clear every 不懂 mark on this surface, then refresh the portrait. */
+  async function handleClear(sourceType: MarkSourceType, sourceRef: string) {
+    if (clearing) return;
+    setClearing(sourceRef);
+    setClearError(null);
+    try {
+      await setConfusionMark({
+        session_id: getLearningSessionId(),
+        profile_id: getOrCreateLearnerId(),
+        knowledge_point: item.knowledge_point,
+        source_type: sourceType,
+        source_ref: sourceRef,
+        mark: false,
+      });
+      onMarkCleared();
+    } catch (err) {
+      setClearError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setClearing(null);
+    }
+  }
+
   return (
-    <li className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200/70 bg-amber-50/40 p-4 dark:border-amber-900/40 dark:bg-amber-950/20">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <HelpCircle className="h-4 w-4 shrink-0 text-amber-500" strokeWidth={1.5} />
-        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800 dark:text-zinc-200">
-          {item.knowledge_point}
-        </p>
-        <span className="shrink-0 rounded-md bg-amber-100/80 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
-          {item.mark_count} 处标记
+    <li className="rounded-xl border border-amber-200/70 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center justify-between gap-3 p-4 text-left"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <HelpCircle className="h-4 w-4 shrink-0 text-amber-500" strokeWidth={1.5} />
+          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800 dark:text-zinc-200">
+            {item.knowledge_point}
+          </p>
+          <span className="shrink-0 rounded-md bg-amber-100/80 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+            {item.mark_count} 处标记
+          </span>
+        </div>
+        <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-amber-600/90 dark:text-amber-300/80">
+          {sourceSummary(item)}
+          <ChevronDown
+            className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+            strokeWidth={1.5}
+          />
         </span>
-      </div>
-      {item.source_types.length > 0 && (
-        <div className="flex shrink-0 flex-wrap gap-1.5">
-          {item.source_types.map((type) => (
-            <span
-              key={type}
-              className="rounded-md bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-zinc-900 dark:text-zinc-400"
-            >
-              {SOURCE_LABELS[type] ?? type}
-            </span>
-          ))}
+      </button>
+
+      {open && (
+        <div className="border-t border-amber-100 px-4 pb-4 pt-3 dark:border-amber-900/30">
+          {clearError && (
+            <p className="mb-3 rounded-lg bg-red-50 px-3 py-1.5 text-[11px] text-red-700 dark:bg-red-950/30 dark:text-red-300">
+              {clearError}
+            </p>
+          )}
+          <div className="grid gap-4 md:grid-cols-3">
+            {SURFACE_COLUMNS.map(({ type, icon }) => {
+              const marks: ConfusionMarkItem[] = item.by_type[type] ?? [];
+              if (marks.length === 0) return null;
+              return (
+                <div key={type} className="min-w-0">
+                  <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold tracking-wide text-slate-500 uppercase dark:text-zinc-400">
+                    {icon}
+                    {SOURCE_LABELS[type]}
+                    <span className="rounded bg-amber-100/80 px-1 py-px font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                      {marks.length}
+                    </span>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {marks.map((mark) => (
+                      <li
+                        key={mark.source_ref}
+                        className="flex items-start justify-between gap-2 rounded-lg bg-white/80 px-2.5 py-2 text-[11px] leading-relaxed text-slate-700 dark:bg-zinc-900/80 dark:text-zinc-300"
+                      >
+                        <span className="min-w-0 flex-1 break-words">{mark.label}</span>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <button
+                            type="button"
+                            disabled={clearing !== null}
+                            onClick={() => void handleClear(type, mark.source_ref)}
+                            className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-emerald-950/40 dark:text-emerald-300"
+                          >
+                            {clearing === mark.source_ref ? (
+                              <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.5} />
+                            ) : (
+                              <Check className="h-3 w-3" strokeWidth={1.5} />
+                            )}
+                            已懂
+                          </button>
+                          <span className="text-[10px] text-slate-400 dark:text-zinc-500">
+                            {formatMarkedAt(mark.marked_at)}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </li>
@@ -207,6 +334,12 @@ export default function PortraitPage() {
     // Reset state from the event handler (never inside the effect body).
     setError(null);
     setLoading(true);
+    setRefreshKey((key) => key + 1);
+  }
+
+  /** Refetch after a 已懂 clear — without flashing the skeleton. */
+  function handleMarkCleared() {
+    setError(null);
     setRefreshKey((key) => key + 1);
   }
 
@@ -359,7 +492,11 @@ export default function PortraitPage() {
             {profile.confusion.length > 0 ? (
               <ul className="space-y-2.5">
                 {profile.confusion.map((item) => (
-                  <ConfusionRow key={item.knowledge_point} item={item} />
+                  <ConfusionRow
+                    key={item.knowledge_point}
+                    item={item}
+                    onMarkCleared={handleMarkCleared}
+                  />
                 ))}
               </ul>
             ) : (

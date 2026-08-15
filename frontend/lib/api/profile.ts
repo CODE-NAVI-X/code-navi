@@ -27,6 +27,12 @@ export interface MarkRequest {
   source_type: MarkSourceType;
   /** Entity this mark is attached to (traceability only). */
   source_ref: string;
+  /**
+   * Human-readable content of the mark (term text, slide page, question stem).
+   * Shown verbatim in the portrait's 待复习 expansion. Empty → the portrait
+   * falls back to ``source_ref``.
+   */
+  label?: string;
   /** True → 看不懂 (confused); False → 懂了 (understood). */
   mark: boolean;
 }
@@ -49,10 +55,25 @@ export interface ProfileMastery {
   status: "sufficient" | "insufficient";
 }
 
+export interface ConfusionMarkItem {
+  source_type: MarkSourceType;
+  /** Entity this mark is attached to (traceability). */
+  source_ref: string;
+  /** Human-readable content — what was actually marked 不懂. */
+  label: string;
+  /** ISO-8601 time of the latest 不懂 mark for this surface. */
+  marked_at: string;
+}
+
 export interface ConfusionItem {
   knowledge_point: string;
+  /** Distinct 不懂 marks across all surfaces. */
   mark_count: number;
-  source_types: MarkSourceType[];
+  /**
+   * Distinct marks grouped by surface, in the fixed order ppt_page → explain →
+   * quiz_question.
+   */
+  by_type: Partial<Record<MarkSourceType, ConfusionMarkItem[]>>;
 }
 
 export interface ProfileResponse {
@@ -115,6 +136,7 @@ export async function setConfusionMark(
         knowledge_point: request.knowledge_point,
         source_type: request.source_type,
         source_ref: request.source_ref,
+        label: request.label ?? "",
         mark: request.mark,
       }),
     });
@@ -231,22 +253,40 @@ function validateProfileResponse(raw: unknown): ProfileResponse {
     }
   }
 
+  const parseMarkItem = (raw: unknown, sourceType: MarkSourceType): ConfusionMarkItem | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const m = raw as Record<string, unknown>;
+    if (m.source_type !== sourceType) return null;
+    return {
+      source_type: sourceType,
+      source_ref: typeof m.source_ref === "string" ? (m.source_ref as string) : "",
+      label: typeof m.label === "string" ? (m.label as string) : "",
+      marked_at: typeof m.marked_at === "string" ? (m.marked_at as string) : "",
+    };
+  };
+
   const confusion: ConfusionItem[] = [];
   if (Array.isArray(obj.confusion)) {
     for (const item of obj.confusion) {
       if (item && typeof item === "object") {
         const c = item as Record<string, unknown>;
-        const types: MarkSourceType[] = Array.isArray(c.source_types)
-          ? (c.source_types as MarkSourceType[]).filter(
-              (t): t is MarkSourceType =>
-                t === "ppt_page" || t === "explain" || t === "quiz_question",
-            )
-          : [];
+        const byType: ConfusionItem["by_type"] = {};
+        if (c.by_type && typeof c.by_type === "object") {
+          const group = c.by_type as Record<string, unknown>;
+          for (const type of ["ppt_page", "explain", "quiz_question"] as const) {
+            if (Array.isArray(group[type])) {
+              const items = (group[type] as unknown[])
+                .map((raw) => parseMarkItem(raw, type))
+                .filter((m): m is ConfusionMarkItem => m !== null);
+              if (items.length > 0) byType[type] = items;
+            }
+          }
+        }
         confusion.push({
           knowledge_point:
             typeof c.knowledge_point === "string" ? (c.knowledge_point as string) : "",
           mark_count: typeof c.mark_count === "number" ? (c.mark_count as number) : 1,
-          source_types: types,
+          by_type: byType,
         });
       }
     }

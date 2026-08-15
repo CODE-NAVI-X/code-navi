@@ -164,6 +164,7 @@ export function SlideViewer({
                   knowledgePoint,
                   String(currentIndex),
                 )}
+                label={`第 ${currentIndex + 1} 页`}
               />
             )}
             <button

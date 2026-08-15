@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 import zipfile
 from collections.abc import Generator
 from pathlib import Path
@@ -50,6 +51,9 @@ from code_navi.learning.quiz.services import (  # noqa: E402
     _parse_revised,
 )
 from code_navi.learning.quiz.websearch import WebSearchClient  # noqa: E402
+from code_navi.learning_profile.models import QuizAttemptModel  # noqa: E402
+from code_navi.learning_profile.schemas import MarkRequest  # noqa: E402
+from code_navi.learning_profile.service import ProfileService  # noqa: E402
 from code_navi.server import app  # noqa: E402
 from kernel.adapters.jsonl_session import load_session  # noqa: E402
 
@@ -492,7 +496,7 @@ class TestSourceAndReview:
     ) -> None:
         gen = QuizGenerator()
 
-        def fake_audit(request, session_id, questions) -> QuizAuditReport:
+        def fake_audit(request, session_id, questions, student_profile=None) -> QuizAuditReport:
             return QuizAuditReport(verdict="adjust", scores=[], notes=["难度偏高，请降低"])
 
         def fake_revise(request, session_id, questions, types, notes):
@@ -562,6 +566,126 @@ class TestSourceAndReview:
         client = WebSearchClient(api_key="")
         assert client.available is False
         assert client.search("集合") == []
+
+
+# ---------------------------------------------------------------------------
+# 组卷直接调用学情画像 — real portrait folds into the generation prompt
+# ---------------------------------------------------------------------------
+
+
+#: UUID v4 portrait key shared by the seeded attempts + confusion mark below.
+PORTRAIT_PROFILE_ID = "55555555-5555-4555-8555-555555555555"
+
+
+class TestGenerateWithProfileInjection:
+    """``profile_id`` loads the real portrait and injects it into generation."""
+
+    def _seed_portrait(self, db: Session) -> None:
+        """3/3 on 集合运算 (strength) + one 不懂 mark on 函数 (待复习)."""
+        for _ in range(3):
+            db.add(
+                QuizAttemptModel(
+                    attempt_id=str(uuid.uuid4()),
+                    quiz_id="quiz-seed",
+                    session_id="sess-seed",
+                    knowledge_point="集合运算",
+                    profile_id=PORTRAIT_PROFILE_ID,
+                    user_id=None,
+                    question_id="q1",
+                    question_type="single",
+                    points=10,
+                    score=10,
+                    max_score=10,
+                    correct=True,
+                    graded=True,
+                    graded_by="rules",
+                    is_mock=False,
+                    comment=None,
+                )
+            )
+        db.commit()
+        ProfileService().set_mark(
+            MarkRequest(
+                session_id="sess-seed",
+                profile_id=PORTRAIT_PROFILE_ID,
+                knowledge_point="函数",
+                source_type="explain",
+                source_ref="explain:函数",
+                label="函数定义没看懂",
+                mark=True,
+            ),
+            db,
+        )
+
+    def test_real_portrait_injected_when_profile_id_present(
+        self, db: Session
+    ) -> None:
+        self._seed_portrait(db)
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                profile_id=PORTRAIT_PROFILE_ID,
+            ),
+            db,
+        )
+        assert response.effective_student_profile is not None
+        assert "学生真实学情画像" in response.effective_student_profile
+        # The strength came from persisted attempts, the review from the mark.
+        assert "集合运算" in response.effective_student_profile
+        assert "函数" in response.effective_student_profile
+
+    def test_empty_portrait_falls_back_to_manual_only(self, db: Session) -> None:
+        # No attempts / marks seeded for this key → portrait segment is None.
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                profile_id=PORTRAIT_PROFILE_ID,
+                student_profile="手动说明：多出基础题",
+            ),
+            db,
+        )
+        assert response.effective_student_profile == "手动说明：多出基础题"
+        assert "学生真实学情画像" not in (response.effective_student_profile or "")
+
+    def test_manual_supplement_merges_on_top_of_portrait(self, db: Session) -> None:
+        self._seed_portrait(db)
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                profile_id=PORTRAIT_PROFILE_ID,
+                student_profile="本次重点练函数",
+            ),
+            db,
+        )
+        assert response.effective_student_profile is not None
+        assert "学生真实学情画像" in response.effective_student_profile
+        assert "学生补充说明：本次重点练函数" in response.effective_student_profile
+
+    def test_no_profile_id_uses_manual_text_only(self, db: Session) -> None:
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                student_profile="仅手动说明",
+            ),
+            db,
+        )
+        assert response.effective_student_profile == "仅手动说明"
+
+    def test_profile_id_absent_means_no_effective_profile(self, db: Session) -> None:
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(knowledge_point="集合"),
+            db,
+        )
+        assert response.effective_student_profile is None
+
+    def test_invalid_profile_id_is_rejected_at_endpoint(
+        self, client: TestClient
+    ) -> None:
+        resp = client.post(
+            "/api/v1/learning/quiz/generate",
+            json={"knowledge_point": "集合", "profile_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

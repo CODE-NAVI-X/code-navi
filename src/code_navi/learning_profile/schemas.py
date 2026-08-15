@@ -57,6 +57,14 @@ class MarkRequest(BaseModel):
         max_length=256,
         description="Entity this mark is attached to (traceability only).",
     )
+    label: str = Field(
+        default="",
+        max_length=512,
+        description=(
+            "Human-readable content of the mark (term text, slide page, "
+            "question stem). Empty → the portrait falls back to ``source_ref``."
+        ),
+    )
     mark: bool = Field(
         ..., description="True → 看不懂 (confused); False → 懂了 (understood)."
     )
@@ -94,13 +102,40 @@ class ProfileMastery(BaseModel):
     )
 
 
+class ConfusionMarkItem(BaseModel):
+    """One concrete "看不懂" mark under a knowledge point, on one surface.
+
+    The portrait dedupes marks by ``(source_type, source_ref)`` across sessions,
+    so each item corresponds 1:1 to a "已懂" clear action.
+    """
+
+    source_type: MarkSourceType = Field(
+        ..., description="ppt_page | explain | quiz_question."
+    )
+    source_ref: str = Field(
+        ..., description="Entity this mark is attached to (traceability)."
+    )
+    label: str = Field(
+        ..., description="Human-readable content — what was actually marked 不懂."
+    )
+    marked_at: str = Field(
+        ..., description="ISO-8601 time of the latest 不懂 mark for this surface."
+    )
+
+
 class ConfusionItem(BaseModel):
     """One knowledge point that currently carries ≥1 看不懂 mark."""
 
     knowledge_point: str = Field(..., description="Knowledge name.")
-    mark_count: int = Field(..., ge=1, description="Open 看不懂 marks on it.")
-    source_types: list[MarkSourceType] = Field(
-        default_factory=list, description="Surfaces that carry those marks."
+    mark_count: int = Field(
+        ..., ge=1, description="Distinct 不懂 marks on it, across all surfaces."
+    )
+    by_type: dict[MarkSourceType, list[ConfusionMarkItem]] = Field(
+        default_factory=dict,
+        description=(
+            "Distinct 不懂 marks grouped by surface, in the fixed order "
+            "ppt_page → explain → quiz_question."
+        ),
     )
 
 

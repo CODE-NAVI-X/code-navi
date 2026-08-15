@@ -28,6 +28,13 @@ SourceType = Literal["generated", "web", "local_bank"]
 
 SourceMode = Literal["generated", "web"]
 
+#: UUID v4 (the learner profile id format) — enforced at the API edge for the
+#: client-minted idempotency key and the unified portrait aggregation key.
+_UUID_V4_PATTERN = (
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-"
+    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)
+
 
 class QuizQuestionSource(BaseModel):
     """Provenance of one question, shown to the student in the UI."""
@@ -166,7 +173,21 @@ class QuizGenerateRequest(BaseModel):
         max_length=2000,
         description=(
             "Free-text 学情 context — persona, weak points, mastery hints, preferred "
-            "difficulty. The model adapts question difficulty and content to it."
+            "difficulty. The model adapts question difficulty and content to it. "
+            "When ``profile_id`` is also present this text is appended as a "
+            "supplement on top of the real portrait."
+        ),
+    )
+    profile_id: str | None = Field(
+        default=None,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description=(
+            "Optional unified profile key (== the practice learner_id UUID). "
+            "When present the server loads that learner's real portrait "
+            "(graded attempts + 不懂 marks) and injects it into the generation "
+            "prompt so questions adapt to actual mastery."
         ),
     )
 
@@ -191,6 +212,14 @@ class QuizGenerateResponse(BaseModel):
         description="Echo of the effective source mode after fallback.",
     )
     total_points: int = Field(..., description="Sum of question points for display.")
+    effective_student_profile: str | None = Field(
+        default=None,
+        description=(
+            "The actual 学情 text injected into the generation prompt (real "
+            "portrait segment + manual supplement, or just whichever was "
+            "present). Echoed back so the UI can show what the model saw."
+        ),
+    )
     audit: QuizAuditReport | None = Field(
         default=None, description="Post-generation model audit of the paper."
     )
@@ -210,14 +239,6 @@ class StudentAnswerItem(BaseModel):
             "free-text answer."
         ),
     )
-
-
-#: UUID v4 (the learner profile id format) — enforces the client-minted
-#: idempotency key and the unified portrait aggregation key at the API edge.
-_UUID_V4_PATTERN = (
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-"
-    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-)
 
 
 class GradeRequest(BaseModel):

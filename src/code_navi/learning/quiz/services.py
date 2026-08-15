@@ -36,6 +36,7 @@ from code_navi.providers import ProviderSettings, create_provider
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
 from ...learning_profile.models import QuizAttemptModel
+from ...learning_profile.service import ProfileService, build_student_profile_prompt
 from ..models import NotebookItemModel
 from .prompts import (
     AUDIT_SYSTEM_PROMPT,
@@ -509,10 +510,25 @@ class QuizGenerator:
                 # No key / network failure — degrade to honest pure generation.
                 source_mode = "generated"
 
+        # Real 学情 injection: when a profile_id is present, load that
+        # learner's portrait and fold it into the prompt, appending the manual
+        # textarea as a supplement. An empty portrait is skipped silently.
+        effective_student_profile = request.student_profile
+        if request.profile_id:
+            portrait = ProfileService().get_profile(request.profile_id, db)
+            portrait_segment = build_student_profile_prompt(portrait)
+            if portrait_segment:
+                if request.student_profile and request.student_profile.strip():
+                    effective_student_profile = (
+                        f"{portrait_segment}\n\n学生补充说明：{request.student_profile}"
+                    )
+                else:
+                    effective_student_profile = portrait_segment
+
         offline = json.dumps([q.model_dump() for q in _mock_questions(request.knowledge_point)])
         system = build_quiz_system_prompt(
             types,
-            student_profile=request.student_profile,
+            student_profile=effective_student_profile,
             web_material=web_material,
         )
         result, provider_name = self._run(
@@ -540,7 +556,7 @@ class QuizGenerator:
             generation_mode = "rules" if provider_name == "mock" else "model"
 
         # Post-generation audit, then one bounded revision round if needed.
-        audit = self._audit(request, session_id, questions)
+        audit = self._audit(request, session_id, questions, effective_student_profile)
         if audit is not None and audit.verdict == "adjust":
             revised, summary = self._revise(
                 request, session_id, questions, types, audit.notes
@@ -573,6 +589,7 @@ class QuizGenerator:
             provider_name=provider_name,
             source_mode=source_mode,
             total_points=sum(q.points for q in questions),
+            effective_student_profile=effective_student_profile,
             audit=audit,
         )
 
@@ -747,6 +764,7 @@ class QuizGenerator:
         request: QuizGenerateRequest,
         session_id: str,
         questions: list[QuizQuestion],
+        student_profile: str | None = None,
     ) -> QuizAuditReport | None:
         """Second kernel run scoring the paper; None when unparseable."""
         questions_json = json.dumps(
@@ -759,7 +777,7 @@ class QuizGenerator:
                 questions_json,
                 request.knowledge_point,
                 request.difficulty,
-                request.student_profile,
+                student_profile,
             ),
             session_id,
             json.dumps(_mock_audit(), ensure_ascii=False),

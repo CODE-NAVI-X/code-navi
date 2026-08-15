@@ -127,6 +127,13 @@ function countBlanks(question: string, questionItem: QuizQuestion): number {
   return questionItem.answer?.length ?? 0;
 }
 
+/** Readable portrait label — the question stem without inline LaTeX. */
+function questionStemLabel(stem: string, fallback: string): string {
+  const plain = stem.replace(/\$[^$]+\$/g, "").replace(/\s+/g, " ").trim();
+  if (!plain) return fallback;
+  return plain.length > 100 ? plain.slice(0, 100) + "…" : plain;
+}
+
 // ── Skeleton ───────────────────────────────────────────────────────────────────
 
 function SkeletonLine({ width = "w-full" }: { width?: string }) {
@@ -181,6 +188,8 @@ export function QuizView({
 
   const questions = response?.questions ?? [];
   const controlsDisabled = loading;
+  /** 自动注入真实学情画像（默认开启，由父组件初始化的 ``profile_id`` 决定）。 */
+  const autoProfileActive = !!params.profile_id;
 
   function setQuestionTypes(types: QuizQuestionType[]) {
     onParamsChange({
@@ -381,7 +390,7 @@ export function QuizView({
           </div>
         </div>
 
-        {/* 学情画像（可选）— 随组卷请求写入，LLM 据此适配难度与内容 */}
+        {/* 学情画像 — 自动注入真实画像（默认开）+ 手动补充说明 */}
         <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 dark:border-zinc-700 dark:bg-zinc-800/40">
           <button
             type="button"
@@ -389,25 +398,50 @@ export function QuizView({
             className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-xs font-medium text-slate-600 dark:text-zinc-400"
           >
             <UserRound className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" strokeWidth={1.5} />
-            学情画像（可选）
-            {params.student_profile?.trim() ? (
+            学情画像
+            {autoProfileActive ? (
               <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
-                已填写
+                自动注入已开启
               </span>
             ) : (
-              <span className="text-[10px] text-slate-400 dark:text-zinc-500">未填写</span>
+              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">
+                仅手动补充
+              </span>
             )}
+            {params.student_profile?.trim() ? (
+              <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+                已填写补充
+              </span>
+            ) : null}
             <span className="ml-auto text-[10px] text-slate-400 dark:text-zinc-500">
               {showProfile ? "收起" : "展开"}
             </span>
           </button>
           {showProfile && (
-            <div className="px-3 pb-3">
+            <div className="space-y-3 px-3 pb-3">
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={autoProfileActive}
+                  disabled={controlsDisabled}
+                  onChange={(event) =>
+                    onParamsChange({
+                      ...params,
+                      profile_id: event.target.checked ? getOrCreateLearnerId() : null,
+                    })
+                  }
+                  className="h-3.5 w-3.5 cursor-pointer accent-violet-600"
+                />
+                自动使用学情画像（判分 + 标记记录）
+              </label>
+              <p className="text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500">
+                开启后，组卷时自动加载本浏览器的练习判分与「不懂」标记记录作为提示词注入，让题目贴合你的实际掌握情况。
+              </p>
               <textarea
                 value={params.student_profile ?? ""}
                 disabled={controlsDisabled}
                 rows={3}
-                placeholder="例如：已掌握集合列举法，但对交集/并集运算和证明题薄弱；希望多出基础题，难度适中。"
+                placeholder="补充说明（可选）：例如：已掌握集合列举法，但对交集/并集运算和证明题薄弱；希望多出基础题，难度适中。"
                 onChange={(event) =>
                   onParamsChange({
                     ...params,
@@ -416,8 +450,8 @@ export function QuizView({
                 }
                 className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 outline-none placeholder:text-slate-400 focus:border-violet-400 focus:ring-4 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:focus:ring-violet-950/40"
               />
-              <p className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500">
-                填写后，组卷时会把你的薄弱点与掌握情况交给模型，用于调整题目难度与内容。
+              <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                补充说明会叠加在学情画像之上，一起交给模型。
               </p>
             </div>
           )}
@@ -506,6 +540,18 @@ export function QuizView({
             </div>
           </div>
 
+          {/* Injected 学情 preview — transparent about what the model saw */}
+          {response.effective_student_profile && (
+            <details className="mb-5 rounded-xl border border-violet-200 bg-violet-50/40 p-3 text-xs dark:border-violet-900/40 dark:bg-violet-950/20">
+              <summary className="cursor-pointer font-semibold text-violet-700 dark:text-violet-300">
+                已注入的学情画像（点击查看）
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap leading-relaxed text-slate-600 dark:text-zinc-300">
+                {response.effective_student_profile}
+              </p>
+            </details>
+          )}
+
           {/* Questions */}
           <ol className="space-y-5">
             {response.questions.map((question, index) => {
@@ -588,6 +634,7 @@ export function QuizView({
                           knowledgePoint,
                           question.id,
                         )}
+                        label={questionStemLabel(question.question, knowledgePoint)}
                       />
                       <span className="font-mono text-[11px] text-slate-400 dark:text-zinc-500">
                         {question.points} 分

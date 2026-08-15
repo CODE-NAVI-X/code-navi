@@ -27,6 +27,7 @@ import { exportSlidesToPptx } from "@/lib/export/export-pptx";
 import Link from "next/link";
 import { type JSX, useState, useEffect, useRef } from "react";
 import { buildKnowledgeId } from "@/lib/learning-context";
+import { getOrCreateLearnerId } from "@/lib/learner";
 import {
   setLearningSnapshot,
   useLearningSessionId,
@@ -82,6 +83,7 @@ function ExplanationCard({
             knowledgePoint={data.knowledge_point}
             sourceType="explain"
             sourceRef={markSourceRef("explain", data.knowledge_point)}
+            label={data.knowledge_point}
           />
           <button
             type="button"
@@ -209,9 +211,14 @@ export default function LearningPage(): JSX.Element {
   );
 
   // Quiz (配套练习题) state — restored from the snapshot so the third view and
-  // any already-generated paper survive a route switch.
+  // any already-generated paper survive a route switch. The learner portrait is
+  // injected by default (``profile_id`` = this browser's unified key); the
+  // QuizView toggle switches it off by writing ``profile_id: null``.
   const [quizParams, setQuizParams] = useState<QuizGenerateParams>(
-    savedSnapshot?.quizParams ?? DEFAULT_QUIZ_PARAMS,
+    savedSnapshot?.quizParams ?? {
+      ...DEFAULT_QUIZ_PARAMS,
+      profile_id: getOrCreateLearnerId(),
+    },
   );
   const [quizResponse, setQuizResponse] = useState<QuizGenerateResponse | null>(
     savedSnapshot?.quizResponse ?? null,

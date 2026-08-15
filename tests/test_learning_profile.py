@@ -37,8 +37,11 @@ from code_navi.learning_profile.models import (  # noqa: E402
     ConfusionMarkModel,
     QuizAttemptModel,
 )
-from code_navi.learning_profile.schemas import MarkRequest  # noqa: E402
-from code_navi.learning_profile.service import ProfileService  # noqa: E402
+from code_navi.learning_profile.schemas import MarkRequest, ProfileResponse  # noqa: E402
+from code_navi.learning_profile.service import (  # noqa: E402
+    ProfileService,
+    build_student_profile_prompt,
+)
 from code_navi.server import app  # noqa: E402
 
 PROFILE_A = "22222222-2222-4222-8222-222222222222"
@@ -241,7 +244,7 @@ class TestProfileAggregation:
         profile = ProfileService().get_profile(PROFILE_A, db)
         by_point = {c.knowledge_point: c for c in profile.confusion}
         assert by_point["集合"].mark_count == 2
-        assert set(by_point["集合"].source_types) == {"explain", "quiz_question"}
+        assert set(by_point["集合"].by_type) == {"explain", "quiz_question"}
         assert by_point["函数"].mark_count == 1
         assert "概率" not in by_point
 
@@ -419,7 +422,9 @@ class TestProfileEndpoints:
         confusion = resp.json()["confusion"]
         assert len(confusion) == 1
         assert confusion[0]["knowledge_point"] == "集合"
-        assert confusion[0]["source_types"] == ["quiz_question"]
+        assert set(confusion[0]["by_type"]) == {"quiz_question"}
+        item = confusion[0]["by_type"]["quiz_question"][0]
+        assert item["label"] == "quiz_question:集合:q1"  # falls back to source_ref
 
 
 class TestGradeToProfileFlow:
@@ -539,3 +544,237 @@ class TestGradeToProfileFlow:
         assert row.profile_id == PROFILE_A
         assert row.graded_by == "rules"
         assert row.knowledge_point == "排列组合"
+
+
+# ---------------------------------------------------------------------------
+# M2: normalized grouping (UDP/udp), by_type columns, profile-level 已懂
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizedGrouping:
+    """Same knowledge point written differently collapses into one group."""
+
+    def test_mastery_normalizes_case_and_keeps_first_seen_spelling(
+        self, db: Session
+    ) -> None:
+        _add_attempt(db, knowledge_point="UDP", score=10, max_score=10)
+        _add_attempt(db, knowledge_point="udp", score=6, max_score=10)
+        _add_attempt(db, knowledge_point="UDP", score=8, max_score=10)
+
+        profile = ProfileService().get_profile(PROFILE_A, db)
+        assert len(profile.mastery) == 1
+        entry = profile.mastery[0]
+        # Display name is the first-seen original spelling, not the lowercase key.
+        assert entry.knowledge_point == "UDP"
+        assert entry.sample_size == 3
+        assert entry.quiz_rate == pytest.approx(0.8)
+        assert entry.mastery == pytest.approx(0.8)
+        assert entry.status == "sufficient"
+
+    def test_mastery_first_seen_spelling_depends_on_insert_order(
+        self, db: Session
+    ) -> None:
+        _add_attempt(db, knowledge_point="udp", score=10, max_score=10)
+        _add_attempt(db, knowledge_point="UDP", score=10, max_score=10)
+
+        profile = ProfileService().get_profile(PROFILE_A, db)
+        assert len(profile.mastery) == 1
+        assert profile.mastery[0].knowledge_point == "udp"
+
+    def test_confusion_normalizes_case_and_dedupes_by_surface(
+        self, db: Session
+    ) -> None:
+        _add_mark(db, knowledge_point="UDP", source_ref="explain:UDP", source_type="explain")
+        # Same surface in another session must collapse into one 待复习 entry.
+        _add_mark(
+            db,
+            knowledge_point="udp",
+            source_ref="explain:UDP",
+            source_type="explain",
+            session_id="sess-b",
+        )
+        _add_mark(
+            db,
+            knowledge_point="udp",
+            source_ref="quiz_question:udp:q1",
+            source_type="quiz_question",
+            session_id="sess-c",
+        )
+
+        profile = ProfileService().get_profile(PROFILE_A, db)
+        assert len(profile.confusion) == 1
+        item = profile.confusion[0]
+        assert item.knowledge_point == "UDP"
+        assert item.mark_count == 2  # distinct surfaces only
+        assert set(item.by_type) == {"explain", "quiz_question"}
+        explain_items = item.by_type["explain"]
+        assert len(explain_items) == 1  # deduped across sessions
+        assert explain_items[0].source_ref == "explain:UDP"
+        assert explain_items[0].label == "explain:UDP"  # falls back to source_ref
+
+    def test_confusion_by_type_uses_fixed_column_order(self, db: Session) -> None:
+        _add_mark(
+            db,
+            knowledge_point="集合",
+            source_ref="quiz_question:q1",
+            source_type="quiz_question",
+        )
+        _add_mark(db, knowledge_point="集合", source_ref="explain:集合", source_type="explain")
+        _add_mark(
+            db,
+            knowledge_point="集合",
+            source_ref="ppt_page:集合:0",
+            source_type="ppt_page",
+        )
+
+        profile = ProfileService().get_profile(PROFILE_A, db)
+        assert list(profile.confusion[0].by_type) == ["ppt_page", "explain", "quiz_question"]
+
+
+class TestMarkLabel:
+    def test_mark_stores_label_for_portrait_display(self, db: Session) -> None:
+        svc = ProfileService()
+        svc.set_mark(
+            MarkRequest(
+                session_id="sess-a",
+                profile_id=PROFILE_A,
+                knowledge_point="集合",
+                source_type="explain",
+                source_ref="explain:集合",
+                label="集合的列举法没看懂",
+                mark=True,
+            ),
+            db,
+        )
+        row = db.query(ConfusionMarkModel).first()
+        assert row is not None
+        assert row.label == "集合的列举法没看懂"
+        profile = svc.get_profile(PROFILE_A, db)
+        item = profile.confusion[0].by_type["explain"][0]
+        assert item.label == "集合的列举法没看懂"
+
+    def test_understood_with_profile_id_clears_across_sessions(
+        self, db: Session
+    ) -> None:
+        svc = ProfileService()
+        for session in ("sess-a", "sess-b"):
+            svc.set_mark(
+                MarkRequest(
+                    session_id=session,
+                    profile_id=PROFILE_A,
+                    knowledge_point="集合",
+                    source_type="explain",
+                    source_ref="explain:集合",
+                    label="集合没看懂",
+                    mark=True,
+                ),
+                db,
+            )
+        assert db.query(ConfusionMarkModel).count() == 2
+
+        svc.set_mark(
+            MarkRequest(
+                session_id="sess-a",
+                profile_id=PROFILE_A,
+                knowledge_point="集合",
+                source_type="explain",
+                source_ref="explain:集合",
+                mark=False,
+            ),
+            db,
+        )
+        statuses = {row.status for row in db.query(ConfusionMarkModel).all()}
+        assert statuses == {"understood"}
+        assert svc.get_profile(PROFILE_A, db).confusion == []
+
+    def test_understood_without_profile_id_is_per_session(
+        self, db: Session
+    ) -> None:
+        """mark=False with no profile_id only flips the requesting session's row."""
+        svc = ProfileService()
+        for session in ("sess-a", "sess-b"):
+            svc.set_mark(
+                MarkRequest(
+                    session_id=session,
+                    profile_id=PROFILE_A,
+                    knowledge_point="集合",
+                    source_type="explain",
+                    source_ref="explain:集合",
+                    mark=True,
+                ),
+                db,
+            )
+        # No profile_id → the per-session toggle path; only sess-b's row flips.
+        svc.set_mark(
+            MarkRequest(
+                session_id="sess-b",
+                knowledge_point="集合",
+                source_type="explain",
+                source_ref="explain:集合",
+                mark=False,
+            ),
+            db,
+        )
+        # sess-a's mark is still confused in the portrait → 1 item remains.
+        profile = svc.get_profile(PROFILE_A, db)
+        assert len(profile.confusion) == 1
+
+
+class TestBuildStudentProfilePrompt:
+    """The prompt injection segment — fact-boundary safe and deterministic."""
+
+    def test_empty_portrait_yields_none(self) -> None:
+        empty = ProfileResponse(
+            profile_id=PROFILE_A,
+            generated_at="2026-08-16T00:00:00+00:00",
+            mastery=[],
+            strengths=[],
+            weaknesses=[],
+            confusion=[],
+        )
+        assert build_student_profile_prompt(empty) is None
+
+    def test_with_data_covers_strengths_weaknesses_and_review(
+        self, db: Session
+    ) -> None:
+        for point, score in [("强项A", 10), ("强项B", 8)]:
+            for _ in range(3):
+                _add_attempt(db, knowledge_point=point, score=score, max_score=10)
+        for _ in range(3):
+            _add_attempt(db, knowledge_point="函数", score=1, max_score=10)
+        _add_mark(db, knowledge_point="概率", source_ref="explain:概率", source_type="explain")
+
+        prompt = build_student_profile_prompt(
+            ProfileService().get_profile(PROFILE_A, db)
+        )
+        assert prompt is not None
+        assert "学生真实学情画像" in prompt
+        assert "已掌握较好" in prompt and "强项A" in prompt
+        assert "需要加强" in prompt and "函数" in prompt
+        assert "待复习" in prompt and "概率" in prompt
+
+    def test_undersampled_reports_样本不足_without_fabricated_number(
+        self, db: Session
+    ) -> None:
+        _add_attempt(db, knowledge_point="集合", score=8, max_score=10)
+        _add_attempt(db, knowledge_point="集合", score=6, max_score=10)
+
+        prompt = build_student_profile_prompt(
+            ProfileService().get_profile(PROFILE_A, db)
+        )
+        assert prompt is not None
+        assert "样本不足" in prompt
+        # The real rate is 70% but the portrait refuses to report a mastery
+        # value at 2 samples — the prompt must never paraphrase it as a number.
+        assert "70%" not in prompt
+        assert "0.7" not in prompt
+
+    def test_only_confusion_marks_still_yield_a_prompt(self, db: Session) -> None:
+        _add_mark(db, knowledge_point="概率", source_ref="explain:概率", source_type="explain")
+
+        prompt = build_student_profile_prompt(
+            ProfileService().get_profile(PROFILE_A, db)
+        )
+        assert prompt is not None
+        assert "待复习" in prompt
+        assert "概率" in prompt

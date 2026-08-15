@@ -77,6 +77,12 @@ export interface QuizGenerateResponse {
   provider_name: string;
   source_mode: QuizSourceMode;
   total_points: number;
+  /**
+   * The actual 学情 text injected into the generation prompt (real portrait
+   * segment + manual supplement, or just whichever was present). Echoed back so
+   * the UI can show what the model saw.
+   */
+  effective_student_profile?: string | null;
   audit?: QuizAuditReport | null;
 }
 
@@ -89,6 +95,11 @@ export interface QuizGenerateParams {
   with_latex?: boolean;
   source_mode?: QuizSourceMode;
   student_profile?: string | null;
+  /**
+   * Unified profile key (== the practice learner_id UUID). When set, the server
+   * injects that learner's real portrait into the generation prompt.
+   */
+  profile_id?: string | null;
 }
 
 export const DEFAULT_QUIZ_PARAMS: QuizGenerateParams = {
@@ -121,6 +132,8 @@ export interface GenerateQuizRequest {
   with_latex?: boolean;
   source_mode?: QuizSourceMode;
   student_profile?: string | null;
+  /** Optional profile key → server injects that learner's real portrait. */
+  profile_id?: string | null;
 }
 
 /**
@@ -147,6 +160,7 @@ export async function generateQuiz(
         with_latex: request.with_latex,
         source_mode: request.source_mode,
         student_profile: request.student_profile ?? null,
+        profile_id: request.profile_id ?? null,
       }),
     });
   } catch (networkError) {
@@ -372,6 +386,10 @@ function validateGenerateResponse(raw: unknown): QuizGenerateResponse {
     provider_name: typeof obj.provider_name === "string" ? (obj.provider_name as string) : "mock",
     source_mode: obj.source_mode === "web" ? "web" : "generated",
     total_points: typeof obj.total_points === "number" ? obj.total_points : questions.reduce((sum, q) => sum + q.points, 0),
+    effective_student_profile:
+      typeof obj.effective_student_profile === "string"
+        ? (obj.effective_student_profile as string)
+        : null,
     audit: obj.audit && typeof obj.audit === "object" ? (obj.audit as QuizAuditReport) : null,
   };
 }

@@ -31,6 +31,12 @@ export interface MarkButtonProps {
   sourceType: MarkSourceType;
   /** Entity this mark is attached to (traceability only). */
   sourceRef: string;
+  /**
+   * Human-readable content of the mark (term text, slide page, question stem).
+   * Shown verbatim in the portrait's 待复习 expansion so the student sees
+   * *what* was marked 不懂. Falls back to ``sourceRef`` when omitted.
+   */
+  label?: string;
   className?: string;
 }
 
@@ -41,6 +47,7 @@ export function MarkButton({
   knowledgePoint,
   sourceType,
   sourceRef,
+  label,
   className = "",
 }: MarkButtonProps) {
   const [markState, setMarkState] = useState<MarkState>("idle");
@@ -71,6 +78,7 @@ export function MarkButton({
       knowledge_point: knowledgePoint,
       source_type: sourceType,
       source_ref: sourceRef,
+      label: label ?? sourceRef,
       mark,
     })
       .then(() => {
@@ -95,7 +103,7 @@ export function MarkButton({
         // never references itself before it is declared.
         drainRef.current();
       });
-  }, [sessionId, knowledgePoint, sourceType, sourceRef]);
+  }, [sessionId, knowledgePoint, sourceType, sourceRef, label]);
 
   // Keep the ref current outside of render (React Compiler rule).
   useEffect(() => {
@@ -127,7 +135,7 @@ export function MarkButton({
     scheduleToggle(mark);
   }
 
-  const label =
+  const buttonLabel =
     markState === "confused"
       ? "看不懂"
       : markState === "understood"
@@ -168,7 +176,7 @@ export function MarkButton({
       ) : (
         <HelpCircle className="h-3 w-3" strokeWidth={1.5} />
       )}
-      {label}
+      {buttonLabel}
     </button>
   );
 }

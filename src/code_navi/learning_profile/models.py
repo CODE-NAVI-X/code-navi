@@ -86,6 +86,10 @@ class ConfusionMarkModel(Base):
     knowledge_point = Column(String(512), nullable=False)
     source_type = Column(String(16), nullable=False)
     source_ref = Column(String(256), nullable=False)
+    # Human-readable content of the mark (term text, slide page, question
+    # stem). Nullable so pre-v2 rows survive; the service reads ``label or
+    # source_ref`` so nothing displays blank.
+    label = Column(String(512), nullable=True)
     # status: "confused" | "understood"
     status = Column(String(16), nullable=False)
     created_at = Column(DateTime, nullable=False, default=_now)
