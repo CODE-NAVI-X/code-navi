@@ -424,7 +424,7 @@ export default function LearningPage(): JSX.Element {
             学习笔记
           </button>
           <Link
-            href="/student/portrait"
+            href="/portrait"
             className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-slate-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700/80 dark:hover:text-white"
           >
             <UserRound className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" strokeWidth={1.5} />

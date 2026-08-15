@@ -218,7 +218,7 @@ export default function PortraitPage() {
       {/* Header */}
       <header className="mb-8">
         <Link
-          href="/student/learning"
+          href="/learning"
           className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200"
         >
           <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.5} />
