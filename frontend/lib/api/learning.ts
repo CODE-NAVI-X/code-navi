@@ -147,12 +147,16 @@ export async function explainKnowledgePoint(
 // learning client owns the quiz-grade call, matching the module's API layout.
 
 /**
- * POST /api/v1/learning/quiz/grade — grade fill_blank / short_answer answers
- * through the LLM and return per-question scores plus Chinese analysis
- * comments (or an honest offline fallback, never a faked verdict).
+ * POST /api/v1/learning/quiz/grade — grade the student's answers server-side
+ * and return per-question scores plus Chinese analysis comments.
  *
- * Single-choice items are graded client-side and must not be included in
- * ``student_answers``.
+ * All answered items (single included) go through the server: ``single`` is
+ * judged deterministically against the archived answer (``graded_by=rules``),
+ * ``fill_blank`` / ``short_answer`` through the LLM when an online provider is
+ * configured — or an honest offline fallback, never a faked verdict. Each
+ * scored answer is persisted as a ``quiz_attempts`` row keyed by the
+ * client-minted ``attempt_id``; ``profile_id`` aggregates them into the
+ * cross-session learning portrait.
  */
 export async function gradeQuizAnswers(
   request: GradeQuizRequest,
@@ -167,6 +171,8 @@ export async function gradeQuizAnswers(
       body: JSON.stringify({
         session_id: request.session_id,
         quiz_id: request.quiz_id,
+        attempt_id: request.attempt_id,
+        profile_id: request.profile_id ?? null,
         student_answers: request.student_answers,
       }),
     });
@@ -268,15 +274,28 @@ function validateGradeResponse(raw: unknown): QuizGradeResponse {
     for (const item of obj.results) {
       if (item && typeof item === "object") {
         const r = item as Record<string, unknown>;
+        const type: QuizQuestionGradeResult["type"] =
+          r.type === "single"
+            ? "single"
+            : r.type === "fill_blank"
+              ? "fill_blank"
+              : "short_answer";
+        const gradedBy: QuizQuestionGradeResult["graded_by"] =
+          r.graded_by === "rules"
+            ? "rules"
+            : r.graded_by === "model"
+              ? "model"
+              : "mock";
         results.push({
           question_id: typeof r.question_id === "string" ? r.question_id : "",
-          type: r.type === "fill_blank" ? "fill_blank" : "short_answer",
+          type,
           score: typeof r.score === "number" ? r.score : 0,
           max_score: typeof r.max_score === "number" ? r.max_score : 0,
           is_correct: r.is_correct === true,
           comment: typeof r.comment === "string" ? (r.comment as string) : null,
           is_mock: r.is_mock === true,
           graded: r.graded !== false,
+          graded_by: gradedBy,
         });
       }
     }
@@ -284,6 +303,8 @@ function validateGradeResponse(raw: unknown): QuizGradeResponse {
 
   return {
     session_id: obj.session_id as string,
+    attempt_id:
+      typeof obj.attempt_id === "string" ? (obj.attempt_id as string) : "",
     results,
     generation_mode:
       typeof obj.generation_mode === "string" ? (obj.generation_mode as string) : "mock",

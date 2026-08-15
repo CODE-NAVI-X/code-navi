@@ -243,8 +243,9 @@ export interface QuizStudentAnswerItem {
   /** Must match an id in the archived quiz being graded. */
   question_id: string;
   /**
-   * fill_blank: one entry per blank, in order. short_answer: a single entry
-   * holding the free-text answer.
+   * single: the selected option value e.g. ["B"]. fill_blank: one entry per
+   * blank, in order. short_answer: a single entry holding the free-text
+   * answer.
    */
   answer: string[];
 }
@@ -264,10 +265,17 @@ export interface QuizQuestionGradeResult {
   is_mock: boolean;
   /** False only when offline mode cannot grade a short answer. */
   graded: boolean;
+  /**
+   * How this score was produced: rules (deterministic single-choice), mock
+   * (offline deterministic fill-blank), or model (LLM judgment).
+   */
+  graded_by: "mock" | "rules" | "model";
 }
 
 export interface QuizGradeResponse {
   session_id: string;
+  /** Echoed idempotency key; addresses the persisted attempts. */
+  attempt_id: string;
   results: QuizQuestionGradeResult[];
   generation_mode: string;
   provider_name: string;
@@ -279,7 +287,17 @@ export interface GradeQuizRequest {
   session_id: string;
   /** The archived quiz to grade (its rubric is loaded server-side). */
   quiz_id: string;
-  /** The student's answers, one entry per answered question. */
+  /**
+   * Client-minted UUID v4 idempotency key — a retried request re-uses it so
+   * the server upserts instead of double-inserting.
+   */
+  attempt_id: string;
+  /**
+   * Optional unified profile key (== the practice ``learner_id`` UUID). When
+   * present, this attempt is aggregated into the learning portrait.
+   */
+  profile_id?: string | null;
+  /** The student's answers, one entry per answered question (single included). */
   student_answers: QuizStudentAnswerItem[];
 }
 

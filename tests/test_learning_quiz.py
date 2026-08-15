@@ -53,6 +53,11 @@ from code_navi.learning.quiz.websearch import WebSearchClient  # noqa: E402
 from code_navi.server import app  # noqa: E402
 from kernel.adapters.jsonl_session import load_session  # noqa: E402
 
+#: Deterministic UUID v4 used as the client-minted grade idempotency key. Each
+#: test runs against freshly recreated tables, so the fixed value never collides
+#: across tests.
+ATTEMPT_ID = "11111111-1111-4111-8111-111111111111"
+
 
 @pytest.fixture(autouse=True)
 def _isolated_event_logs(
@@ -583,6 +588,7 @@ class TestQuizGrader:
             GradeRequest(
                 session_id=session_id,
                 quiz_id=quiz.quiz_id,
+                attempt_id=ATTEMPT_ID,
                 student_answers=student_answers,
             ),
             db,
@@ -643,21 +649,58 @@ class TestQuizGrader:
         assert response.total_score == 10
         assert response.total_max_score == 10
 
-    def test_grade_skips_single_and_unanswered_questions(self, db: Session) -> None:
+    def test_grade_single_is_graded_server_side(self, db: Session) -> None:
+        """Single-choice is graded deterministically server-side (rules), never client-side."""
         response = self._grade(
             db,
             "sess-g",
             [StudentAnswerItem(question_id="q1", answer=["B"])],
         )
-        assert response.results == []
-        assert response.total_score == 0
-        assert response.total_max_score == 0
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.question_id == "q1"
+        assert result.type == "single"
+        assert result.graded_by == "rules"
+        assert result.is_mock is False
+        assert result.graded is True
+        assert result.score == result.max_score == 10
+        assert result.is_correct is True
+        assert response.total_score == 10
+        assert response.total_max_score == 10
+
+    def test_grade_single_wrong_answer_gives_zero(self, db: Session) -> None:
+        response = self._grade(
+            db,
+            "sess-g",
+            [StudentAnswerItem(question_id="q1", answer=["A"])],
+        )
+        result = response.results[0]
+        assert result.score == 0
+        assert result.is_correct is False
+        assert result.graded_by == "rules"
+
+    def test_grade_unanswered_questions_are_not_graded(self, db: Session) -> None:
+        """Only submitted questions appear in the results; unanswered stay out."""
+        response = self._grade(
+            db,
+            "sess-g",
+            [StudentAnswerItem(question_id="q2", answer=["3"])],
+        )
+        ids = {r.question_id for r in response.results}
+        assert "q1" not in ids  # single not submitted → not graded
+        assert "q3" not in ids  # short answer not submitted → not graded
+        assert response.total_max_score == 10
 
     def test_grade_unknown_quiz_raises(self, db: Session) -> None:
         gen = QuizGenerator()
         with pytest.raises(QuizNotFoundError):
             gen.grade_quiz(
-                GradeRequest(session_id="sess-g", quiz_id="quiz-nope", student_answers=[]),
+                GradeRequest(
+                    session_id="sess-g",
+                    quiz_id="quiz-nope",
+                    attempt_id=ATTEMPT_ID,
+                    student_answers=[],
+                ),
                 db,
             )
 
@@ -669,12 +712,14 @@ class TestParseGradeResults:
             '[{"question_id": "q2", "score": 10, "comment": "答对了"}, '
             '{"question_id": "q3", "score": 15, "comment": "思路清晰，缺一步"}]',
             questions,
+            graded_by="model",
         )
         assert results is not None
         by_id = {r.question_id: r for r in results}
         assert by_id["q2"].score == 10 and by_id["q2"].is_correct is True
         assert by_id["q2"].comment == "答对了"
         assert by_id["q2"].is_mock is False and by_id["q2"].graded is True
+        assert by_id["q2"].graded_by == "model"
         assert by_id["q3"].score == 15 and by_id["q3"].is_correct is False  # 20 pts max
 
     def test_clamps_score_to_question_bounds(self) -> None:
@@ -683,6 +728,7 @@ class TestParseGradeResults:
             '[{"question_id": "q2", "score": 99, "comment": "超分"}, '
             '{"question_id": "q3", "score": -5, "comment": "负分"}]',
             questions,
+            graded_by="model",
         )
         assert results is not None
         by_id = {r.question_id: r for r in results}
@@ -691,9 +737,12 @@ class TestParseGradeResults:
 
     def test_rejects_invalid_payloads(self) -> None:
         questions = _mock_questions("集合")
-        assert _parse_grade_results("not json", questions) is None
-        assert _parse_grade_results('{"not": "an array"}', questions) is None
-        assert _parse_grade_results("[]", questions) is None
+        assert _parse_grade_results("not json", questions, graded_by="model") is None
+        assert (
+            _parse_grade_results('{"not": "an array"}', questions, graded_by="model")
+            is None
+        )
+        assert _parse_grade_results("[]", questions, graded_by="model") is None
 
     def test_ignores_unknown_question_ids(self) -> None:
         questions = _mock_questions("集合")
@@ -701,6 +750,7 @@ class TestParseGradeResults:
             '[{"question_id": "nope", "score": 10}, '
             '{"question_id": "q2", "score": 10}]',
             questions,
+            graded_by="model",
         )
         assert results is not None
         assert len(results) == 1
@@ -711,7 +761,7 @@ class TestParseGradeResults:
         answers_map = {"q2": ["3"], "q3": ["证明"]}
         mock = _mock_grade_results(questions, answers_map)
         raw = json.dumps([r.model_dump() for r in mock], ensure_ascii=False)
-        parsed = _parse_grade_results(raw, questions)
+        parsed = _parse_grade_results(raw, questions, graded_by="mock")
         assert parsed is not None
         by_id = {r.question_id: r for r in parsed}
         assert by_id["q3"].graded is False  # offline short answer stays ungraded
@@ -733,6 +783,7 @@ class TestGradeEndpoint:
         return {
             "session_id": session_id,
             "quiz_id": quiz["quiz_id"],
+            "attempt_id": ATTEMPT_ID,
             "student_answers": [
                 {"question_id": "q2", "answer": ["3"]},
                 {"question_id": "q3", "answer": ["因为…"]},
@@ -755,6 +806,28 @@ class TestGradeEndpoint:
         assert by_id["q3"]["graded"] is False
         assert data["total_score"] == 10
 
+    def test_grade_single_via_endpoint(self, client: TestClient) -> None:
+        """The endpoint grades single-choice server-side and echoes the attempt id."""
+        quiz = self._generate(client, "sess-grade")
+        resp = client.post(
+            "/api/v1/learning/quiz/grade",
+            json={
+                "session_id": "sess-grade",
+                "quiz_id": quiz["quiz_id"],
+                "attempt_id": ATTEMPT_ID,
+                "student_answers": [{"question_id": "q1", "answer": ["B"]}],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["attempt_id"] == ATTEMPT_ID
+        result = data["results"][0]
+        assert result["question_id"] == "q1"
+        assert result["type"] == "single"
+        assert result["graded_by"] == "rules"
+        assert result["score"] == 10
+        assert result["is_correct"] is True
+
     def test_grade_requires_session_id(self, client: TestClient) -> None:
         payload = self._grade_payload(client)
         payload.pop("session_id")
@@ -764,7 +837,23 @@ class TestGradeEndpoint:
     def test_grade_requires_quiz_id(self, client: TestClient) -> None:
         resp = client.post(
             "/api/v1/learning/quiz/grade",
-            json={"session_id": "sess-x", "student_answers": []},
+            json={
+                "session_id": "sess-x",
+                "attempt_id": ATTEMPT_ID,
+                "student_answers": [],
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_grade_requires_attempt_id(self, client: TestClient) -> None:
+        quiz = self._generate(client, "sess-grade")
+        resp = client.post(
+            "/api/v1/learning/quiz/grade",
+            json={
+                "session_id": "sess-grade",
+                "quiz_id": quiz["quiz_id"],
+                "student_answers": [{"question_id": "q2", "answer": ["3"]}],
+            },
         )
         assert resp.status_code == 422
 
@@ -774,6 +863,7 @@ class TestGradeEndpoint:
             json={
                 "session_id": "sess-x",
                 "quiz_id": "quiz-nope",
+                "attempt_id": ATTEMPT_ID,
                 "student_answers": [],
             },
         )
@@ -786,6 +876,7 @@ class TestGradeEndpoint:
             json={
                 "session_id": "sess-bob",
                 "quiz_id": quiz["quiz_id"],
+                "attempt_id": ATTEMPT_ID,
                 "student_answers": [{"question_id": "q2", "answer": ["3"]}],
             },
         )

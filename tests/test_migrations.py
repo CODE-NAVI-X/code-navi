@@ -18,6 +18,7 @@ from code_navi import cli_conversation as cli_conversation_models  # noqa: E402,
 from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
+from code_navi.learning_profile import models as learning_profile_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]

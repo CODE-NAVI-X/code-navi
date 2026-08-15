@@ -13,7 +13,9 @@ import TextSelectionPopover from "@/components/learning/TextSelectionPopover";
 import { StructuredNotebook } from "@/components/learning/StructuredNotebook";
 import { DownstreamGoCard } from "@/components/learning/DownstreamGoCard";
 import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
+import { MarkButton } from "@/components/learning/MarkButton";
 import { QuizView } from "@/components/learning/QuizView";
+import { markSourceRef } from "@/lib/api/profile";
 import {
   DEFAULT_QUIZ_PARAMS,
   exportQuizDocx,
@@ -22,6 +24,7 @@ import {
   type QuizGenerateResponse,
 } from "@/lib/api/quiz";
 import { exportSlidesToPptx } from "@/lib/export/export-pptx";
+import Link from "next/link";
 import { type JSX, useState, useEffect, useRef } from "react";
 import { buildKnowledgeId } from "@/lib/learning-context";
 import {
@@ -41,6 +44,7 @@ import {
   AlertCircle,
   Presentation,
   FileQuestion,
+  UserRound,
 } from "lucide-react";
 
 // ── UI helpers ─────────────────────────────────────────────────────────────────
@@ -74,6 +78,11 @@ function ExplanationCard({
           {data.knowledge_point}
         </h2>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <MarkButton
+            knowledgePoint={data.knowledge_point}
+            sourceType="explain"
+            sourceRef={markSourceRef("explain", data.knowledge_point)}
+          />
           <button
             type="button"
             onClick={onGeneratePpt}
@@ -414,6 +423,13 @@ export default function LearningPage(): JSX.Element {
             <BookOpen className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
             学习笔记
           </button>
+          <Link
+            href="/student/portrait"
+            className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-slate-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700/80 dark:hover:text-white"
+          >
+            <UserRound className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" strokeWidth={1.5} />
+            学情画像
+          </Link>
           {result && (
             <button
               type="button"

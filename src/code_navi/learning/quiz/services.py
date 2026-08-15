@@ -26,6 +26,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -34,6 +35,7 @@ from sqlalchemy.orm import Session
 from code_navi.providers import ProviderSettings, create_provider
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
+from ...learning_profile.models import QuizAttemptModel
 from ..models import NotebookItemModel
 from .prompts import (
     AUDIT_SYSTEM_PROMPT,
@@ -148,6 +150,37 @@ def _mock_audit() -> dict:
     }
 
 
+def _rules_grade_results(
+    questions: list[QuizQuestion],
+    answers_map: dict[str, list[str]],
+) -> list[QuestionGradeResult]:
+    """Deterministic server-side grading for single-choice items.
+
+    Exact match against the archived ``answer`` with ``graded_by="rules"``.
+    This keeps single-choice grading out of the client's hands (server
+    authority) and gives the portrait a trustworthy numerator.
+    """
+    results: list[QuestionGradeResult] = []
+    for q in questions:
+        given = [s.strip() for s in (answers_map.get(q.id) or [])]
+        expected = [s.strip() for s in (q.answer or [])]
+        matched = bool(expected) and given == expected
+        results.append(
+            QuestionGradeResult(
+                question_id=q.id,
+                type=q.type,
+                score=q.points if matched else 0,
+                max_score=q.points,
+                is_correct=matched,
+                comment=None,
+                is_mock=False,
+                graded=True,
+                graded_by="rules",
+            )
+        )
+    return results
+
+
 def _mock_grade_results(
     questions: list[QuizQuestion],
     answers_map: dict[str, list[str]],
@@ -178,6 +211,7 @@ def _mock_grade_results(
                     ),
                     is_mock=True,
                     graded=True,
+                    graded_by="mock",
                 )
             )
         else:
@@ -191,6 +225,7 @@ def _mock_grade_results(
                     comment="离线模式，请对照参考答案自评。",
                     is_mock=True,
                     graded=False,
+                    graded_by="mock",
                 )
             )
     return results
@@ -319,12 +354,16 @@ def _parse_audit(raw: str) -> QuizAuditReport | None:
 def _parse_grade_results(
     raw: str,
     questions: list[QuizQuestion],
+    *,
+    graded_by: Literal["mock", "rules", "model"],
 ) -> list[QuestionGradeResult] | None:
     """Parse the grader JSON array; return None when it can't be trusted.
 
     Also accepts the offline mock payload verbatim (it already carries
     ``graded``/``is_mock`` markers), so parsing the mock fallback round-trips
     to identical results instead of re-judging them as real LLM verdicts.
+    ``graded_by`` is stamped on every parsed result: ``mock`` when the payload
+    came from the offline fallback, ``model`` when a real LLM judged it.
     """
     cleaned = _strip_code_fence(raw)
     try:
@@ -360,6 +399,7 @@ def _parse_grade_results(
                 comment=comment,
                 is_mock=is_mock,
                 graded=graded,
+                graded_by=graded_by,
             )
         )
     return results or None
@@ -537,73 +577,141 @@ class QuizGenerator:
         )
 
     def grade_quiz(self, request: GradeRequest, db: Session) -> GradeResponse:
-        """Grade fill_blank / short_answer answers through the LLM (or mock).
+        """Grade a quiz server-side and persist every scored answer.
 
         The scoring rubric is loaded server-side from the archived quiz — the
         request carries only the quiz id and the student's answers, so a caller
-        can neither alter the correct answers nor the points.  One audited
-        kernel run scores each answered item and returns per-question score +
-        Chinese comment.  Offline mode degrades honestly — exact-match for fill
-        blanks (``is_mock=True``) and ``graded=False`` for short answers — never
-        a faked model verdict.
+        can neither alter the correct answers nor the points.
+
+        Grading per type:
+        - ``single`` — deterministic exact match vs the archived answer
+          (``graded_by="rules"``), never trusted to the client.
+        - ``fill_blank`` — LLM judgment when an online provider is configured;
+          offline it degrades to exact per-blank match (``is_mock=True``).
+        - ``short_answer`` — LLM judgment online; ``graded=False`` offline so
+          the UI prompts self-grading.  Never a faked model verdict.
+
+        Every result is persisted as a ``quiz_attempts`` row in the same
+        transaction, keyed by the client-minted ``attempt_id`` so a network
+        retry cannot double-insert.
         """
-        _, questions = self.load_quiz(db, request.session_id, request.quiz_id)
-        targets = [q for q in questions if q.type in ("fill_blank", "short_answer")]
-        target_ids = {q.id for q in targets}
+        knowledge_point, questions = self.load_quiz(
+            db, request.session_id, request.quiz_id
+        )
+        single_qs = [q for q in questions if q.type == "single"]
+        llm_qs = [q for q in questions if q.type in ("fill_blank", "short_answer")]
+        single_ids = {q.id for q in single_qs}
+        llm_ids = {q.id for q in llm_qs}
+
         answers_map: dict[str, list[str]] = {}
         for item in request.student_answers:
-            if item.question_id in target_ids:
+            if item.question_id in single_ids or item.question_id in llm_ids:
                 answers_map[item.question_id] = item.answer
 
-        to_grade = [q for q in targets if q.id in answers_map]
-        offline = json.dumps(
-            [r.model_dump() for r in _mock_grade_results(to_grade, answers_map)],
-            ensure_ascii=False,
+        single_results = _rules_grade_results(
+            [q for q in single_qs if q.id in answers_map],
+            answers_map,
         )
+        llm_to_grade = [q for q in llm_qs if q.id in answers_map]
 
-        if not to_grade:
-            return GradeResponse(
-                session_id=request.session_id,
-                results=[],
-                generation_mode="rules",
-                provider_name="mock",
-                total_score=0,
-                total_max_score=0,
-            )
-
-        questions_json = json.dumps(
-            [q.model_dump(mode="json") for q in to_grade], ensure_ascii=False
-        )
-        answers_json = json.dumps(
-            [
-                {"question_id": q.id, "type": q.type, "answer": answers_map[q.id]}
-                for q in to_grade
-            ],
-            ensure_ascii=False,
-        )
-        result, provider_name = self._run(
-            GRADE_SYSTEM_PROMPT,
-            "quiz_grader",
-            grade_user_prompt(questions_json, answers_json),
-            request.session_id,
-            offline,
-        )
-        results = _parse_grade_results(result.output_text or "", to_grade)
-        if results is None:
-            logger.warning("Grade payload unparseable; falling back to mock grading.")
-            results = _mock_grade_results(to_grade, answers_map)
-            generation_mode = "rules_fallback"
+        if not llm_to_grade:
+            generation_mode = "rules"
+            provider_name = "mock"
+            llm_results: list[QuestionGradeResult] = []
         else:
-            generation_mode = "rules" if provider_name == "mock" else "model"
+            offline = json.dumps(
+                [r.model_dump() for r in _mock_grade_results(llm_to_grade, answers_map)],
+                ensure_ascii=False,
+            )
+            questions_json = json.dumps(
+                [q.model_dump(mode="json") for q in llm_to_grade],
+                ensure_ascii=False,
+            )
+            answers_json = json.dumps(
+                [
+                    {"question_id": q.id, "type": q.type, "answer": answers_map[q.id]}
+                    for q in llm_to_grade
+                ],
+                ensure_ascii=False,
+            )
+            result, provider_name = self._run(
+                GRADE_SYSTEM_PROMPT,
+                "quiz_grader",
+                grade_user_prompt(questions_json, answers_json),
+                request.session_id,
+                offline,
+            )
+            graded_by = "model" if provider_name != "mock" else "mock"
+            parsed = _parse_grade_results(
+                result.output_text or "",
+                llm_to_grade,
+                graded_by=graded_by,
+            )
+            if parsed is None:
+                logger.warning("Grade payload unparseable; falling back to mock grading.")
+                llm_results = _mock_grade_results(llm_to_grade, answers_map)
+                generation_mode = "rules_fallback"
+            else:
+                llm_results = parsed
+                generation_mode = "rules" if provider_name == "mock" else "model"
+
+        results = single_results + llm_results
+        self._persist_attempts(db, request, knowledge_point, results)
 
         return GradeResponse(
             session_id=request.session_id,
+            attempt_id=request.attempt_id,
             results=results,
             generation_mode=generation_mode,
             provider_name=provider_name,
             total_score=sum(r.score for r in results if r.graded),
             total_max_score=sum(r.max_score for r in results if r.graded),
         )
+
+    def _persist_attempts(
+        self,
+        db: Session,
+        request: GradeRequest,
+        knowledge_point: str,
+        results: list[QuestionGradeResult],
+    ) -> None:
+        """Persist graded answers as ``quiz_attempts`` rows.
+
+        Idempotent on ``attempt_id``: a retried request that already landed
+        (unique ``(attempt_id, question_id)``) is a no-op instead of a
+        duplicate insert.
+        """
+        already = (
+            db.query(QuizAttemptModel.id)
+            .filter(QuizAttemptModel.attempt_id == request.attempt_id)
+            .first()
+        )
+        if already is not None:
+            return
+        db.add_all(
+            [
+                QuizAttemptModel(
+                    attempt_id=request.attempt_id,
+                    quiz_id=request.quiz_id,
+                    session_id=request.session_id,
+                    knowledge_point=knowledge_point,
+                    profile_id=request.profile_id,
+                    user_id=None,
+                    question_id=r.question_id,
+                    question_type=r.type,
+                    points=r.max_score,
+                    score=r.score,
+                    max_score=r.max_score,
+                    correct=r.is_correct,
+                    graded=r.graded,
+                    graded_by=r.graded_by,
+                    is_mock=r.is_mock,
+                    comment=r.comment,
+                )
+                for r in results
+            ]
+        )
+        db.commit()
 
     def _parse_questions(
         self,

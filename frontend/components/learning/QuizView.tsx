@@ -6,13 +6,15 @@
  * error / exporting) so the view survives tab switches; this component stays
  * presentational except for the transient answer set and grading state.
  *
- * Answering splits by type:
- * - single: graded client-side against the ``answer`` field.
- * - fill_blank / short_answer: submitted to ``POST /quiz/grade`` where the LLM
- *   scores them (tolerating equivalent math / rewording) and returns a Chinese
- *   analysis comment. In offline mode the backend degrades honestly — exact
- *   match for fill blanks (labeled 离线 Mock 判分), and short answers come back
- *   ``graded=false`` prompting self-grading — never a faked verdict.
+ * Answering submits every answered item to ``POST /quiz/grade``: ``single`` is
+ * judged deterministically server-side against the archived answer
+ * (``graded_by=rules``), ``fill_blank`` / ``short_answer`` through the LLM
+ * (tolerating equivalent math / rewording) with a Chinese analysis comment. In
+ * offline mode the backend degrades honestly — exact match for fill blanks
+ * (labeled 离线 Mock 判分), and short answers come back ``graded=false``
+ * prompting self-grading — never a faked verdict. Every scored answer is
+ * persisted as a ``quiz_attempts`` row keyed by the client-minted
+ * ``attempt_id``, aggregated into the learning portrait via ``profile_id``.
  */
 
 import { useMemo, useState } from "react";
@@ -39,6 +41,9 @@ import type {
   QuizQuestionType,
 } from "@/lib/api/quiz";
 import { gradeQuizAnswers } from "@/lib/api/learning";
+import { markSourceRef } from "@/lib/api/profile";
+import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
+import { MarkButton } from "@/components/learning/MarkButton";
 
 // ── Inline LaTeX ($...$) ───────────────────────────────────────────────────────
 
@@ -204,23 +209,24 @@ export function QuizView({
 
   async function submitAnswers() {
     if (!response) return;
-    const gradable = response.questions
-      .filter((q) => q.type !== "single")
+    const answered = response.questions
       .filter((q) => (answers[q.id] ?? []).some((value) => value.trim() !== ""));
-    if (gradable.length === 0) {
-      // Nothing for the LLM to grade — only single-choice was answered.
-      setGradeResults({});
-      setGradeError(null);
-      setSubmitted(true);
+    if (answered.length === 0) {
+      setGradeError("尚未作答任何题目，请先作答后提交判分。");
       return;
     }
     setGrading(true);
     setGradeError(null);
     try {
+      // Fresh client-minted idempotency key per submission: a network retry of
+      // the same request re-uses it so the server upserts, never double-inserts.
+      const attemptId = newUuidV4();
       const grade = await gradeQuizAnswers({
         session_id: sessionId,
         quiz_id: response.quiz_id,
-        student_answers: gradable.map((q) => ({
+        attempt_id: attemptId,
+        profile_id: getOrCreateLearnerId(),
+        student_answers: answered.map((q) => ({
           question_id: q.id,
           answer: answers[q.id] ?? [],
         })),
@@ -243,13 +249,14 @@ export function QuizView({
     setGradeError(null);
   }
 
-  // Auto-graded score: single + fill_blank (local) plus any LLM/mock-graded
-  // fill_blank & short_answer results. Ungraded short answers stay out of the
-  // auto total so they never drag the objective score down.
+  // Auto-graded score: every server-graded result first (single → rules,
+  // fill_blank → mock/model, short_answer → model), with a local exact-match
+  // fallback only where no server result exists. Ungraded short answers stay
+  // out of the auto total so they never drag the objective score down.
   const earned = questions.reduce((sum, q) => {
-    if (q.type === "single") return sum + (isCorrect(q) ? q.points : 0);
     const grade = gradeResults[q.id];
     if (grade?.graded) return sum + grade.score;
+    if (q.type === "single") return sum + (isCorrect(q) ? q.points : 0);
     if (q.type === "fill_blank") return sum + (isCorrect(q) ? q.points : 0);
     return sum;
   }, 0);
@@ -516,19 +523,23 @@ export function QuizView({
                       <span className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold ${TYPE_BADGE_CLASSES[question.type]}`}>
                         {TYPE_LABELS[question.type]}
                       </span>
-                      {submitted && question.type === "single" && (
-                        isCorrect(question) ? (
-                          <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-                            正确 · {question.points}/{question.points} 分
+                      {submitted && question.type === "single" && (() => {
+                        // Server-side rules grade is authoritative; fall back to
+                        // the local exact match only if the result is missing.
+                        const server = grade?.graded ? grade : null;
+                        const correct = server ? server.is_correct : isCorrect(question);
+                        const score = server ? server.score : correct ? question.points : 0;
+                        return (
+                          <span className={`flex shrink-0 items-center gap-1 text-[11px] font-semibold ${correct ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                            {correct ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5" strokeWidth={1.5} />
+                            )}
+                            {correct ? `正确 · ${score}/${question.points} 分` : `错误 · ${score}/${question.points} 分`}
                           </span>
-                        ) : (
-                          <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
-                            <XCircle className="h-3.5 w-3.5" strokeWidth={1.5} />
-                            错误 · 0/{question.points} 分
-                          </span>
-                        )
-                      )}
+                        );
+                      })()}
                       {submitted && question.type !== "single" && grade?.graded && (
                         <>
                           <span className={`flex shrink-0 items-center gap-1 text-[11px] font-semibold ${grade.is_correct ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
@@ -568,9 +579,20 @@ export function QuizView({
                         </span>
                       )}
                     </div>
-                    <span className="shrink-0 font-mono text-[11px] text-slate-400 dark:text-zinc-500">
-                      {question.points} 分
-                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <MarkButton
+                        knowledgePoint={knowledgePoint}
+                        sourceType="quiz_question"
+                        sourceRef={markSourceRef(
+                          "quiz_question",
+                          knowledgePoint,
+                          question.id,
+                        )}
+                      />
+                      <span className="font-mono text-[11px] text-slate-400 dark:text-zinc-500">
+                        {question.points} 分
+                      </span>
+                    </div>
                   </div>
 
                   <p className="mb-3 text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-zinc-200">
