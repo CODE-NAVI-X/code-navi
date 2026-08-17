@@ -67,6 +67,11 @@ class LocalSource:
         )
 
 
+class ForbiddenSearchTool:
+    def search(self, *_: object, **__: object) -> object:
+        raise AssertionError("Pipeline generation must not start a search.")
+
+
 @pytest.fixture(autouse=True)
 def isolated_services() -> Generator[None, None, None]:
     Base.metadata.create_all(bind=engine)
@@ -85,30 +90,44 @@ def test_pipeline_requires_a_saved_selected_paper_and_restores_without_search() 
         conversation_id = client.post(
             "/api/v1/research/conversations", json={"initial_message": "prompt learning"}
         ).json()["conversation_id"]
+        no_selection = client.post(
+            f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines", json={}
+        )
         bundle = client.post(
             f"/api/v1/research/conversations/{conversation_id}/evidence-bundles",
             json={"sources": ["arxiv"]},
         ).json()
-        missing = client.post(
-            f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines",
-            json={
-                "evidence_bundle_id": bundle["bundle_id"],
-                "paper_url": "https://example.test/missing",
-            },
-        )
-        created = client.post(
-            f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines",
-            json={
-                "evidence_bundle_id": bundle["bundle_id"],
-                "paper_url": bundle["papers"][0]["url"],
-            },
-        )
-        restored = client.get(
-            f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines"
-        )
+        previous_tool = _conversation_search_service.search_tool
+        _conversation_search_service.search_tool = ForbiddenSearchTool()  # type: ignore[assignment]
+        try:
+            missing = client.post(
+                f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines",
+                json={
+                    "evidence_bundle_id": bundle["bundle_id"],
+                    "paper_url": "https://example.test/missing",
+                },
+            )
+            created = client.post(
+                f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines",
+                json={
+                    "evidence_bundle_id": bundle["bundle_id"],
+                    "paper_url": bundle["papers"][0]["url"],
+                },
+            )
+            restored = client.get(
+                f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines"
+            )
+            by_id = client.get(
+                f"/api/v1/research/reproduction-pipelines/{created.json()['pipeline_id']}"
+            )
+        finally:
+            _conversation_search_service.search_tool = previous_tool
 
+    assert no_selection.status_code == 422
     assert missing.status_code == 404
     assert created.status_code == 201
     assert created.json()["selected_paper"]["url"] == bundle["papers"][0]["url"]
     assert restored.status_code == 200
     assert restored.json()[0]["pipeline_id"] == created.json()["pipeline_id"]
+    assert by_id.status_code == 200
+    assert by_id.json()["schema_version"] == "reproduction-pipeline.v1"

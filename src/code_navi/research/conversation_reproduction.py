@@ -41,15 +41,20 @@ def build_reproduction_pipeline(
         source_name=paper.source_name,
         year=paper.year,
         identifier=paper.identifier,
+        abstract_scope="metadata_and_abstract" if paper.abstract_excerpt else "metadata_only",
         abstract_excerpt=paper.abstract_excerpt,
     )
     goal = _inference(
         f"建议围绕“{question or profile.topic or paper.title}”定义可确认的复现目标。",
         f"已保存研究画像与用户选择的论文：{paper.title}",
     )
-    known_method = _fact(
-        paper.abstract_excerpt or f"已保存元数据确认论文标题为《{paper.title}》。",
-        "用户选择的论文摘要或元数据原文；不将摘要外内容当作事实。",
+    known_method = (
+        _fact(
+            paper.abstract_excerpt,
+            "用户选择的论文摘要原文；不将摘要外内容当作事实。",
+        )
+        if paper.abstract_excerpt
+        else _verify("已保存来源没有论文摘要；论文方法待作者、导师或原文核对。")
     )
     gap = _verify("数据集、样本范围与获取条件待作者、导师或原文核对。")
     plan_entries = plan.candidate_methods_or_baselines if plan else []

@@ -398,7 +398,15 @@ export interface ReproductionPipeline {
   pipeline_id: string;
   conversation_id: string;
   source_bundle_id: string;
-  selected_paper: { url: string; title: string; source_name: string; year: number | null; abstract_scope: "metadata_and_abstract"; abstract_excerpt: string | null };
+  selected_paper: {
+    url: string;
+    title: string;
+    source_name: string;
+    year: number | null;
+    identifier: string | null;
+    abstract_scope: "metadata_only" | "metadata_and_abstract";
+    abstract_excerpt: string | null;
+  };
   reproduction_goal: ReproductionPipelineItem;
   research_question: ReproductionPipelineItem;
   known_method: ReproductionPipelineItem;
@@ -410,8 +418,23 @@ export interface ReproductionPipeline {
   risks: ReproductionPipelineItem[];
   ethics: ReproductionPipelineItem[];
   confirmation_items: ReproductionPipelineItem[];
-  tasks: Array<{ task_id: string; title: string; description: string; classification: "fact" | "inference" | "to_verify"; source_scope: string; status: "not_started" | "evidence_linked"; evidence_links: Array<{ experiment_bundle_id: string; content: string }> }>;
+  tasks: Array<{
+    task_id: string;
+    title: string;
+    description: string;
+    classification: "fact" | "inference" | "to_verify";
+    basis: string;
+    source_scope: string;
+    status: "not_started" | "evidence_linked";
+    evidence_links: Array<{
+      experiment_bundle_id: string;
+      source_scope: "user_submitted_text_unverified";
+      content: string;
+      classification: "fact" | "inference" | "to_verify";
+    }>;
+  }>;
   two_week_mvp: ReproductionPipelineItem[];
+  created_at: string;
   provenance_note: string;
 }
 

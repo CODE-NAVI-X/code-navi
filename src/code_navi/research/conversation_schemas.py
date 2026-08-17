@@ -635,7 +635,7 @@ class ReproductionSelectedPaper(BaseModel):
     source_name: str = Field(min_length=1, max_length=300)
     year: int | None = None
     identifier: str | None = Field(default=None, max_length=500)
-    abstract_scope: Literal["metadata_and_abstract"] = "metadata_and_abstract"
+    abstract_scope: Literal["metadata_only", "metadata_and_abstract"]
     abstract_excerpt: str | None = Field(default=None, max_length=10000)
 
 

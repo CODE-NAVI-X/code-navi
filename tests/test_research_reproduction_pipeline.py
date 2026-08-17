@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from code_navi.research.conversation_reproduction import build_reproduction_pipeline
 from code_navi.research.conversation_schemas import (
@@ -117,6 +118,18 @@ def test_pipeline_marks_abstract_gaps_as_to_verify() -> None:
     assert all(task.status == "not_started" for task in pipeline.tasks)
 
 
+def test_pipeline_keeps_metadata_only_method_and_scope_to_verify() -> None:
+    paper = _paper().model_copy(update={"abstract_excerpt": None})
+
+    pipeline = build_reproduction_pipeline(
+        ResearchProfile(topic="Prompt learning"), _plan(), _bundle(paper), paper, []
+    )
+
+    assert pipeline.selected_paper.abstract_scope == "metadata_only"
+    assert pipeline.known_method.classification == "to_verify"
+    assert "摘要/元数据未覆盖" in pipeline.known_method.source_scope
+
+
 def test_pipeline_links_user_experiment_evidence_only_by_task_id() -> None:
     paper = _paper()
     experiment = ExperimentEvidenceBundle(
@@ -156,3 +169,23 @@ def test_pipeline_links_user_experiment_evidence_only_by_task_id() -> None:
     assert task.status == "evidence_linked"
     assert task.evidence_links[0].experiment_bundle_id == "experiment-1"
     assert task.evidence_links[0].source_scope == "user_submitted_text_unverified"
+
+
+def test_reproduction_panel_preserves_the_selected_evidence_bundle_and_contract_sections() -> None:
+    source = Path("frontend/components/research/ReproductionPipelinePanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "selectionKey" in source
+    assert "item.selectionKey === selected" in source
+    assert "value={paper.selectionKey}" in source
+    for label in (
+        "研究问题",
+        "候选基线",
+        "实验步骤",
+        "资源",
+        "伦理",
+        "待确认项",
+        "两周 MVP",
+    ):
+        assert label in source
