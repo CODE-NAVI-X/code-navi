@@ -386,6 +386,83 @@ export interface CreateExperimentEvidenceBundleRequest {
   }>;
 }
 
+export type ReproductionEvaluationDimension =
+  | "research_definition"
+  | "source_traceability"
+  | "reproduction_plan"
+  | "execution_evidence"
+  | "reflection_and_compliance";
+export type ReproductionEvaluationStatus =
+  | "not_evaluable"
+  | "needs_revision"
+  | "evidence_partial"
+  | "checklist_complete";
+export type ReproductionImprovementTaskStatus =
+  | "pending"
+  | "accepted"
+  | "skipped"
+  | "completed";
+export interface ReproductionEvaluationEvidence {
+  source_type:
+    | "research_profile"
+    | "selected_citation"
+    | "reproduction_pipeline"
+    | "experiment_evidence";
+  source_id: string | null;
+  label: string;
+  classification: AnalysisClassification;
+  information_scope: string;
+  basis: string;
+}
+export interface ReproductionEvaluationDimensionResult {
+  dimension: ReproductionEvaluationDimension;
+  label: string;
+  status: ReproductionEvaluationStatus;
+  score: number | null;
+  maximum_score: 20;
+  issues: string[];
+  evidence: ReproductionEvaluationEvidence[];
+  fact_boundary: string;
+  to_verify: string[];
+  next_suggestions: string[];
+}
+export interface ReproductionEvaluationScoreSummary {
+  earned_score: number;
+  scored_maximum: number;
+  total_maximum: 100;
+  scored_dimension_count: number;
+  unscored_dimension_count: number;
+  display: string;
+}
+export interface ReproductionImprovementTask {
+  schema_version: "reproduction-improvement-task.v1";
+  task_id: string;
+  evaluation_id: string;
+  conversation_id: string;
+  dimension: ReproductionEvaluationDimension;
+  title: string;
+  description: string;
+  status: ReproductionImprovementTaskStatus;
+  classification: "to_verify";
+  basis: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface ReproductionProjectEvaluation {
+  schema_version: "reproduction-project-evaluation.v1";
+  evaluation_id: string;
+  conversation_id: string;
+  pipeline_id: string | null;
+  pipeline_contract_status: "available" | "unavailable";
+  selected_paper_count: number;
+  experiment_record_count: number;
+  score_summary: ReproductionEvaluationScoreSummary;
+  dimensions: ReproductionEvaluationDimensionResult[];
+  improvement_tasks: ReproductionImprovementTask[];
+  created_at: string;
+  boundary_note: string;
+}
+
 export interface PaperBlueprintReference {
   source_type: "research_profile" | "research_plan" | "academic_evidence" | "experiment_evidence";
   bundle_id: string | null;
@@ -730,6 +807,33 @@ export async function listExperimentEvidenceBundles(
 ): Promise<ExperimentEvidenceBundle[]> {
   return request<ExperimentEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+  );
+}
+
+export async function createReproductionEvaluation(
+  conversationId: string,
+): Promise<ReproductionProjectEvaluation> {
+  return request<ReproductionProjectEvaluation>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-evaluations`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function listReproductionEvaluations(
+  conversationId: string,
+): Promise<ReproductionProjectEvaluation[]> {
+  return request<ReproductionProjectEvaluation[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-evaluations`,
+  );
+}
+
+export async function updateReproductionImprovementTask(
+  taskId: string,
+  status: "accepted" | "skipped" | "completed",
+): Promise<ReproductionImprovementTask> {
+  return request<ReproductionImprovementTask>(
+    `/api/v1/research/reproduction-improvement-tasks/${encodeURIComponent(taskId)}`,
+    { method: "PATCH", body: JSON.stringify({ status }) },
   );
 }
 

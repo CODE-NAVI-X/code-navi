@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 
 alembic = pytest.importorskip("alembic")
 
@@ -317,3 +317,49 @@ def test_cli_conversation_migration_upgrades_the_previous_schema(
 
     assert "cli_conversations" in tables
     assert preserved == "before-cli"
+
+
+def test_reproduction_evaluation_migration_preserves_existing_research_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'reproduction-evaluation-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "research_citation_quality_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO research_conversations "
+                "(id, profile_data, messages_data, context_provenance, "
+                "context_summary_data, created_at, updated_at) VALUES "
+                "('before-reproduction-evaluation', '{}', '[]', NULL, NULL, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            preserved = connection.execute(
+                text(
+                    "SELECT id FROM research_conversations "
+                    "WHERE id = 'before-reproduction-evaluation'"
+                )
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert "research_reproduction_evaluations" in tables
+    assert "research_reproduction_improvement_tasks" in tables
+    assert preserved == "before-reproduction-evaluation"
