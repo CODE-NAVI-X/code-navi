@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Suspense } from "react";
 import { BookOpen, Code2, Microscope } from "lucide-react";
+import { WorkspaceContextBar } from "@/components/WorkspaceContextBar";
 
 const modules = [
   { href: "/learning", label: "学习", match: "learning", icon: BookOpen },
@@ -17,7 +19,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-[var(--app-surface)] text-[var(--app-foreground)]">
       <header className="sticky top-0 z-[70] border-b border-[var(--app-border)] bg-[var(--app-header)] backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-2 px-2 sm:gap-4 sm:px-6">
-          <Link href="/learning" className="flex min-w-0 items-center gap-2.5" aria-label="Code Navi 首页">
+          <Link href="/" className="flex min-w-0 items-center gap-2.5" aria-label="Code Navi 首页">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-950 font-mono text-xs font-bold text-white sm:h-9 sm:w-9 sm:rounded-xl sm:text-sm dark:bg-white dark:text-zinc-950">
               CN
             </span>
@@ -46,6 +48,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         </div>
       </header>
+      <Suspense fallback={null}>
+        <WorkspaceContextBar />
+      </Suspense>
       {children}
     </div>
   );

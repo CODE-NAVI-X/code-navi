@@ -84,6 +84,73 @@ def test_real_learning_record_creates_restorable_context(client: TestClient) -> 
     assert restored.json() == body
 
 
+def test_workspace_learning_record_keeps_context_transfer_session_and_research_boundaries(
+    client: TestClient,
+) -> None:
+    task = client.post(
+        "/api/v1/tasks",
+        json={"local_profile_id": "profile-transfer", "goal": "研究 RAG 证据覆盖"},
+    ).json()
+    explained = client.post(
+        "/api/v1/learning/explain",
+        json={
+            "knowledge_point": "检索增强生成",
+            "session_id": "sess-workspace-transfer",
+            "local_profile_id": "profile-transfer",
+            "workspace_id": task["workspace_id"],
+            "task_id": task["id"],
+        },
+    )
+    assert explained.status_code == 200
+    other_session = client.post(
+        "/api/v1/learning/explain",
+        json={"knowledge_point": "不属于当前传递的记录", "session_id": "sess-transfer-other"},
+    )
+    assert other_session.status_code == 200
+
+    source_items = client.get(
+        "/api/v1/learning/notebook", params={"session_id": "sess-workspace-transfer"}
+    )
+    other_items = client.get(
+        "/api/v1/learning/notebook", params={"session_id": "sess-transfer-other"}
+    )
+    assert source_items.status_code == 200
+    assert other_items.status_code == 200
+    assert [item["id"] for item in source_items.json()] == [explained.json()["notebook_item_id"]]
+    assert [item["id"] for item in other_items.json()] == [other_session.json()["notebook_item_id"]]
+
+    created = client.post(
+        "/api/v1/context-transfers",
+        json={
+            "source_module": "learning",
+            "source_object": {"type": "notebook_item", "id": explained.json()["notebook_item_id"]},
+            "source_scope_id": "sess-workspace-transfer",
+            "target_module": "research",
+            "selected_parts": ["summary"],
+        },
+    )
+    assert created.status_code == 201
+    confirmed = client.post(
+        f"/api/v1/context-transfers/{created.json()['id']}/confirm",
+        params={"source_scope_id": "sess-workspace-transfer"},
+        json={
+            "topic": "RAG 证据覆盖研究",
+            "summary": "比较检索策略的证据覆盖。",
+            "selected_content": [],
+        },
+    )
+    assert confirmed.status_code == 200
+    conversation = confirmed.json()
+    assert conversation["generation_mode"] == "rules"
+    assert conversation["context_provenance"]["source_scope_id"] == "sess-workspace-transfer"
+    assert "workspace_id" not in conversation["context_provenance"]
+    assert "task_id" not in conversation["context_provenance"]
+
+    restored = client.get(f"/api/v1/research/conversations/{conversation['conversation_id']}")
+    assert restored.status_code == 200
+    assert restored.json()["context_provenance"] == conversation["context_provenance"]
+
+
 def test_context_source_must_belong_to_learning_session(client: TestClient) -> None:
     record = _create_learning_record(client, "sess-owner")
 

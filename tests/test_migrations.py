@@ -19,6 +19,7 @@ from code_navi.context_transfer import models as context_transfer_models  # noqa
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
+from code_navi.workspaces import models as workspace_models  # noqa: E402,F401
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -317,3 +318,49 @@ def test_cli_conversation_migration_upgrades_the_previous_schema(
 
     assert "cli_conversations" in tables
     assert preserved == "before-cli"
+
+
+def test_workspace_migration_upgrades_the_current_head_without_losing_notebooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Workspace revision adds only orchestration tables to the current schema."""
+    database_url = f"sqlite:///{tmp_path / 'workspace-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "research_citation_quality_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO notebook_items "
+                "(id, user_id, knowledge_id, item_type, content, session_id) VALUES "
+                "('notebook-before-workspace', 'poc-user', 'TCP', 'summary', 'saved', 'sess-1')"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'table'")
+                )
+            }
+            notebook = connection.execute(
+                text("SELECT content FROM notebook_items WHERE id = 'notebook-before-workspace'")
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert {"workspaces", "workspace_tasks", "workspace_activities"} <= tables
+    assert notebook == "saved"

@@ -20,6 +20,8 @@ from .online_compiler.router import router as compiler_router
 from .provider_config import load_local_provider_config
 from .research import models as research_models  # noqa: F401  (register tables)
 from .research.router import router as research_router
+from .workspaces import models as workspace_models  # noqa: F401  (register tables)
+from .workspaces.router import router as workspace_router
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,7 @@ app.include_router(learning_router)
 app.include_router(research_router)
 app.include_router(compiler_router)
 app.include_router(context_transfer_router)
+app.include_router(workspace_router)
 
 # ---------------------------------------------------------------------------
 # CORS - explicit origin allowlist.

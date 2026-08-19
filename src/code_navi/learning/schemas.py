@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Citation(BaseModel):
@@ -48,6 +48,33 @@ class ExplainRequest(BaseModel):
         default=True,
         description="Whether the response should include source citations.",
     )
+    local_profile_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Browser-local Workspace scope. It only isolates local product data and "
+            "does not represent authentication or authorization."
+        ),
+    )
+    workspace_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=36,
+        description="Optional persisted Workspace that owns the derived Learning Activity.",
+    )
+    task_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=36,
+        description="Optional Task that owns the derived Learning Activity.",
+    )
+
+    @model_validator(mode="after")
+    def require_profile_for_workspace_context(self) -> ExplainRequest:
+        if (self.workspace_id or self.task_id) and not self.local_profile_id:
+            raise ValueError("local_profile_id is required when Workspace context is provided.")
+        return self
 
 
 class ExplainResponse(BaseModel):

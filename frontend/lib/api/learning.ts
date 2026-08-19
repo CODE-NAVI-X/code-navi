@@ -22,6 +22,10 @@ export interface ExplainRequest {
   session_id?: string;
   persona?: string | null;
   include_citations?: boolean;
+  /** Local Workspace scope; never an account credential or authorization token. */
+  local_profile_id?: string;
+  workspace_id?: string;
+  task_id?: string;
 }
 
 export interface CitationItem {
@@ -121,6 +125,9 @@ export async function explainKnowledgePoint(
         session_id: request.session_id ?? getLearningSessionId(),
         persona: request.persona ?? "academic",
         include_citations: request.include_citations ?? true,
+        local_profile_id: request.local_profile_id,
+        workspace_id: request.workspace_id,
+        task_id: request.task_id,
       }),
     });
   } catch (networkError) {

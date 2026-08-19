@@ -10,6 +10,12 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from code_navi.db import get_db
+from code_navi.workspaces.service import (
+    TaskNotFoundError,
+    WorkspaceConflictError,
+    WorkspaceNotFoundError,
+    WorkspaceService,
+)
 
 from .models import NotebookItemModel
 from .presentation.schemas import PresentationGenerateRequest
@@ -25,6 +31,7 @@ router = APIRouter(prefix="/api/v1/learning", tags=["Learning"])
 _orchestrator = QueryOrchestrator()
 _presentation_generator = PresentationGenerator()
 _quiz_generator = QuizGenerator()
+_workspace_service = WorkspaceService()
 _db_dependency = Depends(get_db)
 
 _DOCX_MEDIA_TYPE = (
@@ -42,7 +49,31 @@ async def explain_knowledge_point(
     The pipeline runs decontamination → explanation generation → notebook
     archival, all delegated to ``QueryOrchestrator``.
     """
-    return _orchestrator.explain(request, db)
+    try:
+        if request.local_profile_id is None:
+            return _orchestrator.explain(request, db)
+
+        context = _workspace_service.resolve_learning_context(
+            local_profile_id=request.local_profile_id,
+            workspace_id=request.workspace_id,
+            task_id=request.task_id,
+            db=db,
+        )
+        return _orchestrator.explain(
+            request,
+            db,
+            on_notebook_persisted=lambda notebook_item: _workspace_service.record_learning_activity(
+                context=context,
+                notebook_item=notebook_item,
+                db=db,
+            ),
+        )
+    except (TaskNotFoundError, WorkspaceNotFoundError) as error:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Workspace or Task not found.") from error
+    except WorkspaceConflictError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.get("/notebook", status_code=200)

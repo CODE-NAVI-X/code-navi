@@ -271,6 +271,14 @@ class TestExplainEndpoint:
 
         assert resp.status_code == 422  # Pydantic validation error
 
+    def test_workspace_context_requires_a_local_profile(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/learning/explain",
+            json={"knowledge_point": "Monad", "workspace_id": "workspace-without-profile"},
+        )
+
+        assert resp.status_code == 422
+
     def test_health_endpoint(self, client: TestClient) -> None:
         resp = client.get("/health")
         assert resp.status_code == 200
