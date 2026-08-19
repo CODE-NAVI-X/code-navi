@@ -60,26 +60,26 @@ export default function TaskPage() {
       <Link href={`/workspaces/${task.workspace_id}`} className="inline-flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-950 dark:text-zinc-300 dark:hover:text-white">
         <ArrowLeft className="h-4 w-4" /> 返回工作区
       </Link>
-      <header className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900 sm:p-7">
+      <header className="app-card mt-5 rounded-2xl p-5 sm:p-7">
         <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase dark:text-zinc-400">当前 Task · {task.status}</p>
-        <h1 className="mt-2 text-2xl font-bold text-slate-950 dark:text-zinc-50">{task.title}</h1>
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700 dark:text-zinc-200">{task.goal}</p>
-        <Link href={learningHref} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-zinc-50 dark:text-zinc-950">
+        <h1 className="mt-2 break-words text-2xl font-bold text-slate-950 dark:text-zinc-50">{task.title}</h1>
+        <p className="mt-3 break-words whitespace-pre-wrap text-sm leading-6 text-slate-700 dark:text-zinc-200">{task.goal}</p>
+        <Link href={learningHref} className="app-button-primary mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold hover:bg-slate-800 dark:hover:bg-zinc-200">
           <BookOpen className="h-4 w-4" /> 进入 Learning
           <ArrowRight className="h-4 w-4" />
         </Link>
       </header>
 
-      <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+      <section className="app-card mt-6 rounded-2xl p-5">
         <h2 className="text-base font-bold text-slate-950 dark:text-zinc-50">Task 时间线</h2>
         {activities.length === 0 ? (
           <p className="mt-4 text-sm text-slate-600 dark:text-zinc-300">尚无活动。进入 Learning 并成功保存解析后，这里会显示来源摘要。</p>
         ) : (
           <div className="mt-4 space-y-3">
             {activities.map((activity) => (
-              <article key={activity.id} className="rounded-xl border border-slate-200 p-4 dark:border-zinc-800">
-                <p className="font-semibold text-slate-950 dark:text-zinc-50">{activity.title}</p>
-                <p className="mt-1 text-sm text-slate-600 dark:text-zinc-300">{activity.summary}</p>
+              <article key={activity.id} className="app-card-subtle rounded-xl p-4">
+                <p className="break-words font-semibold text-slate-950 dark:text-zinc-50">{activity.title}</p>
+                <p className="mt-1 break-words text-sm text-slate-600 dark:text-zinc-300">{activity.summary}</p>
               </article>
             ))}
           </div>
@@ -99,7 +99,11 @@ function TaskState({
   action?: React.ReactNode;
 }) {
   return (
-    <main className="mx-auto flex min-h-64 w-full max-w-4xl flex-col items-center justify-center gap-3 px-4 text-center text-sm text-slate-600 dark:text-zinc-300">
+    <main
+      role={action ? "alert" : "status"}
+      aria-live={action ? "assertive" : "polite"}
+      className="mx-auto flex min-h-64 w-full max-w-4xl flex-col items-center justify-center gap-3 px-4 text-center text-sm text-slate-600 dark:text-zinc-300"
+    >
       {icon}
       <p>{text}</p>
       {action}

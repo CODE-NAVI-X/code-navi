@@ -265,13 +265,13 @@ export function QuizView({
   ).length;
 
   return (
-    <section className="rounded-2xl border border-slate-200/80 bg-white p-7 shadow-xs dark:border-zinc-800 dark:bg-zinc-900/90 transition-all">
+    <section className="app-card rounded-2xl p-7 transition-all">
       {/* Header + generation controls */}
       <div className="mb-6 border-b border-slate-100 pb-5 dark:border-zinc-800/70">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-violet-100/80 px-2 py-0.5 text-[11px] font-semibold tracking-wider text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tracking-wider text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
                 <Sparkles className="h-3 w-3" strokeWidth={1.5} />
                 配套练习题 · 组卷
               </span>
@@ -284,7 +284,7 @@ export function QuizView({
             type="button"
             onClick={onGenerate}
             disabled={controlsDisabled}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-violet-500/20 transition hover:from-violet-500 hover:to-purple-500 focus:ring-2 focus:ring-violet-400/40 focus:outline-none active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:from-violet-500 dark:to-purple-500 dark:shadow-violet-950/40"
+            className="app-button-primary inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-800 active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
           >
             {loading ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
@@ -307,7 +307,7 @@ export function QuizView({
               onChange={(event) =>
                 onParamsChange({ ...params, question_count: Number(event.target.value) })
               }
-              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-violet-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+              className="app-input cursor-pointer rounded-lg px-2.5 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
             >
               {Array.from({ length: 30 }, (_, index) => index + 1).map((count) => (
                 <option key={count} value={count}>
@@ -381,10 +381,10 @@ export function QuizView({
             onClick={() => setShowProfile((current) => !current)}
             className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-xs font-medium text-slate-600 dark:text-zinc-400"
           >
-            <UserRound className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" strokeWidth={1.5} />
+            <UserRound className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
             学情画像（可选）
             {params.student_profile?.trim() ? (
-              <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
                 已填写
               </span>
             ) : (
@@ -401,13 +401,14 @@ export function QuizView({
                 disabled={controlsDisabled}
                 rows={3}
                 placeholder="例如：已掌握集合列举法，但对交集/并集运算和证明题薄弱；希望多出基础题，难度适中。"
+                aria-label="学情画像"
                 onChange={(event) =>
                   onParamsChange({
                     ...params,
                     student_profile: event.target.value.trim() ? event.target.value : null,
                   })
                 }
-                className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 outline-none placeholder:text-slate-400 focus:border-violet-400 focus:ring-4 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:focus:ring-violet-950/40"
+                className="app-input w-full resize-y rounded-lg px-3 py-2 text-xs leading-5 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
               />
               <p className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500">
                 填写后，组卷时会把你的薄弱点与掌握情况交给模型，用于调整题目难度与内容。
@@ -419,7 +420,8 @@ export function QuizView({
 
       {/* Loading */}
       {loading && (
-        <div className="space-y-4">
+        <div role="status" aria-live="polite" className="space-y-4">
+          <span className="sr-only">正在生成练习题</span>
           <SkeletonLine width="w-2/5" />
           <SkeletonLine />
           <SkeletonLine width="w-4/5" />
@@ -429,7 +431,7 @@ export function QuizView({
 
       {/* Error */}
       {error && !loading && (
-        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/70 p-4 text-xs text-red-800 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+        <div role="alert" className="app-status-error flex items-start gap-3 rounded-xl p-4 text-xs">
           <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" strokeWidth={1.5} />
           <div>
             <p className="font-semibold">练习题生成异常</p>
@@ -460,7 +462,7 @@ export function QuizView({
               <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-600 dark:bg-zinc-800 dark:text-zinc-400">
                 满分 {response.total_points} 分
               </span>
-              <span className="rounded-md bg-violet-50 px-2 py-0.5 font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 font-semibold text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
                 {response.generation_mode === "model"
                   ? `模型生成 · ${response.provider_name ?? "provider"}`
                   : response.generation_mode === "rules_fallback"
@@ -479,7 +481,7 @@ export function QuizView({
                   type="checkbox"
                   checked={withAnswer}
                   onChange={(event) => setWithAnswer(event.target.checked)}
-                  className="h-3.5 w-3.5 cursor-pointer accent-violet-600"
+                  className="h-3.5 w-3.5 cursor-pointer accent-slate-900 dark:accent-zinc-100"
                 />
                 含答案
               </label>
@@ -487,7 +489,7 @@ export function QuizView({
                 type="button"
                 onClick={() => onExport(withAnswer)}
                 disabled={exporting}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                className="app-button-primary inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
               >
                 {exporting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
@@ -506,7 +508,7 @@ export function QuizView({
               return (
                 <li
                   key={question.id}
-                  className="rounded-2xl border border-slate-200/70 bg-slate-50/50 p-5 dark:border-zinc-800 dark:bg-zinc-800/30"
+                  className="app-card-subtle rounded-2xl p-5"
                 >
                   <div className="mb-3 flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2.5">
@@ -650,12 +652,13 @@ export function QuizView({
                             value={values[blankIndex] ?? ""}
                             disabled={submitted || grading}
                             placeholder={`第 ${blankIndex + 1} 个空`}
+                            aria-label={`第 ${blankIndex + 1} 个填空答案`}
                             onChange={(event) => {
                               const next = [...values];
                               next[blankIndex] = event.target.value;
                               setAnswer(question.id, next);
                             }}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-violet-400 focus:ring-4 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:ring-violet-950/40"
+                            className="app-input w-full rounded-xl px-3.5 py-2.5 text-sm placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
                           />
                         ))}
                       </div>
@@ -668,15 +671,16 @@ export function QuizView({
                       disabled={submitted || grading}
                       rows={3}
                       placeholder="写下你的作答要点…"
+                      aria-label="简答题作答"
                       onChange={(event) => setAnswer(question.id, [event.target.value])}
-                      className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400 focus:border-violet-400 focus:ring-4 focus:ring-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:ring-violet-950/40"
+                      className="app-input w-full resize-y rounded-xl px-3.5 py-2.5 text-sm leading-6 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
                     />
                   )}
 
                   {/* LLM 评语 card (fill_blank / short_answer) */}
                   {submitted && grade?.graded && grade.comment && (
-                    <div className="mt-4 rounded-xl border-l-2 border-violet-400 bg-violet-50/60 p-4 text-xs leading-relaxed text-slate-700 dark:border-violet-600 dark:bg-violet-950/20 dark:text-zinc-300">
-                      <p className="mb-1.5 font-semibold text-violet-700 dark:text-violet-300">
+                    <div className="app-card-subtle mt-4 rounded-xl p-4 text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
+                      <p className="mb-1.5 font-semibold text-slate-700 dark:text-zinc-200">
                         {grade.is_mock ? "离线判分说明" : "AI 评分解析"}
                       </p>
                       <p className="whitespace-pre-wrap">
@@ -687,8 +691,8 @@ export function QuizView({
 
                   {/* Standard answer / analysis reveal after submission */}
                   {submitted && question.analysis && (
-                    <div className="mt-4 rounded-xl border-l-2 border-violet-400 bg-white p-4 text-xs leading-relaxed text-slate-700 dark:border-violet-600 dark:bg-zinc-900 dark:text-zinc-300">
-                      <p className="mb-1.5 font-semibold text-violet-700 dark:text-violet-300">
+                    <div className="app-card-subtle mt-4 rounded-xl p-4 text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
+                      <p className="mb-1.5 font-semibold text-slate-700 dark:text-zinc-200">
                         {question.type === "short_answer" ? "参考答案与解析" : "答案解析"}
                       </p>
                       <p className="whitespace-pre-wrap">
@@ -708,7 +712,7 @@ export function QuizView({
 
           {/* Grading failure banner */}
           {gradeError && (
-            <div className="mt-4 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/70 p-4 text-xs text-red-800 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+            <div role="alert" className="app-status-error mt-4 flex items-start gap-3 rounded-xl p-4 text-xs">
               <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" strokeWidth={1.5} />
               <div>
                 <p className="font-semibold">智能判分失败</p>
@@ -739,7 +743,7 @@ export function QuizView({
                 <button
                   type="button"
                   onClick={resetAnswers}
-                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                  className="app-button-secondary inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-slate-50 dark:hover:bg-zinc-800"
                 >
                   <Eraser className="h-3.5 w-3.5" strokeWidth={1.5} />
                   重新作答
@@ -749,7 +753,7 @@ export function QuizView({
                 type="button"
                 onClick={() => void submitAnswers()}
                 disabled={submitted || grading}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                className="app-button-primary inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
               >
                 {submitted ? (
                   <>

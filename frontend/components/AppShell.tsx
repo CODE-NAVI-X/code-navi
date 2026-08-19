@@ -17,7 +17,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[var(--app-surface)] text-[var(--app-foreground)]">
-      <header className="sticky top-0 z-[70] border-b border-[var(--app-border)] bg-[var(--app-header)] backdrop-blur-xl">
+      <header className="sticky top-0 z-[70] border-b border-[var(--app-border)] bg-[var(--app-header)] shadow-[var(--app-shadow)] backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-2 px-2 sm:gap-4 sm:px-6">
           <Link href="/" className="flex min-w-0 items-center gap-2.5" aria-label="Code Navi 首页">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-950 font-mono text-xs font-bold text-white sm:h-9 sm:w-9 sm:rounded-xl sm:text-sm dark:bg-white dark:text-zinc-950">
@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="hidden truncate text-sm font-bold tracking-tight min-[430px]:inline">Code Navi</span>
           </Link>
 
-          <nav aria-label="主要模块" className="grid min-w-0 grid-cols-3 rounded-xl border border-[var(--app-border)] bg-white/70 p-0.5 shadow-sm sm:p-1 dark:bg-zinc-900/70">
+          <nav aria-label="主要模块" className="grid min-w-0 grid-cols-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-card)] p-0.5 shadow-sm sm:p-1">
             {modules.map(({ href, label, match, icon: Icon }) => {
               const active = pathname.includes(`/${match}`);
               return (

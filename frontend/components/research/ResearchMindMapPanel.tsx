@@ -257,11 +257,11 @@ function MindMapSummary({ mindmap, onExpand }: { mindmap: ResearchMindMap; onExp
 export function ResearchMindMapPanel({ mindmap }: { mindmap: ResearchMindMap }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <section className="rounded-2xl border border-teal-200 bg-white p-4 shadow-sm dark:border-teal-900/70 dark:bg-zinc-900/80">
+    <section className="app-card rounded-2xl p-4">
       <div className="flex items-start gap-3">
-        <span className="rounded-xl bg-teal-100 p-2 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300"><Network className="h-4 w-4" /></span>
+        <span className="rounded-xl bg-slate-100 p-2 text-slate-700 dark:bg-zinc-800 dark:text-zinc-200"><Network className="h-4 w-4" /></span>
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-teal-700 dark:text-teal-300">Research mind map</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-zinc-400">Research mind map</p>
           <h2 className="mt-1 text-sm font-bold text-slate-900 dark:text-zinc-100">研究思维导图</h2>
         </div>
       </div>

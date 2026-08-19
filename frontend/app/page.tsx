@@ -127,7 +127,7 @@ export default function HomePage() {
         </section>
 
         {error && (
-          <section className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+          <section role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
             <p>{error}</p>
             <button type="button" onClick={() => void load()} className="mt-2 font-semibold underline">
               重试加载
@@ -135,7 +135,7 @@ export default function HomePage() {
           </section>
         )}
 
-        <section className="mt-8 grid gap-5 lg:grid-cols-2">
+        <section className="mt-8 grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-zinc-50">

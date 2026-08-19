@@ -97,7 +97,7 @@ export function WorkspaceContextBar() {
       pathname.startsWith("/student/learning/");
     if (!isLearningRoute) return null;
     return (
-      <div className="border-t border-[var(--app-border)] bg-white/80 px-3 py-2 dark:bg-zinc-950/80">
+      <div className="border-t border-[var(--app-border)] bg-[var(--app-card)] px-3 py-2 shadow-[var(--app-shadow)]">
         <div className="mx-auto max-w-[1920px] text-xs text-slate-600 dark:text-zinc-300">
           独立 Learning：解析会保存至个人工作区，但不关联 Task。
         </div>
@@ -109,8 +109,8 @@ export function WorkspaceContextBar() {
 
   if (context.state === "loading") {
     return (
-      <div className="border-t border-[var(--app-border)] bg-white/80 px-3 py-2 dark:bg-zinc-950/80">
-        <div className="mx-auto flex max-w-[1920px] items-center gap-2 text-xs text-slate-600 dark:text-zinc-300">
+      <div className="border-t border-[var(--app-border)] bg-[var(--app-card)] px-3 py-2 shadow-[var(--app-shadow)]">
+        <div role="status" aria-live="polite" className="mx-auto flex max-w-[1920px] items-center gap-2 text-xs text-slate-600 dark:text-zinc-300">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           正在恢复工作上下文…
         </div>
@@ -120,7 +120,7 @@ export function WorkspaceContextBar() {
 
   if (context.state === "error") {
     return (
-      <div className="border-t border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/30">
+      <div role="alert" className="border-t border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/30">
         <div className="mx-auto flex max-w-[1920px] flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
           <span>工作上下文不可用；请从有效的工作区或任务入口重新进入。</span>
           <div className="flex items-center gap-3">
@@ -141,7 +141,7 @@ export function WorkspaceContextBar() {
   const currentIsDestination = pathname === destination;
 
   return (
-    <div className="border-t border-[var(--app-border)] bg-white/80 px-3 py-2 dark:bg-zinc-950/80">
+    <div className="border-t border-[var(--app-border)] bg-[var(--app-card)] px-3 py-2 shadow-[var(--app-shadow)]">
       <div className="mx-auto flex max-w-[1920px] flex-wrap items-center justify-between gap-2 text-xs text-slate-700 dark:text-zinc-200">
         <div className="flex min-w-0 items-center gap-2">
           <BriefcaseBusiness className="h-3.5 w-3.5 shrink-0" />
@@ -156,7 +156,7 @@ export function WorkspaceContextBar() {
         {!currentIsDestination && (
           <Link
             href={destination}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 py-1 font-semibold hover:bg-slate-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            className="app-button-secondary inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             {returnLabel(destination)}

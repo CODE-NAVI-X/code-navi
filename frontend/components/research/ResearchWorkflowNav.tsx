@@ -62,7 +62,7 @@ export function ResearchWorkflowNav({ conversation }: { conversation: ResearchCo
   return (
     <nav
       aria-label="科研流程步骤导航"
-      className="mb-2 rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/90"
+      className="app-card mb-2 rounded-xl px-3 py-2"
     >
       <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-600 dark:text-zinc-400">
         <p className="flex min-w-0 items-center gap-1.5">
@@ -97,7 +97,7 @@ export function ResearchWorkflowNav({ conversation }: { conversation: ResearchCo
             </>
           );
           const className = step.available
-            ? "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/30"
+            ? "app-button-secondary inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11px] transition hover:bg-slate-50 dark:hover:bg-zinc-800"
             : "inline-flex shrink-0 cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-slate-200 px-2.5 py-1.5 text-[11px] text-slate-400 dark:border-zinc-800 dark:text-zinc-600";
           return (
             <li key={step.id} className="min-w-max snap-start">
