@@ -8,13 +8,20 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from .conversation_schemas import ExperimentEvidenceBundle, ResearchProfile, SelectedCitation
+from .conversation_schemas import (
+    ExperimentEvidenceBundle,
+    ReproductionPipeline,
+    ReproductionPipelineItem,
+    ResearchProfile,
+    SelectedCitation,
+)
 from .conversation_service import ConversationNotFoundError
 from .models import (
     ResearchConversationModel,
     ResearchExperimentEvidenceBundleModel,
     ResearchReproductionEvaluationModel,
     ResearchReproductionImprovementTaskModel,
+    ResearchReproductionPipelineModel,
     ResearchSelectedCitationModel,
 )
 from .reproduction_evaluation import evaluate_reproduction_project
@@ -22,6 +29,7 @@ from .reproduction_evaluation_schemas import (
     ReproductionEvaluationDimensionResult,
     ReproductionImprovementTask,
     ReproductionPipelineEvaluationView,
+    ReproductionPipelineEvidenceEntry,
     ReproductionProjectEvaluation,
     UpdateReproductionImprovementTaskRequest,
 )
@@ -49,23 +57,57 @@ class ReproductionPipelineReader(Protocol):
     ) -> ReproductionPipelineEvaluationView | None: ...
 
 
-class UnavailableReproductionPipelineReader:
-    """Safe default until A's persisted ReproductionPipeline contract is merged."""
+class StoredReproductionPipelineReader:
+    """Adapt A's latest persisted Pipeline into B's read-only evaluation view."""
 
     def load(
         self,
         conversation_id: str,
         db: Session,
     ) -> ReproductionPipelineEvaluationView | None:
-        del conversation_id, db
-        return None
+        record = (
+            db.query(ResearchReproductionPipelineModel)
+            .filter(ResearchReproductionPipelineModel.conversation_id == conversation_id)
+            .order_by(ResearchReproductionPipelineModel.created_at.desc())
+            .first()
+        )
+        if record is None:
+            return None
+        pipeline = ReproductionPipeline.model_validate(record.pipeline_data)
+        return ReproductionPipelineEvaluationView(
+            pipeline_id=pipeline.pipeline_id,
+            target_paper_title=pipeline.selected_paper.title,
+            target_paper_url=pipeline.selected_paper.url,
+            objective_entries=[
+                self._entry(pipeline.reproduction_goal),
+                self._entry(pipeline.research_question),
+            ],
+            dataset_entries=self._entries(pipeline.data_and_sample_conditions),
+            baseline_entries=self._entries(pipeline.candidate_baselines),
+            metric_entries=self._entries(pipeline.metrics),
+            step_entries=self._entries(pipeline.experiment_steps),
+            resource_entries=self._entries(pipeline.resources),
+            risk_entries=self._entries(pipeline.risks),
+            ethics_entries=self._entries(pipeline.ethics),
+        )
+
+    @staticmethod
+    def _entry(item: ReproductionPipelineItem) -> ReproductionPipelineEvidenceEntry:
+        return ReproductionPipelineEvidenceEntry.model_validate(item.model_dump())
+
+    @classmethod
+    def _entries(
+        cls,
+        items: list[ReproductionPipelineItem],
+    ) -> list[ReproductionPipelineEvidenceEntry]:
+        return [cls._entry(item) for item in items]
 
 
 class ReproductionEvaluationService:
     """Build and restore offline evaluations without executing or retrieving anything."""
 
     def __init__(self, pipeline_reader: ReproductionPipelineReader | None = None) -> None:
-        self.pipeline_reader = pipeline_reader or UnavailableReproductionPipelineReader()
+        self.pipeline_reader = pipeline_reader or StoredReproductionPipelineReader()
 
     def create(
         self,

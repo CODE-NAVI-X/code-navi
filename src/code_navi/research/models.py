@@ -68,6 +68,17 @@ class ResearchExperimentEvidenceBundleModel(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
 
+class ResearchReproductionPipelineModel(Base):
+    """A persisted rules-only Pipeline for one explicit local paper selection."""
+
+    __tablename__ = "research_reproduction_pipelines"
+
+    id = Column(String(36), primary_key=True)
+    conversation_id = Column(String(36), nullable=False, index=True)
+    pipeline_data = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+
 class ResearchPaperDraftModel(Base):
     __tablename__ = "research_paper_drafts"
 

@@ -48,6 +48,7 @@ import { ResearchMindMapPanel } from "./ResearchMindMapPanel";
 import { ResearchDifficultyPanel } from "./ResearchDifficultyPanel";
 import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
 import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
+import { ReproductionPipelinePanel } from "./ReproductionPipelinePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
 import { ReproductionEvaluationPanel } from "./ReproductionEvaluationPanel";
 import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
@@ -570,6 +571,15 @@ export function ResearchConversation() {
           >
             <ReproductionEvaluationPanel conversationId={conversation.conversation_id} />
           </PanelSection>
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-reproduction"
+              title="论文复现辅助"
+              description="从已保存论文来源主动生成可核对的复现步骤；系统不自动执行代码或补造实验结果。"
+            >
+              <ReproductionPipelinePanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
           {conversation.research_plan && (
             <PanelSection
               id="research-section-paper"

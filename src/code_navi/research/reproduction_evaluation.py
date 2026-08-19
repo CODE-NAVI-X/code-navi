@@ -79,8 +79,8 @@ def _research_definition(
     if not profile.expected_output:
         issues.append("预期交付物尚未保存。")
     if pipeline is None:
-        issues.append("A 的 ReproductionPipeline 合同尚不可用，无法核对复现目标映射。")
-        suggestions.append("待 Pipeline 合同接入后重新运行本评估。")
+        issues.append("当前会话尚未保存 ReproductionPipeline，无法核对复现目标映射。")
+        suggestions.append("先选择已保存论文并主动生成复现方案，再重新运行本评估。")
     evidence = _profile_evidence(profile)
     if pipeline:
         evidence.extend(_pipeline_evidence(pipeline.objective_entries, pipeline.pipeline_id))
@@ -171,9 +171,9 @@ def _reproduction_plan(
         return _unscored(
             "reproduction_plan",
             "复现路径与可执行性",
-            "A 的 ReproductionPipeline 尚未接入，无法评价数据、基线、指标与步骤。",
+            "当前会话尚未保存 ReproductionPipeline，无法评价数据、基线、指标与步骤。",
             "B 不使用普通研究计划冒充论文复现 Pipeline，也不自行重写 A 的规则。",
-            "等待 A 提供稳定 Pipeline 合同后，通过只读适配器重新评估。",
+            "先选择已保存论文并主动生成复现方案，再重新运行本评估。",
         )
     groups = [
         pipeline.dataset_entries,

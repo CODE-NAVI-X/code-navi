@@ -31,6 +31,7 @@ SKILL_NAMES = (
     "submission-readiness",
     "research-mindmap",
     "reproduction-evaluation",
+    "paper-reproduction",
 )
 
 

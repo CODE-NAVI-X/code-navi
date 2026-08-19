@@ -1,7 +1,7 @@
 """Persist reproduction project evaluations and improvement tasks.
 
 Revision ID: reproduction_project_evaluation_v1
-Revises: research_citation_quality_v1
+Revises: reproduction_pipelines_v1
 Create Date: 2026-08-17
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "reproduction_project_evaluation_v1"
-down_revision: str | None = "research_citation_quality_v1"
+down_revision: str | None = "reproduction_pipelines_v1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

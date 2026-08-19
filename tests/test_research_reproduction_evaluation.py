@@ -17,10 +17,16 @@ from code_navi.research.conversation_schemas import (  # noqa: E402
     ExperimentEvidenceBundle,
     ExperimentEvidenceItem,
     ReferenceEntryDraft,
+    ReproductionPipeline,
+    ReproductionPipelineItem,
+    ReproductionSelectedPaper,
     ResearchProfile,
     SelectedCitation,
 )
-from code_navi.research.models import ResearchConversationModel  # noqa: E402
+from code_navi.research.models import (  # noqa: E402
+    ResearchConversationModel,
+    ResearchReproductionPipelineModel,
+)
 from code_navi.research.reproduction_evaluation import (  # noqa: E402
     evaluate_reproduction_project,
 )
@@ -263,3 +269,66 @@ def test_pipeline_adapter_view_can_score_plan_without_redefining_a_model() -> No
     assert plan.status == "checklist_complete"
     assert all(item.classification == "to_verify" for item in plan.evidence)
     assert summary.total_maximum == 100
+
+
+def test_default_service_reads_latest_persisted_a_pipeline(client: TestClient) -> None:
+    conversation_id = _conversation(client)
+    created_at = datetime.now(UTC)
+    entry = ReproductionPipelineItem(
+        content="待人工核对的复现条件",
+        classification="to_verify",
+        basis="来自用户主动生成并保存的 A Pipeline。",
+        source_scope="摘要/元数据未覆盖",
+    )
+    pipeline = ReproductionPipeline(
+        pipeline_id="pipeline-from-a",
+        conversation_id=conversation_id,
+        source_bundle_id="bundle-from-a",
+        selected_paper=ReproductionSelectedPaper(
+            url="https://example.test/paper",
+            title="A Persisted Reproduction Study",
+            source_name="OpenAlex",
+            year=2026,
+            abstract_scope="metadata_and_abstract",
+            abstract_excerpt="A bounded abstract excerpt.",
+        ),
+        reproduction_goal=entry,
+        research_question=entry,
+        known_method=entry,
+        data_and_sample_conditions=[entry],
+        candidate_baselines=[entry],
+        metrics=[entry],
+        experiment_steps=[entry],
+        resources=[entry],
+        risks=[entry],
+        ethics=[entry],
+        confirmation_items=[entry],
+        tasks=[],
+        two_week_mvp=[entry],
+        created_at=created_at,
+        provenance_note="规则生成的只读 Pipeline；不表示已执行或复现成功。",
+    )
+    with SessionLocal() as db:
+        db.add(
+            ResearchReproductionPipelineModel(
+                id=pipeline.pipeline_id,
+                conversation_id=conversation_id,
+                pipeline_data=pipeline.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/reproduction-evaluations",
+        json={"user_confirmed": True},
+    )
+
+    assert response.status_code == 201
+    result = response.json()
+    plan = _dimension(result, "reproduction_plan")
+    assert result["pipeline_contract_status"] == "available"
+    assert result["pipeline_id"] == "pipeline-from-a"
+    assert plan["status"] == "checklist_complete"
+    assert plan["score"] == 20
+    assert all(item["classification"] == "to_verify" for item in plan["evidence"])

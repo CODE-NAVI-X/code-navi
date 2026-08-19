@@ -18,6 +18,7 @@ from .conversation_schemas import (
     CreateExperimentCodeDraftRequest,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
+    CreateReproductionPipelineRequest,
     CreateResearchConversationRequest,
     CreateSelectedCitationRequest,
     ExperimentCodeDraft,
@@ -32,6 +33,7 @@ from .conversation_schemas import (
     PaperRevision,
     ReferenceDraftPackage,
     ReferenceEntryDraft,
+    ReproductionPipeline,
     ResearchConversationResponse,
     ResearchSearchPlan,
     RevisionSuggestion,
@@ -54,6 +56,7 @@ from .conversation_search_service import (
 from .conversation_service import (
     CitationSourceNotFoundError,
     ConversationNotFoundError,
+    ReproductionPipelineNotFoundError,
     ResearchConversationService,
     SelectedCitationNotFoundError,
 )
@@ -290,6 +293,53 @@ def list_conversation_evidence_bundles(
         return _conversation_search_service.list_bundles(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/reproduction-pipelines",
+    response_model=ReproductionPipeline,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_reproduction_pipeline(
+    conversation_id: str,
+    request: CreateReproductionPipelineRequest,
+    db: Session = _db_dependency,
+) -> ReproductionPipeline:
+    """Create a rules-only plan from one user-selected already-saved paper."""
+    try:
+        return _conversation_service.create_reproduction_pipeline(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ReproductionPipelineNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Selected paper is not present in this conversation's saved evidence.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reproduction-pipelines",
+    response_model=list[ReproductionPipeline],
+)
+def list_reproduction_pipelines(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[ReproductionPipeline]:
+    """Restore saved Pipelines without regenerating or searching."""
+    try:
+        return _conversation_service.list_reproduction_pipelines(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get("/reproduction-pipelines/{pipeline_id}", response_model=ReproductionPipeline)
+def get_reproduction_pipeline(
+    pipeline_id: str, db: Session = _db_dependency
+) -> ReproductionPipeline:
+    """Load one stable Pipeline contract for later local consumers."""
+    try:
+        return _conversation_service.get_reproduction_pipeline(pipeline_id, db)
+    except ReproductionPipelineNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Reproduction pipeline not found.") from error
 
 
 @router.get(

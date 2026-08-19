@@ -318,7 +318,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
               <span>实验记录 {latest.experiment_record_count}</span>
               <span>·</span>
               <span>
-                Pipeline：{latest.pipeline_contract_status === "available" ? "已接入" : "尚未接入"}
+                Pipeline：{latest.pipeline_contract_status === "available" ? "已读取" : "尚未生成"}
               </span>
             </div>
           </div>
@@ -327,7 +327,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
             <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
               <FileWarning className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
-                A 的 ReproductionPipeline 稳定合同尚未接入，因此“复现路径与可执行性”保持不可评估。B 模块不会用普通研究计划冒充 Pipeline。
+                当前会话尚未生成复现方案，因此“复现路径与可执行性”保持不可评估。请先选择已保存论文并主动生成 Pipeline；评价模块不会用普通研究计划冒充复现方案。
               </p>
             </div>
           )}
