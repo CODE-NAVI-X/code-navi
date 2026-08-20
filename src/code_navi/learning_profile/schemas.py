@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 #: UUID v4 — the unified profile key format (same as the quiz grade request).
 UUID_V4_PATTERN = (
@@ -156,3 +156,66 @@ class ProfileResponse(BaseModel):
     confusion: list[ConfusionItem] = Field(
         default_factory=list, description="Knowledge points marked 看不懂."
     )
+
+
+KnowledgeGapSourceType = Literal["quiz_attempt", "confusion_mark", "practice_outcome"]
+
+
+class KnowledgeGapItem(BaseModel):
+    """One traceable review item projected from existing Learning/Practice facts."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_type: KnowledgeGapSourceType = Field(
+        ...,
+        alias="sourceType",
+        description="Stable source kind: quiz_attempt | confusion_mark | practice_outcome.",
+    )
+    source_id: str = Field(
+        ...,
+        alias="sourceId",
+        description="Stable identifier of the source fact row or persisted outcome.",
+    )
+    topic: str = Field(..., description="Knowledge focus derived from an existing field.")
+    label: str = Field(..., description="Human-readable trace label safe for display.")
+    gap_kind: str = Field(
+        ...,
+        alias="gapKind",
+        description="Normalized review reason derived from the source fact.",
+    )
+    occurred_at: str = Field(
+        ...,
+        alias="occurredAt",
+        description="ISO-8601 time when the source fact occurred.",
+    )
+    summary: str = Field(..., description="Privacy-safe source summary.")
+    source: dict[str, str | int | bool | None] = Field(
+        default_factory=dict,
+        description=(
+            "Trace fields safe to show; never includes code, stdin, hidden tests, "
+            "stdout, or stderr."
+        ),
+    )
+
+
+class KnowledgeGapResponse(BaseModel):
+    """Current local review projection for the Learning portrait page."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    local_profile_id: str = Field(
+        ...,
+        alias="localProfileId",
+        description="Browser-local Workspace owner scope; not an account or authorization proof.",
+    )
+    profile_id: str = Field(
+        ...,
+        alias="profileId",
+        description="Unified anonymous learner/profile UUID used by Learning and Practice.",
+    )
+    generated_at: str = Field(
+        ...,
+        alias="generatedAt",
+        description="ISO-8601 snapshot time.",
+    )
+    items: list[KnowledgeGapItem] = Field(default_factory=list)

@@ -18,7 +18,12 @@ from code_navi.workspaces.service import (
     WorkspaceService,
 )
 
-from ..learning_profile.schemas import MarkRequest, MarkResponse
+from ..learning_profile.schemas import (
+    UUID_V4_PATTERN,
+    KnowledgeGapResponse,
+    MarkRequest,
+    MarkResponse,
+)
 from ..learning_profile.service import ProfileService
 from .models import NotebookItemModel
 from .presentation.schemas import PresentationGenerateRequest
@@ -146,6 +151,35 @@ async def get_recent_learning(
     if row is None:
         raise HTTPException(status_code=404, detail="Recent Learning item not found.")
     return _recent_learning_item(*row, include_content=True)
+
+
+@router.get("/knowledge-gaps", response_model=KnowledgeGapResponse)
+async def list_knowledge_gaps(
+    local_profile_id: str = Query(..., min_length=1, max_length=64),
+    profile_id: str = Query(
+        ...,
+        pattern=UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Unified anonymous learner/profile UUID used by Learning and Practice.",
+    ),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = _db_dependency,
+) -> KnowledgeGapResponse:
+    """Return traceable review items for the current local Learning portrait.
+
+    This is a read projection only. QuizAttempt and ConfusionMark facts are
+    selected by the caller's anonymous ``profile_id``; PracticeOutcome facts are
+    additionally scoped by ``local_profile_id`` because they belong to the
+    Workspace owner boundary. The endpoint does not create a KnowledgeGap table
+    or imply account-level authorization.
+    """
+    return _profile_service.get_knowledge_gaps(
+        local_profile_id=local_profile_id,
+        profile_id=profile_id,
+        db=db,
+        limit=limit,
+    )
 
 
 def _recent_learning_item(
