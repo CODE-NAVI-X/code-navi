@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   fetchNotebookItems,
@@ -31,32 +31,101 @@ interface StructuredNotebookProps {
   open: boolean;
   onDismiss: () => void;
   sessionId?: string;
+  initialTab?: TabId;
+}
+
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function cycleDialogFocus(
+  event: { key: string; shiftKey: boolean; preventDefault: () => void },
+  container: HTMLElement | null,
+) {
+  if (event.key !== "Tab" || !container) return;
+  const focusable = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+  if (focusable.length === 0) {
+    event.preventDefault();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !container.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !container.contains(active))) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function PresentationPreviewOverlay({
   detail,
   onClose,
+  returnFocusTarget,
 }: {
   detail: PresentationDetail;
   onClose: () => void;
+  returnFocusTarget: HTMLElement | null;
 }) {
   const [idx, setIdx] = useState(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef(onClose);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const fallbackFocusTarget =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const timeoutId = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(timeoutId);
+      const target = returnFocusTarget?.isConnected ? returnFocusTarget : fallbackFocusTarget;
+      if (target?.isConnected) target.focus();
+    };
+  }, [returnFocusTarget]);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeRef.current();
+      return;
+    }
+    cycleDialogFocus(event, dialogRef.current);
+  }
+
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm sm:p-8"
       onClick={onClose}
     >
       <div
-        className="max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl bg-white p-5 shadow-2xl dark:bg-zinc-900 sm:p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="presentation-preview-title"
+        ref={dialogRef}
+        className="app-card max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl p-5 shadow-2xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
               <Presentation className="h-4 w-4" strokeWidth={1.5} />
             </div>
             <div className="min-w-0">
-              <h4 className="truncate text-sm font-bold text-slate-900 dark:text-zinc-100">
+              <h4 id="presentation-preview-title" className="truncate text-sm font-bold text-slate-900 dark:text-zinc-100">
                 {detail.knowledge_point}
               </h4>
               <p className="text-[11px] text-slate-400 dark:text-zinc-500">
@@ -66,6 +135,7 @@ function PresentationPreviewOverlay({
           </div>
           <button
             type="button"
+            ref={closeButtonRef}
             onClick={onClose}
             aria-label="关闭预览"
             className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
@@ -102,15 +172,31 @@ export function StructuredNotebook({
   open,
   onDismiss,
   sessionId,
+  initialTab = "summary",
 }: StructuredNotebookProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabId>("summary");
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [items, setItems] = useState<NotebookItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PresentationDetail | null>(null);
+  const [previewFocusTarget, setPreviewFocusTarget] = useState<HTMLElement | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [transferringItemId, setTransferringItemId] = useState<string | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const timeoutId = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus();
+    };
+  }, [open]);
 
   const loadItems = useCallback(async () => {
     if (!sessionId) return;
@@ -138,8 +224,9 @@ export function StructuredNotebook({
     };
   }, [open, sessionId, loadItems]);
 
-  async function openPresentation(item: NotebookItem) {
+  async function openPresentation(item: NotebookItem, trigger: HTMLButtonElement) {
     if (!sessionId || !item.presentation_id) return;
+    setPreviewFocusTarget(trigger);
     setLoadingPreview(true);
     setError(null);
     try {
@@ -166,6 +253,15 @@ export function StructuredNotebook({
   }
 
   if (!open) return null;
+
+  function handleNotebookKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onDismiss();
+      return;
+    }
+    cycleDialogFocus(event, drawerRef.current);
+  }
 
   const summaryItems = items.filter((i) => i.kind === "summary");
   const noteItems = items.filter((i) => i.kind === "note");
@@ -196,12 +292,13 @@ export function StructuredNotebook({
     <>
       {/* Backdrop */}
       <div
+        aria-hidden="true"
         className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
         onClick={onDismiss}
       />
 
       {/* Slide Drawer */}
-      <aside className="fixed right-0 top-0 bottom-0 z-50 flex w-[430px] max-w-[90vw] flex-col border-l border-slate-200/80 bg-white shadow-2xl transition-transform dark:border-zinc-800 dark:bg-zinc-900 animate-in slide-in-from-right duration-300">
+      <aside ref={drawerRef} role="dialog" aria-modal="true" aria-hidden={preview ? true : undefined} aria-labelledby="structured-notebook-title" onKeyDown={handleNotebookKeyDown} className="fixed right-0 top-0 bottom-0 z-50 flex w-[430px] max-w-[90vw] flex-col border-l border-[var(--app-border)] bg-[var(--app-card)] shadow-2xl transition-transform animate-in slide-in-from-right duration-300">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-zinc-800">
           <div className="flex items-center gap-3">
@@ -209,7 +306,7 @@ export function StructuredNotebook({
               <Bookmark className="h-4 w-4 text-slate-700 dark:text-zinc-300" strokeWidth={1.5} />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">
+              <h3 id="structured-notebook-title" className="text-sm font-bold text-slate-900 dark:text-zinc-100">
                 结构化学术笔记
               </h3>
               <p className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
@@ -218,6 +315,7 @@ export function StructuredNotebook({
             </div>
           </div>
           <button
+            ref={closeButtonRef}
             onClick={onDismiss}
             aria-label="关闭"
             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
@@ -255,11 +353,11 @@ export function StructuredNotebook({
         <div className="flex-1 overflow-y-auto p-4">
           {isLoading ? (
             /* High-grade Skeleton Screen Loading state */
-            <div className="space-y-3">
+            <div role="status" aria-live="polite" className="space-y-3">
               {[1, 2, 3].map((idx) => (
                 <div
                   key={idx}
-                  className="animate-pulse rounded-xl border border-slate-200/60 bg-slate-50 p-4 dark:border-zinc-800 dark:bg-zinc-800/40"
+                  className="app-card-subtle animate-pulse rounded-xl p-4"
                 >
                   <div className="mb-2 h-3.5 w-1/3 rounded bg-slate-200 dark:bg-zinc-700" />
                   <div className="mb-1.5 h-3 w-full rounded bg-slate-200 dark:bg-zinc-700" />
@@ -268,7 +366,7 @@ export function StructuredNotebook({
               ))}
             </div>
           ) : error ? (
-            <div className="flex flex-col items-center justify-center py-12 text-red-500">
+            <div role="alert" className="flex flex-col items-center justify-center py-12 text-red-500">
               <p className="text-xs">{error}</p>
             </div>
           ) : currentTabItems.length === 0 ? (
@@ -281,7 +379,7 @@ export function StructuredNotebook({
               {currentTabItems.map((item) => (
                 <article
                   key={item.id}
-                  className="block w-full rounded-xl border border-slate-200/60 bg-slate-50/50 p-4 text-left dark:border-zinc-800 dark:bg-zinc-800/30"
+                  className="app-card-subtle block w-full rounded-xl p-4 text-left"
                 >
                   {item.timestamp && (
                     <div className="mb-2 flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-zinc-500 font-mono">
@@ -291,8 +389,8 @@ export function StructuredNotebook({
                   )}
                   {item.kind === "presentation" && (
                     <div className="mb-1.5 flex items-center gap-1.5">
-                      <Presentation className="h-3 w-3 text-indigo-500" strokeWidth={1.5} />
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-500 dark:text-indigo-400">
+                      <Presentation className="h-3 w-3 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400">
                         PPT 课件 · 点击预览
                       </span>
                     </div>
@@ -343,8 +441,8 @@ export function StructuredNotebook({
                     {item.kind === "presentation" && (
                       <button
                         type="button"
-                        onClick={() => void openPresentation(item)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:bg-zinc-900 dark:text-indigo-300"
+                        onClick={(event) => void openPresentation(item, event.currentTarget)}
+                        className="app-button-secondary inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
                       >
                         <Presentation className="h-3 w-3" /> 预览课件
                       </button>
@@ -354,7 +452,7 @@ export function StructuredNotebook({
                         type="button"
                         onClick={() => void continueToResearch(item)}
                         disabled={transferringItemId !== null}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                        className="app-button-primary inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {transferringItemId === item.id ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -374,7 +472,7 @@ export function StructuredNotebook({
 
       {/* Fullscreen presentation preview */}
       {loadingPreview && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+        <div role="status" aria-live="polite" className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
           <Loader2 className="h-8 w-8 animate-spin text-white" strokeWidth={1.5} />
         </div>
       )}
@@ -382,6 +480,7 @@ export function StructuredNotebook({
         <PresentationPreviewOverlay
           detail={preview}
           onClose={() => setPreview(null)}
+          returnFocusTarget={previewFocusTarget}
         />
       )}
     </>

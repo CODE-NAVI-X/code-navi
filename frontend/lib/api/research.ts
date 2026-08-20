@@ -386,6 +386,135 @@ export interface CreateExperimentEvidenceBundleRequest {
   }>;
 }
 
+export type ReproductionEvaluationDimension =
+  | "research_definition"
+  | "source_traceability"
+  | "reproduction_plan"
+  | "execution_evidence"
+  | "reflection_and_compliance";
+export type ReproductionEvaluationStatus =
+  | "not_evaluable"
+  | "needs_revision"
+  | "evidence_partial"
+  | "checklist_complete";
+export type ReproductionImprovementTaskStatus =
+  | "pending"
+  | "accepted"
+  | "skipped"
+  | "completed";
+export interface ReproductionEvaluationEvidence {
+  source_type:
+    | "research_profile"
+    | "selected_citation"
+    | "reproduction_pipeline"
+    | "experiment_evidence";
+  source_id: string | null;
+  label: string;
+  classification: AnalysisClassification;
+  information_scope: string;
+  basis: string;
+}
+export interface ReproductionEvaluationDimensionResult {
+  dimension: ReproductionEvaluationDimension;
+  label: string;
+  status: ReproductionEvaluationStatus;
+  score: number | null;
+  maximum_score: 20;
+  issues: string[];
+  evidence: ReproductionEvaluationEvidence[];
+  fact_boundary: string;
+  to_verify: string[];
+  next_suggestions: string[];
+}
+export interface ReproductionEvaluationScoreSummary {
+  earned_score: number;
+  scored_maximum: number;
+  total_maximum: 100;
+  scored_dimension_count: number;
+  unscored_dimension_count: number;
+  display: string;
+}
+export interface ReproductionImprovementTask {
+  schema_version: "reproduction-improvement-task.v1";
+  task_id: string;
+  evaluation_id: string;
+  conversation_id: string;
+  dimension: ReproductionEvaluationDimension;
+  title: string;
+  description: string;
+  status: ReproductionImprovementTaskStatus;
+  classification: "to_verify";
+  basis: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface ReproductionProjectEvaluation {
+  schema_version: "reproduction-project-evaluation.v1";
+  evaluation_id: string;
+  conversation_id: string;
+  pipeline_id: string | null;
+  pipeline_contract_status: "available" | "unavailable";
+  selected_paper_count: number;
+  experiment_record_count: number;
+  score_summary: ReproductionEvaluationScoreSummary;
+  dimensions: ReproductionEvaluationDimensionResult[];
+  improvement_tasks: ReproductionImprovementTask[];
+  created_at: string;
+  boundary_note: string;
+}
+
+export interface ReproductionPipelineItem {
+  content: string;
+  classification: "fact" | "inference" | "to_verify";
+  basis: string;
+  source_scope: string;
+}
+
+export interface ReproductionPipeline {
+  schema_version: "reproduction-pipeline.v1";
+  pipeline_id: string;
+  conversation_id: string;
+  source_bundle_id: string;
+  selected_paper: {
+    url: string;
+    title: string;
+    source_name: string;
+    year: number | null;
+    identifier: string | null;
+    abstract_scope: "metadata_only" | "metadata_and_abstract";
+    abstract_excerpt: string | null;
+  };
+  reproduction_goal: ReproductionPipelineItem;
+  research_question: ReproductionPipelineItem;
+  known_method: ReproductionPipelineItem;
+  data_and_sample_conditions: ReproductionPipelineItem[];
+  candidate_baselines: ReproductionPipelineItem[];
+  metrics: ReproductionPipelineItem[];
+  experiment_steps: ReproductionPipelineItem[];
+  resources: ReproductionPipelineItem[];
+  risks: ReproductionPipelineItem[];
+  ethics: ReproductionPipelineItem[];
+  confirmation_items: ReproductionPipelineItem[];
+  tasks: Array<{
+    task_id: string;
+    title: string;
+    description: string;
+    classification: "fact" | "inference" | "to_verify";
+    basis: string;
+    source_scope: string;
+    status: "not_started" | "evidence_linked";
+    evidence_links: Array<{
+      experiment_bundle_id: string;
+      source_scope: "user_submitted_text_unverified";
+      content: string;
+      classification: "fact" | "inference" | "to_verify";
+    }>;
+  }>;
+  two_week_mvp: ReproductionPipelineItem[];
+  created_at: string;
+  provenance_note: string;
+}
+
 export interface PaperBlueprintReference {
   source_type: "research_profile" | "research_plan" | "academic_evidence" | "experiment_evidence";
   bundle_id: string | null;
@@ -730,6 +859,49 @@ export async function listExperimentEvidenceBundles(
 ): Promise<ExperimentEvidenceBundle[]> {
   return request<ExperimentEvidenceBundle[]>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+  );
+}
+
+export async function createReproductionEvaluation(
+  conversationId: string,
+): Promise<ReproductionProjectEvaluation> {
+  return request<ReproductionProjectEvaluation>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-evaluations`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function listReproductionEvaluations(
+  conversationId: string,
+): Promise<ReproductionProjectEvaluation[]> {
+  return request<ReproductionProjectEvaluation[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-evaluations`,
+  );
+}
+
+export async function updateReproductionImprovementTask(
+  taskId: string,
+  status: "accepted" | "skipped" | "completed",
+): Promise<ReproductionImprovementTask> {
+  return request<ReproductionImprovementTask>(
+    `/api/v1/research/reproduction-improvement-tasks/${encodeURIComponent(taskId)}`,
+    { method: "PATCH", body: JSON.stringify({ status }) },
+  );
+}
+
+export async function createReproductionPipeline(
+  conversationId: string,
+  payload: { evidence_bundle_id: string; paper_url: string },
+): Promise<ReproductionPipeline> {
+  return request<ReproductionPipeline>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listReproductionPipelines(conversationId: string): Promise<ReproductionPipeline[]> {
+  return request<ReproductionPipeline[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
   );
 }
 

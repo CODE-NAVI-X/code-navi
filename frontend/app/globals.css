@@ -3,6 +3,15 @@
 :root {
   --background: #fafafa;
   --foreground: #09090b;
+  --app-surface: #f8fafc;
+  --app-card: #ffffff;
+  --app-card-subtle: #f8fafc;
+  --app-foreground: #0f172a;
+  --app-muted: #64748b;
+  --app-border: #e2e8f0;
+  --app-header: rgba(248, 250, 252, 0.92);
+  --app-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --app-focus: #64748b;
   /* System font stack (was next/font/google Geist) so `next build` runs
      fully offline — required for the Docker/NAS build, which cannot reach
      Google Fonts. Variable names kept so @theme below needs no change. */
@@ -24,13 +33,83 @@
   :root {
     --background: #09090b;
     --foreground: #fafafa;
+    --app-surface: #09090b;
+    --app-card: #18181b;
+    --app-card-subtle: #09090b;
+    --app-foreground: #fafafa;
+    --app-muted: #a1a1aa;
+    --app-border: #27272a;
+    --app-header: rgba(9, 9, 11, 0.9);
+    --app-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+    --app-focus: #d4d4d8;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+@layer base {
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  :is(a, button, input, textarea, select):focus-visible {
+    outline: 2px solid var(--app-focus);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .app-card {
+    border: 1px solid var(--app-border);
+    background: var(--app-card);
+    box-shadow: var(--app-shadow);
+  }
+
+  .app-card-subtle {
+    border: 1px solid var(--app-border);
+    background: var(--app-card-subtle);
+  }
+
+  .app-button-primary {
+    background: #020617;
+    color: #ffffff;
+  }
+
+  .app-button-secondary {
+    border: 1px solid var(--app-border);
+    background: var(--app-card);
+    color: #334155;
+  }
+
+  .app-input {
+    border: 1px solid var(--app-border);
+    background: var(--app-card);
+    color: #0f172a;
+  }
+
+  .app-status-error {
+    border: 1px solid #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+  }
+
+  @media (prefers-color-scheme: dark) {
+  .app-button-primary {
+    background: #fafafa;
+    color: #09090b;
+  }
+
+  .app-button-secondary,
+  .app-input {
+    color: #e4e4e7;
+  }
+
+  .app-status-error {
+    border-color: rgba(127, 29, 29, 0.75);
+    background: rgba(127, 29, 29, 0.22);
+    color: #fecaca;
+  }
+  }
 }
 
 .bg-grid-pattern {

@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import {
   type AcademicSourceId,
@@ -116,12 +117,12 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
   }
 
   return (
-    <section className="mx-4 mb-4 overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm dark:border-emerald-900/60 dark:bg-zinc-900 sm:mx-7">
-      <div className="border-b border-emerald-100 bg-emerald-50 px-4 py-4 dark:border-emerald-900/50 dark:bg-emerald-950/20">
-        <p className="flex items-center gap-2 text-sm font-bold text-emerald-900 dark:text-emerald-200">
-          <BookOpenCheck className="h-4 w-4" /> 信息源检索 Skill
+    <section className="app-card mx-4 mb-4 overflow-hidden rounded-2xl sm:mx-7">
+      <div className="border-b border-slate-200 bg-slate-50 px-4 py-4 dark:border-zinc-800 dark:bg-zinc-950/60">
+        <p className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-zinc-100">
+          <BookOpenCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> 信息源检索 Skill
         </p>
-        <p className="mt-1 text-xs leading-5 text-emerald-800/80 dark:text-emerald-300/80">
+        <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
           先检查检索词和允许来源；只有点击“开始受限检索”后才会访问网络。
         </p>
       </div>
@@ -141,7 +142,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                 onChange={(event) => setQuery(event.target.value)}
                 rows={2}
                 maxLength={300}
-                className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal leading-6 outline-none focus:border-emerald-400 dark:border-zinc-700 dark:bg-zinc-950"
+                className="app-input mt-2 w-full resize-none rounded-xl px-3 py-2 text-sm font-normal leading-6 outline-none focus:border-slate-500"
               />
             </label>
 
@@ -176,7 +177,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
               type="button"
               onClick={() => void runSearch()}
               disabled={!query.trim() || !selectedSources.length || phase === "searching"}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
             >
               {phase === "searching" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               {phase === "searching"
@@ -246,7 +247,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                     <p className="mt-2 line-clamp-4 text-xs leading-5 text-slate-600 dark:text-zinc-300">{paper.abstract_excerpt}</p>
                   )}
                   <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{paper.relevance.content}</p>
-                  <button type="button" onClick={() => void analyzePaper(paper.url)} className="mt-3 rounded-lg border border-orange-200 px-2 py-1 text-[11px] font-semibold text-orange-800 hover:bg-orange-50 dark:border-orange-900 dark:text-orange-300 dark:hover:bg-orange-950/30">分析元数据/摘要难点</button>
+                  <button type="button" onClick={() => void analyzePaper(paper.url)} className="app-button-secondary mt-3 rounded-lg px-2 py-1 text-[11px] font-semibold">分析元数据/摘要难点</button>
                 </article>
               ))
             ) : (
@@ -255,17 +256,22 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
               </p>
             )}
             {bundle.papers.length > 0 && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+              <div className="app-card-subtle rounded-xl p-3">
                 <button
                   type="button"
                   onClick={() => void saveSelectedEvidence()}
                   disabled={!selectedPaperUrls.length || savingNote}
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  className="app-button-primary inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingNote ? <Loader2 className="h-4 w-4 animate-spin" /> : savedNoteId ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
                   {savedNoteId ? "已保存为研究笔记" : `保存所选证据到 Notebook（${selectedPaperUrls.length}）`}
                 </button>
-                <p className="mt-2 text-[11px] leading-5 text-emerald-800 dark:text-emerald-300">保存内容包括研究主题、问题、所选 Evidence 来源和下一步建议，并保留当前 Research Conversation。</p>
+                <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-zinc-400">保存内容包括研究主题、问题、所选 Evidence 来源和下一步建议，并保留当前 Research Conversation。</p>
+                {savedNoteId && (
+                  <Link href="/learning#research-notes" className="app-button-secondary mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <BookOpenCheck className="h-4 w-4" /> 返回学习笔记查看
+                  </Link>
+                )}
               </div>
             )}
             {paperAnalysis && (

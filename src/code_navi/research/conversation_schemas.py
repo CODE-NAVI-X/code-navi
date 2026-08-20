@@ -611,6 +611,96 @@ class ExperimentEvidenceBundle(BaseModel):
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
+ReproductionTaskStatus = Literal["not_started", "evidence_linked"]
+
+
+class ReproductionPipelineItem(BaseModel):
+    """One reproduction statement with an explicit evidence boundary."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+    source_scope: str = Field(min_length=1, max_length=300)
+
+
+class ReproductionSelectedPaper(BaseModel):
+    """Identity and available-information boundary for the user-selected source."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=1000)
+    source_name: str = Field(min_length=1, max_length=300)
+    year: int | None = None
+    identifier: str | None = Field(default=None, max_length=500)
+    abstract_scope: Literal["metadata_only", "metadata_and_abstract"]
+    abstract_excerpt: str | None = Field(default=None, max_length=10000)
+
+
+class ReproductionTaskEvidenceLink(BaseModel):
+    """A user-submitted experimental record associated with one Pipeline task."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    experiment_bundle_id: str = Field(min_length=1, max_length=64)
+    source_scope: Literal["user_submitted_text_unverified"] = "user_submitted_text_unverified"
+    content: str = Field(min_length=1, max_length=4000)
+    classification: AnalysisClassification
+
+
+class ReproductionTask(BaseModel):
+    """A Python-oriented learning task; it is not executable code."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    task_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(min_length=1, max_length=2000)
+    classification: AnalysisClassification
+    basis: str = Field(min_length=1, max_length=1000)
+    source_scope: str = Field(min_length=1, max_length=300)
+    status: ReproductionTaskStatus = "not_started"
+    evidence_links: list[ReproductionTaskEvidenceLink] = Field(default_factory=list, max_length=30)
+
+
+class ReproductionPipeline(BaseModel):
+    """Restorable rules-only plan for a user-selected saved research paper."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["reproduction-pipeline.v1"] = "reproduction-pipeline.v1"
+    pipeline_id: str
+    conversation_id: str
+    source_bundle_id: str
+    selected_paper: ReproductionSelectedPaper
+    reproduction_goal: ReproductionPipelineItem
+    research_question: ReproductionPipelineItem
+    known_method: ReproductionPipelineItem
+    data_and_sample_conditions: list[ReproductionPipelineItem]
+    candidate_baselines: list[ReproductionPipelineItem]
+    metrics: list[ReproductionPipelineItem]
+    experiment_steps: list[ReproductionPipelineItem]
+    resources: list[ReproductionPipelineItem]
+    risks: list[ReproductionPipelineItem]
+    ethics: list[ReproductionPipelineItem]
+    confirmation_items: list[ReproductionPipelineItem]
+    tasks: list[ReproductionTask]
+    two_week_mvp: list[ReproductionPipelineItem]
+    created_at: datetime
+    provenance_note: str = Field(min_length=1, max_length=1000)
+
+
+class CreateReproductionPipelineRequest(BaseModel):
+    """Explicit selection of a paper already saved in this conversation."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    evidence_bundle_id: str = Field(min_length=1, max_length=64)
+    paper_url: str = Field(min_length=1, max_length=2000)
+
+
 class PaperBlueprintReference(BaseModel):
     """A traceable reference to an already stored local research artefact."""
 

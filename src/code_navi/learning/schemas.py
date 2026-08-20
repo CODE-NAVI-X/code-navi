@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class Citation(BaseModel):
@@ -28,8 +31,10 @@ class ExplainRequest(BaseModel):
     knowledge_point: str = Field(
         ...,
         min_length=1,
-        max_length=512,
-        description="The knowledge-point identifier or free-text query to explain.",
+        max_length=64,
+        description=(
+            "The knowledge-point identifier, question, or source-material excerpt to explain."
+        ),
     )
     session_id: str | None = Field(
         default=None,
@@ -48,6 +53,33 @@ class ExplainRequest(BaseModel):
         default=True,
         description="Whether the response should include source citations.",
     )
+    local_profile_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Browser-local Workspace scope. It only isolates local product data and "
+            "does not represent authentication or authorization."
+        ),
+    )
+    workspace_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=36,
+        description="Optional persisted Workspace that owns the derived Learning Activity.",
+    )
+    task_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=36,
+        description="Optional Task that owns the derived Learning Activity.",
+    )
+
+    @model_validator(mode="after")
+    def require_profile_for_workspace_context(self) -> ExplainRequest:
+        if (self.workspace_id or self.task_id) and not self.local_profile_id:
+            raise ValueError("local_profile_id is required when Workspace context is provided.")
+        return self
 
 
 class ExplainResponse(BaseModel):
@@ -77,3 +109,21 @@ class ExplainResponse(BaseModel):
         default_factory=list,
         description="Ordered list of source citations backing the explanation.",
     )
+
+
+class RecentLearningItem(BaseModel):
+    """A bounded, profile-scoped Learning result that can be restored in the Web UI."""
+
+    id: str
+    knowledge_point: str
+    session_id: str | None = None
+    notebook_item_id: str | None = None
+    summary: str | None = None
+    detail: str | None = None
+    citations: list[Citation] = Field(default_factory=list)
+    created_at: datetime
+    status: Literal["available", "source_unavailable"]
+
+
+class RecentLearningListResponse(BaseModel):
+    items: list[RecentLearningItem]

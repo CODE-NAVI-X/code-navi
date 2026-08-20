@@ -37,7 +37,7 @@ function ProfileItem({
   value: string | null;
 }) {
   return (
-    <div className="flex gap-3 rounded-xl border border-slate-200/80 bg-white/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/70">
+    <div className="app-card-subtle flex gap-3 rounded-xl p-3">
       <span className="mt-0.5 text-slate-400 dark:text-zinc-500">{icon}</span>
       <div className="min-w-0">
         <p className="text-[11px] font-medium text-slate-500 dark:text-zinc-500">{label}</p>
@@ -60,11 +60,11 @@ export function ResearchProfilePanel({
   disabled,
 }: ResearchProfilePanelProps) {
   return (
-    <aside className="space-y-4 lg:sticky lg:top-5 lg:max-h-[calc(100vh-2.5rem)] lg:overflow-y-auto lg:pr-1">
-      <section className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/80">
+    <aside className="space-y-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:pr-1">
+      <section className="app-card rounded-2xl p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700 dark:text-sky-300">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-zinc-400">
               Research profile
             </p>
             <h2 className="mt-1 text-sm font-bold text-slate-900 dark:text-zinc-100">科研画像</h2>
@@ -77,7 +77,7 @@ export function ResearchProfilePanel({
         <div className="mt-4 flex items-center gap-3">
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-zinc-800">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-sky-500 to-indigo-500 transition-all duration-500"
+              className="h-full rounded-full bg-slate-900 transition-all duration-500 dark:bg-zinc-100"
               style={{ width: `${readiness.score}%` }}
             />
           </div>
@@ -97,9 +97,9 @@ export function ResearchProfilePanel({
       </section>
 
       {profile.candidate_questions.length > 0 && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/80">
+        <section className="app-card rounded-2xl p-4">
           <h2 className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-zinc-100">
-            <BarChart3 className="h-4 w-4 text-indigo-500" /> 候选研究问题
+            <BarChart3 className="h-4 w-4 text-slate-500 dark:text-zinc-400" /> 候选研究问题
           </h2>
           <div className="mt-3 space-y-2">
             {profile.candidate_questions.map((question) => (
@@ -108,7 +108,7 @@ export function ResearchProfilePanel({
                 type="button"
                 disabled={disabled}
                 onClick={() => onSend(`我想优先讨论这个候选问题：${question}`)}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-left text-xs leading-5 text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/30"
+                className="app-button-secondary w-full rounded-xl px-3 py-2.5 text-left text-xs leading-5 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {question}
               </button>
@@ -117,7 +117,7 @@ export function ResearchProfilePanel({
         </section>
       )}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/80">
+      <section className="app-card rounded-2xl p-4">
         <h2 className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-zinc-100">
           {readiness.can_prepare_search ? (
             <Check className="h-4 w-4 text-emerald-500" />

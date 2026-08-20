@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { AppShell } from "@/components/AppShell";
 import { getLearningSessionId } from "@/lib/api/learning";
 
 /**
@@ -41,8 +42,10 @@ export default function StudentLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <Suspense fallback={null}>
-      <SessionGuard>{children}</SessionGuard>
-    </Suspense>
+    <AppShell>
+      <Suspense fallback={null}>
+        <SessionGuard>{children}</SessionGuard>
+      </Suspense>
+    </AppShell>
   );
 }

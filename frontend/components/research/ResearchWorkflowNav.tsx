@@ -36,6 +36,7 @@ function deriveWorkflowSteps(conversation: ResearchConversationResponse): Workfl
     { id: "research-section-difficulty", label: "方向难点分析", available: true, hasContent: conversation.topic_difficulty_analysis.items.length > 0 },
     { id: "research-section-experiment", label: "实验方案", available: hasDesign, hasContent: hasDesign },
     { id: "research-section-evidence", label: "实验证据包", available: hasPlan, hasContent: false },
+    { id: "research-section-reproduction-evaluation", label: "复现项目评估", available: true, hasContent: false },
     { id: "research-section-paper", label: "论文辅助", available: hasPlan, hasContent: false },
     { id: "research-section-mindmap", label: "研究思维导图", available: true, hasContent: conversation.research_mindmap.nodes.length > 0 },
   ];
@@ -62,13 +63,17 @@ export function ResearchWorkflowNav({ conversation }: { conversation: ResearchCo
   return (
     <nav
       aria-label="科研流程步骤导航"
-      className="mb-4 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm sm:px-4 dark:border-zinc-800 dark:bg-zinc-900/90"
+      className="app-card mb-2 rounded-xl px-3 py-2"
     >
-      <p className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-zinc-400">
-        <ListChecks className="h-3.5 w-3.5 shrink-0" />
-        科研流程导航 · 仅根据已保存的会话数据展示，点击跳转到对应面板；不会触发检索或任何自动操作。
-      </p>
-      <ol className="mt-2 flex gap-2 overflow-x-auto pb-1 lg:flex-wrap lg:overflow-visible lg:pb-0">
+      <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-600 dark:text-zinc-400">
+        <p className="flex min-w-0 items-center gap-1.5">
+          <ListChecks className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">科研流程导航</span>
+        </p>
+        <span className="shrink-0 text-[10px] font-medium text-slate-400 sm:hidden">横向滑动查看 9 步 →</span>
+        <span className="hidden text-[10px] font-medium text-slate-400 sm:inline">点击可跳转，不触发自动操作</span>
+      </div>
+      <ol className="mt-1.5 flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 whitespace-nowrap [scrollbar-width:thin]">
         {steps.map((step, index) => {
           const content = (
             <>
@@ -93,10 +98,10 @@ export function ResearchWorkflowNav({ conversation }: { conversation: ResearchCo
             </>
           );
           const className = step.available
-            ? "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/30"
+            ? "app-button-secondary inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11px] transition hover:bg-slate-50 dark:hover:bg-zinc-800"
             : "inline-flex shrink-0 cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-slate-200 px-2.5 py-1.5 text-[11px] text-slate-400 dark:border-zinc-800 dark:text-zinc-600";
           return (
-            <li key={step.id}>
+            <li key={step.id} className="min-w-max snap-start">
               {step.available ? (
                 <a
                   href={`#${step.id}`}

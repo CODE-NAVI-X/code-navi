@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -35,7 +35,7 @@ import {
   requestCompilerGuidance,
   submitPython,
 } from "@/lib/api/compiler";
-import { useFlowStore } from "@/lib/store/flow-store";
+import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 import { getOrCreateLearnerId } from "@/lib/learner";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
@@ -231,11 +231,11 @@ function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const payload = useFlowStore((s) => s.payload);
+  const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(null);
+  const urlKnowledgeName = searchParams.get("knowledge_name");
   const knowledgeName =
-    payload?.masteredKnowledgePoint.name ??
-    searchParams.get("knowledge_name") ??
-    "DHCP 四阶段报文交互";
-  const recommendedIds = payload?.payloadData.exerciseIds ?? [];
+    urlKnowledgeName ?? payload?.masteredKnowledgePoint.name ?? persistedPayload?.masteredKnowledgePoint.name;
+  const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
 
   const [view, setView] = useState<"start" | "workspace">("start");
   const [query, setQuery] = useState("");
@@ -271,6 +271,12 @@ function PracticeContent() {
   const [records, setRecords] = useState<CompilerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [learnerId] = useState(() => getLearnerId());
+  const pythonFileInputRef = useRef<HTMLInputElement>(null);
+  const problemFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    queueMicrotask(() => setPersistedPayload(getPersistedFlowPayload()));
+  }, []);
 
   const exercises = useMemo(
     () => [...importedExercises, ...EXERCISES],
@@ -578,30 +584,39 @@ function PracticeContent() {
 
   if (view === "start") {
     return (
-      <main className="min-h-screen bg-[#f5f6ef] text-[#17201b]">
+      <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
         <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
-          <PracticeTopbar
-            runtime={runtime}
-            error={error}
-            onBack={() => router.push("/student/learning")}
-          />
+          <PracticeTopbar runtime={runtime} error={error} />
 
           <section className="mx-auto w-full max-w-5xl py-10 sm:py-14">
             <div className="max-w-3xl">
-              <p className="font-mono text-xs font-semibold uppercase tracking-normal text-[#667168]">
+              <p className="font-mono text-xs font-semibold uppercase tracking-normal text-slate-500 dark:text-zinc-400">
                 Code Practice / 软件工程实现
               </p>
-              <h1 className="mt-3 text-4xl font-bold tracking-normal text-[#17201b] sm:text-5xl">
+              <h1 className="mt-3 text-4xl font-bold tracking-normal text-slate-950 dark:text-zinc-50 sm:text-5xl">
                 今天想练什么？
               </h1>
-              <p className="mt-4 text-sm leading-6 text-[#607066]">
-                当前知识点：{knowledgeName}。选择一道题，上传自己的题目，或者带上 Python 文件进入编译练习。
-              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2 text-sm leading-6 text-slate-500 dark:text-zinc-400">
+                <p>{knowledgeName ? <>当前主题：<strong className="text-slate-700 dark:text-zinc-200">{knowledgeName}</strong>。选择一道题继续巩固。</> : "自由练习：选择一道题、上传自己的题目，或者带上 Python 文件开始。"}</p>
+                {knowledgeName ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearFlowPayload();
+                      setPersistedPayload(null);
+                      router.replace("/practice");
+                    }}
+                    className="app-button-secondary rounded-full px-3 py-1 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+                  >
+                    清除当前主题 / 自由练习
+                  </button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="mt-7 grid min-h-17 overflow-hidden rounded-2xl border border-[#d9dfd2] bg-white shadow-[0_16px_40px_rgba(32,44,36,0.08)] md:grid-cols-[minmax(0,1fr)_160px]">
-              <label className="flex min-w-0 items-center gap-3 border-b border-[#e3e8dd] px-4 md:border-b-0 md:border-r">
-                <Search className="h-4 w-4 flex-none text-[#778279]" strokeWidth={1.5} />
+            <div className="app-card mt-7 grid min-h-17 overflow-hidden rounded-2xl md:grid-cols-[minmax(0,1fr)_160px]">
+              <label className="flex min-w-0 items-center gap-3 border-b border-slate-200 px-4 md:border-b-0 md:border-r dark:border-zinc-800">
+                <Search className="h-4 w-4 flex-none text-slate-400" strokeWidth={1.5} />
                 <input
                   type="search"
                   value={query}
@@ -610,13 +625,14 @@ function PracticeContent() {
                     if (event.key === "Enter") startSelectedPractice();
                   }}
                   placeholder="搜索题目、知识点或难度"
-                  className="h-16 min-w-0 flex-1 bg-transparent text-sm text-[#17201b] outline-none placeholder:text-[#9aa49b]"
+                  aria-label="搜索题目、知识点或难度"
+                  className="h-16 min-w-0 flex-1 bg-transparent text-sm text-slate-950 outline-none placeholder:text-slate-400 dark:text-zinc-50"
                 />
               </label>
               <button
                 type="button"
                 onClick={startSelectedPractice}
-                className="inline-flex items-center justify-center gap-2 bg-[#1b241f] px-5 py-4 text-sm font-semibold text-white transition hover:bg-[#2f3c34]"
+                className="app-button-primary inline-flex items-center justify-center gap-2 px-5 py-4 text-sm font-semibold transition hover:bg-slate-800 dark:hover:bg-zinc-200"
               >
                 开始练习
                 <ArrowRight className="h-4 w-4" strokeWidth={1.5} />
@@ -624,26 +640,31 @@ function PracticeContent() {
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-[#d9dfd2] bg-white px-4 py-2 text-xs font-semibold text-[#35443b] shadow-sm">
+              <button
+                type="button"
+                onClick={() => pythonFileInputRef.current?.click()}
+                className="app-button-secondary inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-sm hover:bg-slate-50 dark:hover:bg-zinc-800"
+              >
                 <FileUp className="h-3.5 w-3.5" strokeWidth={1.5} />
                 导入 Python
-                <input
-                  type="file"
-                  accept=".py,text/x-python,text/plain"
-                  className="hidden"
-                  onChange={(event) => void importPythonSource(event.target.files?.[0] ?? null)}
-                />
-              </label>
+              </button>
+              <input
+                ref={pythonFileInputRef}
+                type="file"
+                accept=".py,text/x-python,text/plain"
+                className="hidden"
+                onChange={(event) => void importPythonSource(event.target.files?.[0] ?? null)}
+              />
               <a
                 href="#problem-import"
-                className="inline-flex items-center gap-2 rounded-full border border-[#d9dfd2] bg-white px-4 py-2 text-xs font-semibold text-[#35443b] shadow-sm transition hover:bg-[#eef2e8]"
+                className="app-button-secondary inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-sm transition hover:bg-slate-50 dark:hover:bg-zinc-800"
               >
                 <Import className="h-3.5 w-3.5" strokeWidth={1.5} />
                 上传题目
               </a>
               <a
                 href="#practice-set-generation"
-                className="inline-flex items-center gap-2 rounded-full border border-[#d9dfd2] bg-white px-4 py-2 text-xs font-semibold text-[#35443b] shadow-sm transition hover:bg-[#eef2e8]"
+                className="app-button-secondary inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-sm transition hover:bg-slate-50 dark:hover:bg-zinc-800"
               >
                 <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
                 生成练习集
@@ -655,8 +676,8 @@ function PracticeContent() {
                   onClick={() => setDifficulty(item)}
                   className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
                     difficulty === item
-                      ? "border-[#9fb49d] bg-[#dcebd6] text-[#233728]"
-                      : "border-[#d9dfd2] bg-white text-[#667168] hover:text-[#17201b]"
+                      ? "border-slate-400 bg-slate-950 text-white dark:border-zinc-500 dark:bg-zinc-100 dark:text-zinc-950"
+                      : "border-slate-200 bg-white text-slate-500 hover:text-slate-950 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                   }`}
                 >
                   {item === "all" ? "全部" : DIFFICULTY_LABELS[item]}
@@ -667,18 +688,18 @@ function PracticeContent() {
             <section className="mt-8">
               <div className="mb-3 flex items-end justify-between">
                 <div>
-                  <p className="font-mono text-[11px] font-semibold uppercase text-[#7b857d]">
+                  <p className="font-mono text-[11px] font-semibold uppercase text-slate-400 dark:text-zinc-500">
                     Practice Set
                   </p>
                   <h2 className="mt-1 text-xl font-bold">练习题</h2>
                 </div>
-                <span className="rounded-full border border-[#d9dfd2] bg-white px-3 py-1 text-xs text-[#667168]">
+                <span className="app-card-subtle rounded-full px-3 py-1 text-xs text-slate-500 dark:text-zinc-400">
                   {visibleExercises.length} 道
                 </span>
               </div>
-              <div className="overflow-hidden rounded-2xl border border-[#d9dfd2] bg-white">
+              <div className="app-card overflow-hidden rounded-2xl">
                 {visibleExercises.length === 0 ? (
-                  <p className="p-5 text-sm text-[#667168]">没有匹配的练习题</p>
+                  <p className="p-5 text-sm text-slate-500 dark:text-zinc-400">没有匹配的练习题</p>
                 ) : (
                   visibleExercises.map((exercise, index) => (
                     <ExerciseRow
@@ -695,14 +716,14 @@ function PracticeContent() {
               </div>
             </section>
 
-            <section id="problem-import" className="mt-8 rounded-2xl border border-[#d9dfd2] bg-white p-4 shadow-sm">
+            <section id="problem-import" className="app-card mt-8 rounded-2xl p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="font-mono text-[11px] font-semibold uppercase text-[#7b857d]">
+                  <p className="font-mono text-[11px] font-semibold uppercase text-slate-400 dark:text-zinc-500">
                     Problem Import
                   </p>
                   <h2 className="mt-1 text-xl font-bold">上传题目并智能排列</h2>
-                  <p className="mt-2 max-w-2xl text-xs leading-5 text-[#667168]">
+                  <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500 dark:text-zinc-400">
                     上传题目文件或直接粘贴题目文本后，系统会识别题意、输入输出、难度和知识点，并按练习路径加入当前题组。上传题目默认只支持运行和 AI 评析，不使用服务端隐藏测试判题。
                   </p>
                 </div>
@@ -710,7 +731,7 @@ function PracticeContent() {
                   type="button"
                   onClick={() => void analyzeUploadedProblems()}
                   disabled={problemImportBusy}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#17201b] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#2f3c34] disabled:opacity-50"
+                  className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-800 disabled:opacity-50 dark:hover:bg-zinc-200"
                 >
                   {problemImportBusy ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
@@ -721,20 +742,25 @@ function PracticeContent() {
                 </button>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-4 py-2.5 text-xs font-semibold text-[#35443b] transition hover:bg-[#eef2e8]">
+                <button
+                  type="button"
+                  onClick={() => problemFileInputRef.current?.click()}
+                  className="app-button-secondary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+                >
                   <FileUp className="h-3.5 w-3.5" strokeWidth={1.5} />
                   选择题目文件
-                  <input
-                    type="file"
-                    accept=".txt,.md,.markdown,.json,.csv,.docx,.pdf,text/plain,text/markdown,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
-                    className="hidden"
-                    onChange={(event) => void importProblemTextFile(event.target.files?.[0] ?? null)}
-                  />
-                </label>
+                </button>
+                <input
+                  ref={problemFileInputRef}
+                  type="file"
+                  accept=".txt,.md,.markdown,.json,.csv,.docx,.pdf,text/plain,text/markdown,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+                  className="hidden"
+                  onChange={(event) => void importProblemTextFile(event.target.files?.[0] ?? null)}
+                />
                 {problemImportFileName ? (
-                  <span className="text-xs text-[#667168]">{problemImportFileName}</span>
+                  <span className="text-xs text-slate-500 dark:text-zinc-400">{problemImportFileName}</span>
                 ) : (
-                  <span className="text-xs text-[#667168]">也可以直接在下方粘贴题目内容</span>
+                  <span className="text-xs text-slate-500 dark:text-zinc-400">也可以直接在下方粘贴题目内容</span>
                 )}
               </div>
               <textarea
@@ -744,13 +770,14 @@ function PracticeContent() {
                   setProblemImportContentBase64(null);
                 }}
                 placeholder={"题目一：字符串回文判断\n描述：读取一行文本，判断是否为回文。\n输入：一行字符串\n输出：YES 或 NO"}
-                className="mt-4 min-h-36 w-full resize-y rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] p-3 text-sm leading-6 text-[#17201b] outline-none focus:border-[#9fb49d]"
+                aria-label="粘贴题目内容"
+                className="app-input mt-4 min-h-36 w-full resize-y rounded-xl p-3 text-sm leading-6 outline-none focus:border-slate-500"
               />
               {problemImportMessage ? (
-                <p className="mt-3 text-xs text-[#667168]">{problemImportMessage}</p>
+                <p className="mt-3 text-xs text-slate-500 dark:text-zinc-400">{problemImportMessage}</p>
               ) : null}
               {problemImportPreview.length > 0 ? (
-                <div className="mt-4 overflow-hidden rounded-xl border border-[#e6eadf]">
+                <div className="app-card-subtle mt-4 overflow-hidden rounded-xl">
                   {problemImportPreview.map((problem, index) => (
                     <ImportedProblemRow
                       key={problem.importId}
@@ -761,11 +788,11 @@ function PracticeContent() {
                       onChange={updateImportedProblem}
                     />
                   ))}
-                  <div className="border-t border-[#e6eadf] bg-[#fbfcf7] p-3 text-right">
+                  <div className="border-t border-slate-200 bg-slate-50 p-3 text-right dark:border-zinc-800 dark:bg-zinc-900">
                     <button
                       type="button"
                       onClick={addUploadedProblems}
-                      className="inline-flex items-center gap-2 rounded-xl bg-[#b9f28d] px-4 py-2 text-xs font-bold text-[#122017] transition hover:bg-[#c9ffa2]"
+                      className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition hover:bg-slate-800 dark:hover:bg-zinc-200"
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
                       加入本组练习
@@ -775,14 +802,14 @@ function PracticeContent() {
               ) : null}
             </section>
 
-            <section id="practice-set-generation" className="mt-8 rounded-2xl border border-[#d9dfd2] bg-white p-4 shadow-sm">
+            <section id="practice-set-generation" className="app-card mt-8 rounded-2xl p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="font-mono text-[11px] font-semibold uppercase text-[#7b857d]">
+                  <p className="font-mono text-[11px] font-semibold uppercase text-slate-400 dark:text-zinc-500">
                     Practice Set Generator
                   </p>
                   <h2 className="mt-1 text-xl font-bold">生成练习集</h2>
-                  <p className="mt-2 max-w-2xl text-xs leading-5 text-[#667168]">
+                  <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500 dark:text-zinc-400">
                     根据学习目标从内置题库和本次上传题中生成递进练习顺序。内置题可提交判题，上传题和生成题只支持运行与 AI 评析。
                   </p>
                 </div>
@@ -790,7 +817,7 @@ function PracticeContent() {
                   type="button"
                   onClick={() => void generatePracticeSet()}
                   disabled={setBusy}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#17201b] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#2f3c34] disabled:opacity-50"
+                  className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-800 disabled:opacity-50 dark:hover:bg-zinc-200"
                 >
                   {setBusy ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
@@ -801,15 +828,15 @@ function PracticeContent() {
                 </button>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
-                <label className="text-xs font-semibold text-[#35443b]">
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
                   学习目标
                   <textarea
                     value={setPrompt}
                     onChange={(event) => setSetPrompt(event.target.value)}
-                    className="mt-1 min-h-24 w-full resize-y rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] p-3 text-sm font-normal leading-6 text-[#17201b] outline-none focus:border-[#9fb49d]"
+                    className="app-input mt-1 min-h-24 w-full resize-y rounded-xl p-3 text-sm font-normal leading-6"
                   />
                 </label>
-                <label className="text-xs font-semibold text-[#35443b]">
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
                   题目数量
                   <input
                     type="number"
@@ -817,60 +844,60 @@ function PracticeContent() {
                     max={12}
                     value={setTargetCount}
                     onChange={(event) => setSetTargetCount(Number(event.target.value))}
-                    className="mt-1 h-11 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b] outline-none focus:border-[#9fb49d]"
+                    className="app-input mt-1 h-11 w-full rounded-xl px-3 text-sm font-normal"
                   />
                 </label>
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
-                <label className="text-xs font-semibold text-[#35443b]">
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
                   最低难度
                   <select
                     value={setDifficultyLow}
                     onChange={(event) =>
                       setSetDifficultyLow(event.target.value as "easy" | "medium" | "hard")
                     }
-                    className="mt-1 h-10 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b]"
+                    className="app-input mt-1 h-10 w-full rounded-xl px-3 text-sm font-normal"
                   >
                     <option value="easy">入门</option>
                     <option value="medium">进阶</option>
                     <option value="hard">挑战</option>
                   </select>
                 </label>
-                <label className="text-xs font-semibold text-[#35443b]">
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
                   最高难度
                   <select
                     value={setDifficultyHigh}
                     onChange={(event) =>
                       setSetDifficultyHigh(event.target.value as "easy" | "medium" | "hard")
                     }
-                    className="mt-1 h-10 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b]"
+                    className="app-input mt-1 h-10 w-full rounded-xl px-3 text-sm font-normal"
                   >
                     <option value="easy">入门</option>
                     <option value="medium">进阶</option>
                     <option value="hard">挑战</option>
                   </select>
                 </label>
-                <label className="text-xs font-semibold text-[#35443b]">
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
                   知识点
                   <input
                     value={setKnowledgeTags}
                     onChange={(event) => setSetKnowledgeTags(event.target.value)}
                     placeholder="循环, 列表, 字符串"
-                    className="mt-1 h-10 w-full rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 text-sm font-normal text-[#17201b] outline-none focus:border-[#9fb49d]"
+                    className="app-input mt-1 h-10 w-full rounded-xl px-3 text-sm font-normal"
                   />
                 </label>
               </div>
-              <label className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-[#35443b]">
+              <label className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-zinc-200">
                 <input
                   type="checkbox"
                   checked={setIncludeUploaded}
                   onChange={(event) => setSetIncludeUploaded(event.target.checked)}
-                  className="h-4 w-4"
+                  className="h-4 w-4 accent-slate-900 dark:accent-zinc-100"
                 />
                 纳入本次上传题目
               </label>
               {setMessage ? (
-                <p className="mt-3 text-xs text-[#667168]">{setMessage}</p>
+                <p className="mt-3 text-xs text-slate-500 dark:text-zinc-400">{setMessage}</p>
               ) : null}
             </section>
           </section>
@@ -880,12 +907,12 @@ function PracticeContent() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f5f6ef] text-[#17201b]">
-      <header className="sticky top-0 z-20 flex min-h-16 items-center gap-3 border-b border-[#d9dfd2] bg-[#fbfcf7]/95 px-3 backdrop-blur md:px-5">
+    <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
+      <header className="sticky top-16 z-30 flex min-h-16 flex-wrap items-center gap-2 border-b border-slate-200 bg-[var(--app-card)]/95 px-3 py-2 shadow-[var(--app-shadow)] backdrop-blur md:px-5 dark:border-zinc-800">
         <button
           type="button"
           onClick={() => setView("start")}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#d9dfd2] bg-white text-[#35443b] transition hover:bg-[#eef2e8]"
+          className="app-button-secondary inline-flex h-10 w-10 items-center justify-center rounded-xl transition hover:bg-slate-50 dark:hover:bg-zinc-800"
           aria-label="返回练习选择"
         >
           <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
@@ -894,13 +921,13 @@ function PracticeContent() {
           type="button"
           onClick={() => void submitCode()}
           disabled={running || !runtime?.ready || activeExercise.origin !== "built_in"}
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#667c68] bg-white px-4 py-2.5 text-sm font-bold text-[#233728] transition hover:bg-[#eef2e8] disabled:cursor-not-allowed disabled:opacity-50"
+          className="app-button-secondary inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800"
         >
           <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />
           提交判题
         </button>
-        <div className="min-w-0 flex-1">
-          <span className="font-mono text-[10px] text-[#78827a]">
+        <div className="order-4 min-w-0 basis-full sm:order-none sm:basis-auto sm:flex-1">
+          <span className="font-mono text-[10px] text-slate-400 dark:text-zinc-500">
           {activeExercise.origin === "python_file"
             ? "自定义练习"
             : activeExercise.origin === "uploaded_problem"
@@ -909,13 +936,13 @@ function PracticeContent() {
                 ? "生成题目"
               : `练习 ${String(exercises.findIndex((item) => item.id === activeExercise.id) + 1).padStart(2, "0")}`}
           </span>
-          <strong className="block truncate text-sm text-[#17201b]">{activeExercise.title}</strong>
+          <strong className="block truncate text-sm text-slate-950 dark:text-zinc-50">{activeExercise.title}</strong>
         </div>
         <button
           type="button"
           onClick={() => void runCode()}
           disabled={running || !runtime?.ready}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#b9f28d] px-4 py-2.5 text-sm font-bold text-[#122017] transition hover:bg-[#c9ffa2] disabled:cursor-not-allowed disabled:bg-[#d7ddd2] disabled:text-[#7b857d]"
+          className="app-button-primary inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:hover:bg-zinc-200"
         >
           {running ? (
             <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
@@ -927,9 +954,9 @@ function PracticeContent() {
       </header>
 
       <div className="grid min-h-[calc(100vh-64px)] lg:grid-cols-[236px_minmax(0,1fr)]">
-        <aside className="border-b border-[#d9dfd2] bg-[#fbfcf7] p-3 lg:border-b-0 lg:border-r">
+        <aside className="border-b border-slate-200 bg-[var(--app-card-subtle)] p-3 lg:border-b-0 lg:border-r dark:border-zinc-800">
           <div className="mb-3 flex items-center gap-2 px-2">
-            <List className="h-4 w-4 text-[#667168]" strokeWidth={1.5} />
+            <List className="h-4 w-4 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
             <strong className="text-xs">本组练习</strong>
           </div>
           <div className="space-y-1">
@@ -940,8 +967,8 @@ function PracticeContent() {
                 onClick={() => openExercise(exercise)}
                 className={`grid w-full grid-cols-[28px_minmax(0,1fr)] gap-2 rounded-xl px-2 py-2.5 text-left transition ${
                   exercise.id === activeExercise.id
-                    ? "bg-[#dcebd6] text-[#17201b]"
-                    : "text-[#667168] hover:bg-[#eef2e8] hover:text-[#17201b]"
+                    ? "bg-slate-200 text-slate-950 dark:bg-zinc-800 dark:text-zinc-50"
+                    : "text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
                 }`}
               >
                 <span className="font-mono text-[11px]">{String(index + 1).padStart(2, "0")}</span>
@@ -957,16 +984,16 @@ function PracticeContent() {
 
         <section className="min-w-0 p-4 md:p-5">
           <div className="mx-auto max-w-7xl">
-            <section className="mb-4 grid gap-4 rounded-2xl border border-[#d9dfd2] bg-white p-4 md:grid-cols-[minmax(0,1fr)_320px]">
+            <section className="app-card mb-4 grid gap-4 rounded-2xl p-4 md:grid-cols-[minmax(0,1fr)_320px]">
               <div>
                 <span
                   className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${DIFFICULTY_BADGES[activeExercise.difficulty]}`}
                 >
                   {DIFFICULTY_LABELS[activeExercise.difficulty]}
                 </span>
-                <p className="mt-3 text-sm leading-6 text-[#405146]">{activeExercise.description}</p>
+                <p className="mt-3 text-sm leading-6 text-slate-700 dark:text-zinc-200">{activeExercise.description}</p>
                 {activeExercise.orderReason ? (
-                  <p className="mt-2 text-xs leading-5 text-[#667168]">{activeExercise.orderReason}</p>
+                  <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">{activeExercise.orderReason}</p>
                 ) : null}
                 {activeExercise.warnings?.length ? (
                   <ul className="mt-2 space-y-1 text-xs text-amber-700">
@@ -976,13 +1003,13 @@ function PracticeContent() {
                   </ul>
                 ) : null}
               </div>
-              <dl className="grid gap-2 text-xs text-[#667168]">
-                <div className="rounded-xl bg-[#f5f6ef] p-3">
-                  <dt className="font-semibold text-[#17201b]">输入</dt>
+              <dl className="grid gap-2 text-xs text-slate-500 dark:text-zinc-400">
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-zinc-950/60">
+                  <dt className="font-semibold text-slate-950 dark:text-zinc-50">输入</dt>
                   <dd className="mt-1">{activeExercise.inputHint}</dd>
                 </div>
-                <div className="rounded-xl bg-[#f5f6ef] p-3">
-                  <dt className="font-semibold text-[#17201b]">输出</dt>
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-zinc-950/60">
+                  <dt className="font-semibold text-slate-950 dark:text-zinc-50">输出</dt>
                   <dd className="mt-1">{activeExercise.outputHint}</dd>
                 </div>
               </dl>
@@ -1012,30 +1039,32 @@ function PracticeContent() {
                 value={source}
                 onChange={(event) => setSource(event.target.value)}
                 spellCheck={false}
+                aria-label="Python 源码编辑器"
                 className="min-h-[420px] w-full resize-y bg-[#111814] p-5 font-mono text-sm leading-6 text-[#f6fbf4] outline-none"
               />
             </div>
 
             <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
-              <div className="rounded-2xl border border-[#d9dfd2] bg-white p-4">
-                <label className="text-xs font-semibold text-[#35443b]">标准输入</label>
+              <div className="app-card rounded-2xl p-4">
+                <label htmlFor="practice-standard-input" className="text-xs font-semibold text-slate-700 dark:text-zinc-200">标准输入</label>
                 <textarea
+                  id="practice-standard-input"
                   value={stdin}
                   onChange={(event) => setStdin(event.target.value)}
                   spellCheck={false}
-                  className="mt-3 min-h-32 w-full resize-y rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] p-3 font-mono text-xs text-[#17201b] outline-none focus:border-[#9fb49d]"
+                  className="app-input mt-3 min-h-32 w-full resize-y rounded-xl p-3 font-mono text-xs"
                 />
-                <label className="mt-3 flex items-center gap-2 text-xs text-[#35443b]">
+                <label className="mt-3 flex items-center gap-2 text-xs text-slate-700 dark:text-zinc-200">
                   <input
                     type="checkbox"
                     checked={enableAi}
                     disabled={runtime?.ai.status !== "ready"}
                     onChange={(event) => setEnableAi(event.target.checked)}
-                    className="h-4 w-4 accent-[#7fb45f]"
+                    className="h-4 w-4 accent-slate-900 dark:accent-zinc-100"
                   />
                   AI 评析
                 </label>
-                <p className="mt-2 text-[11px] leading-5 text-[#66736b]">
+                <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-zinc-400">
                   开启后，本次运行的源码和执行输出会发送给已配置的外部模型，可能产生费用。
                 </p>
               </div>
@@ -1067,22 +1096,12 @@ function PracticeContent() {
 function PracticeTopbar({
   runtime,
   error,
-  onBack,
 }: {
   runtime: CompilerRuntimeStatus | null;
   error: string | null;
-  onBack: () => void;
 }) {
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-[#d9dfd2] pb-4">
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex items-center gap-2 text-xs font-semibold text-[#667168] transition hover:text-[#17201b]"
-      >
-        <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
-        返回知识点学习
-      </button>
+    <header className="flex items-center justify-end border-b border-slate-200 pb-4 dark:border-zinc-800">
       <RuntimeBadge runtime={runtime} error={error} />
     </header>
   );
@@ -1105,28 +1124,28 @@ function ExerciseRow({
 }) {
   return (
     <div
-      className={`grid min-h-19 grid-cols-[minmax(0,1fr)_56px] border-t border-[#e6eadf] first:border-t-0 transition ${
-        selected ? "bg-[#dcebd6] shadow-[inset_2px_0_0_#6f9b5a]" : "hover:bg-[#fbfdf9]"
+      className={`grid min-h-19 grid-cols-[minmax(0,1fr)_56px] border-t border-slate-200 first:border-t-0 transition dark:border-zinc-800 ${
+        selected ? "bg-slate-100 shadow-[inset_2px_0_0_#0f172a] dark:bg-zinc-800 dark:shadow-[inset_2px_0_0_#fafafa]" : "hover:bg-slate-50 dark:hover:bg-zinc-900/70"
       }`}
     >
       <button type="button" onClick={onSelect} className="grid grid-cols-[44px_minmax(0,1fr)] gap-3 p-4 text-left">
-        <span className="font-mono text-xs text-[#7b857d]">{String(index + 1).padStart(2, "0")}</span>
+        <span className="font-mono text-xs text-slate-400 dark:text-zinc-500">{String(index + 1).padStart(2, "0")}</span>
         <span className="min-w-0">
           <span className="flex flex-wrap items-center gap-2">
-            <strong className="truncate text-sm text-[#17201b]">{exercise.title}</strong>
+            <strong className="truncate text-sm text-slate-950 dark:text-zinc-50">{exercise.title}</strong>
             {recommended ? (
-              <span className="rounded-full bg-[#17201b] px-2 py-0.5 text-[10px] text-white">
+              <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] text-white dark:bg-zinc-100 dark:text-zinc-950">
                 推荐
               </span>
             ) : null}
           </span>
-          <small className="mt-1 block text-xs text-[#667168]">{exercise.summary}</small>
+          <small className="mt-1 block text-xs text-slate-500 dark:text-zinc-400">{exercise.summary}</small>
         </span>
       </button>
       <button
         type="button"
         onClick={onOpen}
-        className="flex items-center justify-center border-l border-[#e6eadf] text-[#667168] transition hover:bg-[#17201b] hover:text-white"
+        className="flex items-center justify-center border-l border-slate-200 text-slate-500 transition hover:bg-slate-950 hover:text-white dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-100 dark:hover:text-zinc-950"
         aria-label={`进入${exercise.title}`}
       >
         <ArrowRight className="h-4 w-4" strokeWidth={1.5} />
@@ -1152,21 +1171,21 @@ function ImportedProblemRow({
   ) => void;
 }) {
   return (
-    <article className="grid gap-3 border-t border-[#e6eadf] p-4 first:border-t-0 md:grid-cols-[40px_minmax(0,1fr)_220px]">
-      <span className="font-mono text-xs text-[#7b857d]">
+    <article className="grid gap-3 border-t border-slate-200 p-4 first:border-t-0 dark:border-zinc-800 md:grid-cols-[40px_minmax(0,1fr)_220px]">
+      <span className="font-mono text-xs text-slate-400 dark:text-zinc-500">
         {String(index + 1).padStart(2, "0")}
       </span>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <strong className="text-sm text-[#17201b]">{problem.title}</strong>
+          <strong className="text-sm text-slate-950 dark:text-zinc-50">{problem.title}</strong>
           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${DIFFICULTY_BADGES[problem.difficulty]}`}>
             {DIFFICULTY_LABELS[problem.difficulty]}
           </span>
         </div>
-        <p className="mt-2 text-xs leading-5 text-[#667168]">{problem.description}</p>
-        <p className="mt-2 text-[11px] text-[#667168]">{problem.orderReason}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">{problem.description}</p>
+        <p className="mt-2 text-[11px] text-slate-500 dark:text-zinc-400">{problem.orderReason}</p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <label className="text-[11px] text-[#667168]">
+          <label className="text-[11px] text-slate-500 dark:text-zinc-400">
             难度
             <select
               value={problem.difficulty}
@@ -1175,14 +1194,14 @@ function ImportedProblemRow({
                   difficulty: event.target.value as ImportedCompilerProblem["difficulty"],
                 })
               }
-              className="ml-1 rounded-md border border-[#d9dfd2] bg-white px-1.5 py-1 text-[11px] text-[#35443b]"
+              className="app-input ml-1 rounded-md px-1.5 py-1 text-[11px]"
             >
               <option value="easy">入门</option>
               <option value="medium">进阶</option>
               <option value="hard">挑战</option>
             </select>
           </label>
-          <label className="min-w-0 flex-1 text-[11px] text-[#667168]">
+          <label className="min-w-0 flex-1 text-[11px] text-slate-500 dark:text-zinc-400">
             标签
             <input
               value={problem.tags.join(", ")}
@@ -1195,7 +1214,7 @@ function ImportedProblemRow({
                     .slice(0, 6),
                 })
               }
-              className="ml-1 w-full min-w-28 rounded-md border border-[#d9dfd2] bg-white px-1.5 py-1 text-[11px] text-[#35443b]"
+              className="app-input ml-1 w-full min-w-28 rounded-md px-1.5 py-1 text-[11px]"
             />
           </label>
         </div>
@@ -1203,7 +1222,7 @@ function ImportedProblemRow({
           <p className="mt-2 text-[11px] text-amber-700">{problem.warnings.join(" ")}</p>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-start justify-between gap-2 text-left text-[11px] text-[#667168] md:block md:text-right">
+      <div className="flex flex-wrap items-start justify-between gap-2 text-left text-[11px] text-slate-500 dark:text-zinc-400 md:block md:text-right">
         <p>置信度 {Math.round(problem.confidence * 100)}%</p>
         <p className="mt-1">{problem.sampleTests.length ? `样例 ${problem.sampleTests.length} 组` : "无样例"}</p>
         <div className="mt-2 flex gap-1 md:justify-end">
@@ -1212,7 +1231,7 @@ function ImportedProblemRow({
             aria-label="上移题目"
             disabled={index === 0}
             onClick={() => onMove(index, -1)}
-            className="rounded-md border border-[#d9dfd2] px-2 py-1 disabled:opacity-40"
+            className="app-button-secondary rounded-md px-2 py-1 disabled:opacity-40"
           >
             ↑
           </button>
@@ -1221,7 +1240,7 @@ function ImportedProblemRow({
             aria-label="下移题目"
             disabled={index === total - 1}
             onClick={() => onMove(index, 1)}
-            className="rounded-md border border-[#d9dfd2] px-2 py-1 disabled:opacity-40"
+            className="app-button-secondary rounded-md px-2 py-1 disabled:opacity-40"
           >
             ↓
           </button>
@@ -1240,19 +1259,19 @@ function RuntimeBadge({
 }) {
   const ready = runtime?.ready === true;
   return (
-    <div className="rounded-2xl border border-[#d9dfd2] bg-white px-4 py-3 text-xs shadow-sm">
+    <div role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"} className="app-card rounded-2xl px-4 py-3 text-xs">
       <div className="flex items-center gap-2">
         <span
           className={`h-2 w-2 rounded-full ${
             ready ? "bg-[#77b255]" : error ? "bg-red-500" : "bg-amber-400"
           }`}
         />
-        <span className="font-semibold text-[#35443b]">
+        <span className="font-semibold text-slate-700 dark:text-zinc-200">
           {ready ? `${runtime.language} ${runtime.version}` : error ?? "连接运行环境"}
         </span>
       </div>
       {runtime ? (
-        <p className="mt-1 text-[#667168]">
+        <p className="mt-1 text-slate-500 dark:text-zinc-400">
           {formatDuration(runtime.limits.wallTimeMs)} /{" "}
           {formatBytes(runtime.limits.memoryBytes)}
         </p>
@@ -1270,14 +1289,16 @@ function ResultPanel({
 }) {
   const output = error ?? result?.stderr ?? result?.stdout ?? "等待运行结果";
   return (
-    <div className="rounded-2xl border border-[#d9dfd2] bg-white p-4">
+    <div className="app-card rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-xs font-semibold text-[#35443b]">控制台输出</h2>
-        <span className="rounded-full border border-[#d9dfd2] bg-[#f5f6ef] px-2 py-1 text-[11px] text-[#667168]">
+        <h2 className="text-xs font-semibold text-slate-700 dark:text-zinc-200">控制台输出</h2>
+        <span className="app-card-subtle rounded-full px-2 py-1 text-[11px] text-slate-500 dark:text-zinc-400">
           {result?.outcome ?? "idle"}
         </span>
       </div>
       <pre
+        role={error || result?.stderr ? "alert" : undefined}
+        aria-live={error || result?.stderr ? "assertive" : undefined}
         className={`min-h-32 overflow-auto whitespace-pre-wrap rounded-xl border p-3 font-mono text-xs ${
           error || result?.stderr
             ? "border-red-200 bg-red-50 text-red-900"
@@ -1287,7 +1308,7 @@ function ResultPanel({
         {output}
       </pre>
       {result ? (
-        <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-[#667168]">
+        <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-slate-500 dark:text-zinc-400">
           <span>耗时 {formatDuration(result.metrics.wallTimeMs)}</span>
           <span>内存 {formatBytes(result.metrics.memoryBytes)}</span>
           <span>退出码 {result.exitCode ?? "-"}</span>
@@ -1299,11 +1320,11 @@ function ResultPanel({
 
 function JudgePanel({ result }: { result: CompilerJudgeResult }) {
   return (
-    <section className="mt-4 rounded-2xl border border-[#d9dfd2] bg-white p-4">
+    <section className="app-card mt-4 rounded-2xl p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-[#17201b]">判题结果</h2>
-          <p className="mt-1 text-xs text-[#667168]">
+          <h2 className="text-sm font-semibold text-slate-950 dark:text-zinc-50">判题结果</h2>
+          <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
             已通过 {result.passed}/{result.total} 个测试点，隐藏测试仅返回通过状态。
           </p>
         </div>
@@ -1313,14 +1334,14 @@ function JudgePanel({ result }: { result: CompilerJudgeResult }) {
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {result.testResults.map((test) => (
-            <div key={`${test.index}-${test.hidden}`} className="rounded-xl border border-[#e6eadf] bg-[#f5f6ef] p-3 text-xs">
+            <div key={`${test.index}-${test.hidden}`} className="app-card-subtle rounded-xl p-3 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-[#667168]">测试点 {test.index + 1}</span>
+              <span className="font-mono text-slate-500 dark:text-zinc-400">测试点 {test.index + 1}</span>
               <span className={test.status === "passed" ? "text-[#47723e]" : "text-[#a44b38]"}>
                 {test.status === "passed" ? "通过" : test.status}
               </span>
             </div>
-            <p className="mt-2 text-[#667168]">{test.hidden ? "隐藏测试" : "公开测试"}</p>
+            <p className="mt-2 text-slate-500 dark:text-zinc-400">{test.hidden ? "隐藏测试" : "公开测试"}</p>
           </div>
         ))}
       </div>
@@ -1342,15 +1363,15 @@ function TutorPanel({
   onSubmit: () => void;
 }) {
   return (
-    <section className="mt-4 rounded-2xl border border-[#d9dfd2] bg-white p-4">
+    <section className="app-card mt-4 rounded-2xl p-4">
       <div className="flex items-center gap-2">
-        <BrainCircuit className="h-4 w-4 text-[#667168]" strokeWidth={1.5} />
-        <h2 className="text-sm font-semibold text-[#17201b]">AI 引导</h2>
+        <BrainCircuit className="h-4 w-4 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
+        <h2 className="text-sm font-semibold text-slate-950 dark:text-zinc-50">AI 引导</h2>
       </div>
-      <p className="mt-2 text-xs text-[#667168]">AI 只根据公开结果提问和提示，不直接提供完整答案。</p>
+      <p className="mt-2 text-xs text-slate-500 dark:text-zinc-400">AI 只根据公开结果提问和提示，不直接提供完整答案。</p>
       <div className="mt-3 max-h-56 space-y-2 overflow-auto">
         {messages.map((message, index) => (
-          <div key={`${message.role}-${index}`} className={`rounded-xl p-3 text-xs leading-5 ${message.role === "assistant" ? "bg-[#eef2e8] text-[#35443b]" : "ml-6 bg-[#17201b] text-white"}`}>
+          <div key={`${message.role}-${index}`} className={`rounded-xl p-3 text-xs leading-5 ${message.role === "assistant" ? "bg-slate-100 text-slate-700 dark:bg-zinc-800 dark:text-zinc-200" : "ml-6 bg-slate-950 text-white dark:bg-zinc-100 dark:text-zinc-950"}`}>
             {message.content}
           </div>
         ))}
@@ -1360,9 +1381,10 @@ function TutorPanel({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="描述你卡住的地方"
-          className="min-w-0 flex-1 rounded-xl border border-[#d9dfd2] bg-[#fbfcf7] px-3 py-2 text-xs outline-none focus:border-[#9fb49d]"
+          aria-label="向 AI 引导描述卡住的问题"
+          className="app-input min-w-0 flex-1 rounded-xl px-3 py-2 text-xs outline-none focus:border-slate-500"
         />
-        <button type="submit" disabled={busy || !value.trim()} className="rounded-xl bg-[#17201b] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">
+        <button type="submit" disabled={busy || !value.trim()} className="app-button-primary rounded-xl px-4 py-2 text-xs font-semibold disabled:opacity-50">
           {busy ? "思考中" : "提问"}
         </button>
       </form>
@@ -1379,15 +1401,15 @@ function AssessmentPanel({
 }) {
   const assessment = result?.assessment;
   return (
-    <div className="rounded-2xl border border-[#d9dfd2] bg-white p-4">
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-[#17201b]">
+    <div className="app-card rounded-2xl p-4">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-zinc-50">
         <CheckCircle2 className="h-4 w-4 text-[#77a65b]" strokeWidth={1.5} />
         规则结论
       </h2>
-      <p className="mt-3 text-sm font-semibold text-[#35443b]">
+      <p className="mt-3 text-sm font-semibold text-slate-700 dark:text-zinc-200">
         {assessment?.title ?? "尚未运行"}
       </p>
-      <p className="mt-2 text-xs leading-5 text-[#667168]">
+      <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">
         {assessment?.summary ?? "运行后会展示确定性规则结论。"}
       </p>
       {assessment?.errorType ? (
@@ -1397,17 +1419,17 @@ function AssessmentPanel({
         </p>
       ) : null}
 
-      <div className="mt-5 border-t border-[#e6eadf] pt-4">
-        <h3 className="flex items-center gap-2 text-xs font-semibold text-[#35443b]">
-          <BrainCircuit className="h-4 w-4 text-[#667168]" strokeWidth={1.5} />
+      <div className="mt-5 border-t border-slate-200 pt-4 dark:border-zinc-800">
+        <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-zinc-200">
+          <BrainCircuit className="h-4 w-4 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
           AI 评析
         </h3>
-        <p className="mt-2 text-xs leading-5 text-[#667168]">
+        <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">
           {aiFeedback?.explanation ?? aiFeedback?.message ?? "未启用或暂无 AI 反馈。"}
         </p>
         {aiFeedback?.quality ? (
-          <div className="mt-3 rounded-xl border border-[#d9dfd2] bg-[#f5f6ef] p-3">
-            <p className="text-[11px] text-[#667168]">代码质量参考分</p>
+          <div className="app-card-subtle mt-3 rounded-xl p-3">
+            <p className="text-[11px] text-slate-500 dark:text-zinc-400">代码质量参考分</p>
             <p className="mt-1 text-2xl font-bold text-[#47723e]">
               {aiFeedback.quality.overall}
             </p>
@@ -1429,35 +1451,35 @@ function HistoryPanel({
     <div
       className={
         compact
-          ? "mt-6 border-t border-[#d9dfd2] pt-4"
-          : "rounded-2xl border border-[#d9dfd2] bg-white p-4"
+          ? "mt-6 border-t border-slate-200 pt-4 dark:border-zinc-800"
+          : "app-card rounded-2xl p-4"
       }
     >
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-[#17201b]">
-        <Save className="h-4 w-4 text-[#667168]" strokeWidth={1.5} />
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-zinc-50">
+        <Save className="h-4 w-4 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
         最近记录
       </h2>
       <div className="mt-3 space-y-2">
         {records.length === 0 ? (
-          <p className="text-xs text-[#667168]">暂无练习记录</p>
+          <p className="text-xs text-slate-500 dark:text-zinc-400">暂无练习记录</p>
         ) : (
           records.slice(0, compact ? 4 : 5).map((record) => (
             <article
               key={record.id}
               className={
                 compact
-                  ? "border-t border-[#e6eadf] py-3 first:border-t-0"
-                  : "rounded-xl border border-[#d9dfd2] bg-[#f5f6ef] p-3"
+                  ? "border-t border-slate-200 py-3 first:border-t-0 dark:border-zinc-800"
+                  : "app-card-subtle rounded-xl p-3"
               }
             >
               <div className="flex items-center justify-between gap-2">
-                <strong className="truncate text-xs text-[#17201b]">{record.title}</strong>
-                <span className="flex flex-none items-center gap-1 text-[11px] text-[#667168]">
+                <strong className="truncate text-xs text-slate-950 dark:text-zinc-50">{record.title}</strong>
+                <span className="flex flex-none items-center gap-1 text-[11px] text-slate-500 dark:text-zinc-400">
                   <Clock3 className="h-3 w-3" strokeWidth={1.5} />
                   {formatRecordTime(record.createdAt)}
                 </span>
               </div>
-              <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-[#667168]">
+              <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500 dark:text-zinc-400">
                 {record.aiExplanation ?? record.summary}
               </p>
             </article>
@@ -1501,7 +1523,7 @@ export default function PracticePage() {
   return (
     <Suspense
       fallback={
-        <main className="flex min-h-screen items-center justify-center bg-[#f5f6ef] text-[#667168]">
+        <main className="flex min-h-screen items-center justify-center bg-[var(--app-surface)] text-slate-500 dark:text-zinc-400" role="status" aria-live="polite">
           <Loader2 className="mr-2 h-4 w-4 animate-spin" strokeWidth={1.5} />
           页面加载中...
         </main>
