@@ -39,6 +39,7 @@ from .conversation_paper_review import (
 )
 from .conversation_plan import build_conversation_research_plan
 from .conversation_reference_draft import build_reference_draft_package
+from .conversation_reproduction import build_reproduction_pipeline
 from .conversation_schemas import (
     ApplyRevisionSuggestionRequest,
     CitationCandidate,
@@ -46,6 +47,7 @@ from .conversation_schemas import (
     ConversationEvidenceBundle,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
+    CreateReproductionPipelineRequest,
     CreateResearchConversationRequest,
     CreateSelectedCitationRequest,
     ExperimentCodeDraft,
@@ -59,6 +61,7 @@ from .conversation_schemas import (
     PaperRevision,
     ReferenceDraftPackage,
     ReferenceEntryDraft,
+    ReproductionPipeline,
     ResearchContextSummary,
     ResearchConversationDecision,
     ResearchConversationMessage,
@@ -85,6 +88,7 @@ from .models import (
     ResearchPaperDraftModel,
     ResearchPaperReviewModel,
     ResearchPaperRevisionModel,
+    ResearchReproductionPipelineModel,
     ResearchRevisionSuggestionModel,
     ResearchSelectedCitationModel,
     ResearchSubmissionProfileModel,
@@ -106,6 +110,10 @@ class CitationSourceNotFoundError(LookupError):
 
 class SelectedCitationNotFoundError(LookupError):
     """Raised when a requested local citation selection does not exist."""
+
+
+class ReproductionPipelineNotFoundError(LookupError):
+    """Raised when a Pipeline or its explicitly selected saved source is absent."""
 
 
 class ConversationDecisionGenerator(Protocol):
@@ -144,13 +152,8 @@ class ResearchConversationService:
         self,
         decision_generator: ConversationDecisionGenerator | None = None,
         artifact_generator: ResearchArtifactGenerator | None = None,
-        context_assembler: ContextAssembler[
-            ResearchContextInput, ContextAssembly
-        ]
-        | None = None,
-        conversation_store: ConversationStateStore[
-            Session, ResearchConversationModel
-        ]
+        context_assembler: ContextAssembler[ResearchContextInput, ContextAssembly] | None = None,
+        conversation_store: ConversationStateStore[Session, ResearchConversationModel]
         | None = None,
     ) -> None:
         self.decision_generator = decision_generator or RuntimeConversationDecisionGenerator()
@@ -392,6 +395,73 @@ class ResearchConversationService:
     ) -> list[ExperimentEvidenceBundle]:
         self._get_model(conversation_id, db)
         return self._experiment_evidence_bundles(conversation_id, db)
+
+    def create_reproduction_pipeline(
+        self,
+        conversation_id: str,
+        request: CreateReproductionPipelineRequest,
+        db: Session,
+    ) -> ReproductionPipeline:
+        """Persist a Pipeline only after proving the user-selected local paper belongs here."""
+        conversation = self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchEvidenceBundleModel)
+            .filter(
+                ResearchEvidenceBundleModel.id == request.evidence_bundle_id,
+                ResearchEvidenceBundleModel.conversation_id == conversation_id,
+            )
+            .first()
+        )
+        if record is None:
+            raise ReproductionPipelineNotFoundError(request.evidence_bundle_id)
+        bundle = ConversationEvidenceBundle.model_validate(record.bundle_data)
+        paper = next((item for item in bundle.papers if item.url == request.paper_url), None)
+        if paper is None:
+            raise ReproductionPipelineNotFoundError(request.paper_url)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        created_at = datetime.now(UTC)
+        pipeline_id = str(uuid.uuid4())
+        pipeline = build_reproduction_pipeline(
+            profile,
+            plan,
+            bundle,
+            paper,
+            self._experiment_evidence_bundles(conversation_id, db),
+            pipeline_id=pipeline_id,
+            created_at=created_at,
+        )
+        db.add(
+            ResearchReproductionPipelineModel(
+                id=pipeline_id,
+                conversation_id=conversation_id,
+                pipeline_data=pipeline.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+        return pipeline
+
+    def list_reproduction_pipelines(
+        self, conversation_id: str, db: Session
+    ) -> list[ReproductionPipeline]:
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchReproductionPipelineModel)
+            .filter(ResearchReproductionPipelineModel.conversation_id == conversation_id)
+            .order_by(ResearchReproductionPipelineModel.created_at.desc())
+            .all()
+        )
+        return [ReproductionPipeline.model_validate(record.pipeline_data) for record in records]
+
+    def get_reproduction_pipeline(self, pipeline_id: str, db: Session) -> ReproductionPipeline:
+        record = db.get(ResearchReproductionPipelineModel, pipeline_id)
+        if record is None:
+            raise ReproductionPipelineNotFoundError(pipeline_id)
+        return ReproductionPipeline.model_validate(record.pipeline_data)
 
     def generate_paper_blueprint(
         self,
@@ -829,9 +899,7 @@ class ResearchConversationService:
         db.commit()
         return profile
 
-    def get_submission_profile(
-        self, conversation_id: str, db: Session
-    ) -> SubmissionProfile | None:
+    def get_submission_profile(self, conversation_id: str, db: Session) -> SubmissionProfile | None:
         """Restore the user's local profile without invoking a provider or network tool."""
         self._get_model(conversation_id, db)
         record = (

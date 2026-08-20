@@ -12,6 +12,9 @@ DIFFICULTY = Path("frontend/components/research/ResearchDifficultyPanel.tsx")
 EXPERIMENT = Path("frontend/components/research/ExperimentDesignPanel.tsx")
 CITATION = Path("frontend/components/research/CitationScaffoldPanel.tsx")
 PAPER_DRAFT_REVIEW = Path("frontend/components/research/PaperDraftReviewPanel.tsx")
+REPRODUCTION_EVALUATION = Path(
+    "frontend/components/research/ReproductionEvaluationPanel.tsx"
+)
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -203,3 +206,22 @@ def test_submission_export_is_labeled_as_a_metadata_only_pre_submission_package(
     assert "导出投稿前辅助包" in panel_source
     assert "不含初稿/修订稿全文" in panel_source
     assert "待作者或导师核对" in panel_source
+
+
+def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    panel_source = REPRODUCTION_EVALUATION.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "ReproductionEvaluationPanel" in workspace_source
+    assert "论文复现项目评估" in workspace_source
+    assert "我确认运行五维项目评估" in panel_source
+    assert "不可评估" in panel_source
+    assert "查看评分依据" in panel_source
+    assert "复现改进任务" in panel_source
+    assert "接受任务" in panel_source
+    assert "标记为已完成" in panel_source
+    assert "不会联网、读取全文、执行代码或修改论文" in panel_source
+    assert "不代表复现成功或论文质量" in workspace_source
+    assert "/reproduction-evaluations" in api_source
+    assert "/reproduction-improvement-tasks/" in api_source

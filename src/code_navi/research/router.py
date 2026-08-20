@@ -18,6 +18,7 @@ from .conversation_schemas import (
     CreateExperimentCodeDraftRequest,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
+    CreateReproductionPipelineRequest,
     CreateResearchConversationRequest,
     CreateSelectedCitationRequest,
     ExperimentCodeDraft,
@@ -32,6 +33,7 @@ from .conversation_schemas import (
     PaperRevision,
     ReferenceDraftPackage,
     ReferenceEntryDraft,
+    ReproductionPipeline,
     ResearchConversationResponse,
     ResearchSearchPlan,
     RevisionSuggestion,
@@ -54,6 +56,7 @@ from .conversation_search_service import (
 from .conversation_service import (
     CitationSourceNotFoundError,
     ConversationNotFoundError,
+    ReproductionPipelineNotFoundError,
     ResearchConversationService,
     SelectedCitationNotFoundError,
 )
@@ -65,6 +68,18 @@ from .provider_schemas import (
 from .provider_service import (
     _provider_connection_service,
     browser_provider_configuration_enabled,
+)
+from .reproduction_evaluation_schemas import (
+    CreateReproductionEvaluationRequest,
+    ReproductionImprovementTask,
+    ReproductionProjectEvaluation,
+    UpdateReproductionImprovementTaskRequest,
+)
+from .reproduction_evaluation_service import (
+    InvalidReproductionTaskTransitionError,
+    ReproductionEvaluationNotFoundError,
+    ReproductionEvaluationService,
+    ReproductionImprovementTaskNotFoundError,
 )
 from .schemas import (
     CreateEvidenceBundleRequest,
@@ -85,6 +100,7 @@ _service = ResearchClarificationService()
 _evidence_service = ResearchEvidenceService()
 _conversation_service = ResearchConversationService()
 _conversation_search_service = ResearchConversationSearchService()
+_reproduction_evaluation_service = ReproductionEvaluationService()
 _db_dependency = Depends(get_db)
 
 
@@ -277,6 +293,53 @@ def list_conversation_evidence_bundles(
         return _conversation_search_service.list_bundles(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/reproduction-pipelines",
+    response_model=ReproductionPipeline,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_reproduction_pipeline(
+    conversation_id: str,
+    request: CreateReproductionPipelineRequest,
+    db: Session = _db_dependency,
+) -> ReproductionPipeline:
+    """Create a rules-only plan from one user-selected already-saved paper."""
+    try:
+        return _conversation_service.create_reproduction_pipeline(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ReproductionPipelineNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Selected paper is not present in this conversation's saved evidence.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reproduction-pipelines",
+    response_model=list[ReproductionPipeline],
+)
+def list_reproduction_pipelines(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[ReproductionPipeline]:
+    """Restore saved Pipelines without regenerating or searching."""
+    try:
+        return _conversation_service.list_reproduction_pipelines(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get("/reproduction-pipelines/{pipeline_id}", response_model=ReproductionPipeline)
+def get_reproduction_pipeline(
+    pipeline_id: str, db: Session = _db_dependency
+) -> ReproductionPipeline:
+    """Load one stable Pipeline contract for later local consumers."""
+    try:
+        return _conversation_service.get_reproduction_pipeline(pipeline_id, db)
+    except ReproductionPipelineNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Reproduction pipeline not found.") from error
 
 
 @router.get(
@@ -532,6 +595,72 @@ def list_experiment_evidence_bundles(
         return _conversation_service.list_experiment_evidence_bundles(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/reproduction-evaluations",
+    response_model=ReproductionProjectEvaluation,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_reproduction_evaluation(
+    conversation_id: str,
+    request: CreateReproductionEvaluationRequest,
+    db: Session = _db_dependency,
+) -> ReproductionProjectEvaluation:
+    """Persist one explicit offline evaluation; never execute or retrieve anything."""
+    del request
+    try:
+        return _reproduction_evaluation_service.create(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reproduction-evaluations",
+    response_model=list[ReproductionProjectEvaluation],
+)
+def list_reproduction_evaluations(
+    conversation_id: str,
+    db: Session = _db_dependency,
+) -> list[ReproductionProjectEvaluation]:
+    """Restore saved evaluation snapshots and current improvement-task states."""
+    try:
+        return _reproduction_evaluation_service.list(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/reproduction-evaluations/{evaluation_id}",
+    response_model=ReproductionProjectEvaluation,
+)
+def get_reproduction_evaluation(
+    evaluation_id: str,
+    db: Session = _db_dependency,
+) -> ReproductionProjectEvaluation:
+    """Restore one saved evaluation without re-running its rules."""
+    try:
+        return _reproduction_evaluation_service.get(evaluation_id, db)
+    except ReproductionEvaluationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Reproduction evaluation not found.") from error
+
+
+@router.patch(
+    "/reproduction-improvement-tasks/{task_id}",
+    response_model=ReproductionImprovementTask,
+)
+def update_reproduction_improvement_task(
+    task_id: str,
+    request: UpdateReproductionImprovementTaskRequest,
+    db: Session = _db_dependency,
+) -> ReproductionImprovementTask:
+    """Record an explicit accept, skip, or complete action for one task."""
+    try:
+        return _reproduction_evaluation_service.update_task(task_id, request, db)
+    except ReproductionImprovementTaskNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Improvement task not found.") from error
+    except InvalidReproductionTaskTransitionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post(
