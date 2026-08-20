@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -283,6 +283,8 @@ function PracticeContent() {
   const [difficulty, setDifficulty] = useState<Difficulty | "all">("all");
   const [selectedExerciseId, setSelectedExerciseId] = useState(EXERCISES[0].id);
   const [activeExercise, setActiveExercise] = useState<PracticeExercise>(EXERCISES[0]);
+  const [practiceSelectionVersion, setPracticeSelectionVersion] = useState(0);
+  const activePracticeKey = `${launchContextKey}:exercise:${activeExercise.id}:selection:${practiceSelectionVersion}`;
   const [importedExercises, setImportedExercises] = useState<PracticeExercise[]>([]);
   const [problemImportText, setProblemImportText] = useState("");
   const [problemImportContentBase64, setProblemImportContentBase64] = useState<string | null>(null);
@@ -317,7 +319,7 @@ function PracticeContent() {
   });
   const [timelineNotice, setTimelineNotice] = useState<TimelineNoticeState | null>(null);
   const operationSequenceRef = useRef(0);
-  const launchContextKeyRef = useRef(launchContextKey);
+  const activePracticeKeyRef = useRef(activePracticeKey);
   const pythonFileInputRef = useRef<HTMLInputElement>(null);
   const problemFileInputRef = useRef<HTMLInputElement>(null);
   const effectiveFreeRunLaunchState =
@@ -328,18 +330,18 @@ function PracticeContent() {
     launchStates.problem_submit.key === problemSubmitLaunchKey
       ? launchStates.problem_submit
       : loadingLaunchState(problemSubmitLaunchKey, "problem_submit");
-  const result = resultState?.key === launchContextKey ? resultState.value : null;
-  const aiFeedback = aiFeedbackState?.key === launchContextKey ? aiFeedbackState.value : null;
-  const judgeResult = judgeResultState?.key === launchContextKey ? judgeResultState.value : null;
-  const guidanceMessage = guidanceMessageState?.key === launchContextKey ? guidanceMessageState.value : "";
-  const guidance = guidanceState?.key === launchContextKey ? guidanceState.value : [];
-  const running = runningState?.key === launchContextKey;
+  const result = resultState?.key === activePracticeKey ? resultState.value : null;
+  const aiFeedback = aiFeedbackState?.key === activePracticeKey ? aiFeedbackState.value : null;
+  const judgeResult = judgeResultState?.key === activePracticeKey ? judgeResultState.value : null;
+  const guidanceMessage = guidanceMessageState?.key === activePracticeKey ? guidanceMessageState.value : "";
+  const guidance = guidanceState?.key === activePracticeKey ? guidanceState.value : [];
+  const running = runningState?.key === activePracticeKey;
   const effectiveTimelineNotice =
-    timelineNotice?.key === launchContextKey ? timelineNotice.message : null;
+    timelineNotice?.key === activePracticeKey ? timelineNotice.message : null;
 
-  useEffect(() => {
-    launchContextKeyRef.current = launchContextKey;
-  }, [launchContextKey]);
+  useLayoutEffect(() => {
+    activePracticeKeyRef.current = activePracticeKey;
+  }, [activePracticeKey]);
 
   useEffect(() => {
     let active = true;
@@ -415,7 +417,14 @@ function PracticeContent() {
     };
   }, [learnerId]);
 
+  function invalidateActiveOperation() {
+    setPracticeSelectionVersion((version) => version + 1);
+    setRunningState(null);
+    setGuidanceBusy(false);
+  }
+
   function openExercise(exercise: PracticeExercise) {
+    invalidateActiveOperation();
     setSelectedExerciseId(exercise.id);
     setActiveExercise(exercise);
     setSource(exercise.source);
@@ -613,14 +622,14 @@ function PracticeContent() {
 
   function isCurrentOperation(requestKey: string, operationSequence: number): boolean {
     return (
-      launchContextKeyRef.current === requestKey &&
+      activePracticeKeyRef.current === requestKey &&
       operationSequenceRef.current === operationSequence
     );
   }
 
   async function runCode() {
     if (effectiveFreeRunLaunchState.status === "loading") return;
-    const requestKey = launchContextKey;
+    const requestKey = activePracticeKey;
     const operationSequence = operationSequenceRef.current + 1;
     operationSequenceRef.current = operationSequence;
     setRunningState({ key: requestKey, sequence: operationSequence });
@@ -688,7 +697,7 @@ function PracticeContent() {
 
   async function submitCode() {
     if (effectiveProblemSubmitLaunchState.status === "loading") return;
-    const requestKey = launchContextKey;
+    const requestKey = activePracticeKey;
     const operationSequence = operationSequenceRef.current + 1;
     operationSequenceRef.current = operationSequence;
     setRunningState({ key: requestKey, sequence: operationSequence });
@@ -738,7 +747,7 @@ function PracticeContent() {
   async function askTutor() {
     if (!judgeResult || !guidanceMessage.trim()) return;
     const message = guidanceMessage.trim();
-    const requestKey = launchContextKey;
+    const requestKey = activePracticeKey;
     setGuidanceBusy(true);
     setGuidanceMessageState({ key: requestKey, value: "" });
     try {
@@ -748,14 +757,14 @@ function PracticeContent() {
         learnerId,
         history: guidance,
       });
-      if (launchContextKeyRef.current === requestKey) {
+      if (activePracticeKeyRef.current === requestKey) {
         setGuidanceState({
           key: requestKey,
           value: [...guidance, { role: "user", content: message }, { role: "assistant", content: response.ai.reply }],
         });
       }
     } catch (tutorError) {
-      if (launchContextKeyRef.current === requestKey) {
+      if (activePracticeKeyRef.current === requestKey) {
         setError(tutorError instanceof Error ? tutorError.message : "AI 引导暂不可用");
       }
     } finally {
@@ -1112,7 +1121,10 @@ function PracticeContent() {
       <header className="sticky top-16 z-30 flex min-h-16 flex-wrap items-center gap-2 border-b border-slate-200 bg-[var(--app-card)]/95 px-3 py-2 shadow-[var(--app-shadow)] backdrop-blur md:px-5 dark:border-zinc-800">
         <button
           type="button"
-          onClick={() => setView("start")}
+          onClick={() => {
+            invalidateActiveOperation();
+            setView("start");
+          }}
           className="app-button-secondary inline-flex h-10 w-10 items-center justify-center rounded-xl transition hover:bg-slate-50 dark:hover:bg-zinc-800"
           aria-label="返回练习选择"
         >
@@ -1283,7 +1295,7 @@ function PracticeContent() {
                 messages={guidance}
                 value={guidanceMessage}
                 busy={guidanceBusy}
-                onChange={(value) => setGuidanceMessageState({ key: launchContextKey, value })}
+                onChange={(value) => setGuidanceMessageState({ key: activePracticeKey, value })}
                 onSubmit={() => void askTutor()}
               />
             ) : null}
