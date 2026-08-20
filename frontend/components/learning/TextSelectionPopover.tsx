@@ -13,6 +13,8 @@ import {
   useState,
 } from "react";
 import { X, Sparkles, Loader2, BookOpen, AlertCircle } from "lucide-react";
+import { markSourceRef } from "@/lib/api/profile";
+import { MarkButton } from "@/components/learning/MarkButton";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -249,28 +251,41 @@ export default function TextSelectionPopover(): JSX.Element | null {
         </div>
       )}
 
-      {/* Inline result */}
+      {/* Inline result + 标记不懂 */}
       {result && (
-        <div className="space-y-2.5 rounded-xl bg-slate-50 p-3.5 text-xs border border-slate-100 dark:bg-zinc-800/60 dark:border-zinc-800">
-          <p className="font-semibold text-slate-900 dark:text-zinc-100 leading-relaxed">
-            {result.summary}
-          </p>
-          {result.citations.length > 0 && (
-            <div className="space-y-1 pt-1 border-t border-slate-200/60 dark:border-zinc-700/50">
-              <div className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                <BookOpen className="h-3 w-3" strokeWidth={1.5} />
-                引用来源
+        <>
+          <div className="space-y-2.5 rounded-xl bg-slate-50 p-3.5 text-xs border border-slate-100 dark:bg-zinc-800/60 dark:border-zinc-800">
+            <p className="font-semibold text-slate-900 dark:text-zinc-100 leading-relaxed">
+              {result.summary}
+            </p>
+            {result.citations.length > 0 && (
+              <div className="space-y-1 pt-1 border-t border-slate-200/60 dark:border-zinc-700/50">
+                <div className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  <BookOpen className="h-3 w-3" strokeWidth={1.5} />
+                  引用来源
+                </div>
+                <ul className="space-y-1 text-[11px] text-slate-600 dark:text-zinc-300">
+                  {result.citations.map((cit, i) => (
+                    <li key={`cit-${i}`} className="truncate">
+                      • {cit.source_title}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul className="space-y-1 text-[11px] text-slate-600 dark:text-zinc-300">
-                {result.citations.map((cit, i) => (
-                  <li key={`cit-${i}`} className="truncate">
-                    • {cit.source_title}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+          <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2 dark:border-zinc-800">
+            <span className="text-[10px] text-slate-400 dark:text-zinc-500">
+              没看懂？标记为待复习
+            </span>
+            <MarkButton
+              knowledgePoint={selectedText}
+              sourceType="explain"
+              sourceRef={markSourceRef("explain", selectedText)}
+              label={selectedText}
+            />
+          </div>
+        </>
       )}
 
       {/* Inline error */}

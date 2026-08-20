@@ -23,6 +23,8 @@ import type {
   Slide,
 } from "@/lib/api/learning";
 import { SlideRenderer } from "./SlideRenderer";
+import { MarkButton } from "@/components/learning/MarkButton";
+import { markSourceRef } from "@/lib/api/profile";
 
 interface SlideViewerProps {
   knowledgePoint: string;
@@ -153,6 +155,18 @@ export function SlideViewer({
             )}
           </div>
           <div className="flex items-center gap-2">
+            {hasCurrent && (
+              <MarkButton
+                knowledgePoint={knowledgePoint}
+                sourceType="ppt_page"
+                sourceRef={markSourceRef(
+                  "ppt_page",
+                  knowledgePoint,
+                  String(currentIndex),
+                )}
+                label={`第 ${currentIndex + 1} 页`}
+              />
+            )}
             <button
               type="button"
               onClick={() => onNavigate(currentIndex - 1)}
