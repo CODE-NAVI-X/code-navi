@@ -19,6 +19,7 @@ from code_navi.context_transfer import models as context_transfer_models  # noqa
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
 from code_navi.learning_profile import models as learning_profile_models  # noqa: E402,F401
+from code_navi.online_compiler import models as compiler_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
 from code_navi.workspaces import models as workspace_models  # noqa: E402,F401
 
@@ -461,3 +462,46 @@ def test_reproduction_evaluation_migration_preserves_existing_research_data(
     assert "research_reproduction_evaluations" in tables
     assert "research_reproduction_improvement_tasks" in tables
     assert preserved == "before-reproduction-evaluation"
+
+
+def test_practice_outcome_migration_adds_launches_and_outcomes_after_workspace_foundation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'practice-outcome-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "integrated_feature_heads_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO workspaces "
+                "(id, owner_scope_id, personal_owner_scope_id, title, kind, "
+                "description, created_at, updated_at) VALUES "
+                "('workspace-before-practice', 'profile-before-practice', "
+                "'profile-before-practice', '个人工作区', 'personal', NULL, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            preserved = connection.execute(
+                text("SELECT title FROM workspaces WHERE id = 'workspace-before-practice'")
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert {"practice_launches", "practice_outcomes"} <= tables
+    assert preserved == "个人工作区"

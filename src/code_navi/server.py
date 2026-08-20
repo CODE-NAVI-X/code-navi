@@ -18,6 +18,7 @@ from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
 from .learning_profile import models as learning_profile_models  # noqa: F401  (register tables)
 from .learning_profile.router import router as learning_profile_router
+from .online_compiler import models as compiler_models  # noqa: F401  (register tables)
 from .online_compiler.router import router as compiler_router
 from .provider_config import load_local_provider_config
 from .research import models as research_models  # noqa: F401  (register tables)

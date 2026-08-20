@@ -5,13 +5,22 @@ from __future__ import annotations
 from threading import Lock
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from code_navi.db import get_db
+from code_navi.workspaces.service import WorkspaceConflictError, WorkspaceNotFoundError
 
 from .application import ApiResponse, CompilerApplication
 from .config import Settings
 from .learning_records import LearningRecordStore
 from .piston import PistonClient
+from .practice_integration import (
+    PracticeIntegrationService,
+    PracticeLaunchNotFoundError,
+    PracticeLaunchValidationError,
+)
 from .provider_setup import create_ai_service
 
 router = APIRouter(prefix="/api/v1/compiler", tags=["Compiler"])
@@ -54,11 +63,21 @@ def get_compiler_application() -> CompilerApplication:
 
 
 _compiler_dependency = Depends(get_compiler_application)
+_db_dependency = Depends(get_db)
 _json_body = Body(...)
+_practice_integration = PracticeIntegrationService()
 
 
 def _json_response(response: ApiResponse) -> JSONResponse:
     return JSONResponse(status_code=response.status_code, content=response.body)
+
+
+def _launch_error(error: Exception) -> HTTPException:
+    if isinstance(error, PracticeLaunchValidationError):
+        return HTTPException(status_code=400, detail=str(error))
+    if isinstance(error, WorkspaceConflictError):
+        return HTTPException(status_code=409, detail=str(error))
+    return HTTPException(status_code=404, detail="Practice launch not found.")
 
 
 @router.get("/runtime", status_code=200)
@@ -74,10 +93,26 @@ def runtime_status(
 def execute(
     payload: Any = _json_body,
     application: CompilerApplication = _compiler_dependency,
+    db: Session = _db_dependency,
 ) -> JSONResponse:
     """Execute one Python source submission through the compiler service."""
 
-    return _json_response(application.execute(payload))
+    try:
+        launch = _practice_integration.resolve_launch_for_payload(payload, db)
+    except (PracticeLaunchValidationError, PracticeLaunchNotFoundError) as error:
+        raise _launch_error(error) from error
+
+    response = application.execute(payload)
+    if launch is not None and response.status_code == 200:
+        outcome = _practice_integration.record_execute_outcome(
+            launch=launch.launch,
+            response_body=response.body,
+            request_payload=payload,
+            db=db,
+        )
+        if outcome is not None:
+            response.body["practiceOutcome"] = _practice_integration.outcome_response(outcome)
+    return _json_response(response)
 
 
 @router.post("/evaluate", status_code=200)
@@ -94,10 +129,69 @@ def evaluate(
 def submit(
     payload: Any = _json_body,
     application: CompilerApplication = _compiler_dependency,
+    db: Session = _db_dependency,
 ) -> JSONResponse:
     """Judge source against server-owned public and hidden tests."""
 
-    return _json_response(application.submit(payload))
+    try:
+        launch = _practice_integration.resolve_launch_for_payload(payload, db)
+    except (PracticeLaunchValidationError, PracticeLaunchNotFoundError) as error:
+        raise _launch_error(error) from error
+
+    response = application.submit(payload)
+    if launch is not None and response.status_code == 200:
+        outcome = _practice_integration.record_submit_outcome(
+            launch=launch.launch,
+            response_body=response.body,
+            request_payload=payload,
+            db=db,
+        )
+        if outcome is not None:
+            response.body["practiceOutcome"] = _practice_integration.outcome_response(outcome)
+    return _json_response(response)
+
+
+@router.post("/launches", status_code=201)
+def create_launch(
+    payload: Any = _json_body,
+    db: Session = _db_dependency,
+) -> JSONResponse:
+    """Issue a server-owned Practice launch for a Workspace context."""
+
+    try:
+        launch = _practice_integration.create_launch(payload, db)
+    except (
+        PracticeLaunchValidationError,
+        WorkspaceConflictError,
+        WorkspaceNotFoundError,
+    ) as error:
+        raise _launch_error(error) from error
+    return JSONResponse(
+        status_code=201,
+        content=_practice_integration.launch_response(launch),
+    )
+
+
+@router.get("/outcomes/{outcome_id}", status_code=200)
+def get_outcome(
+    outcome_id: str,
+    localProfileId: str,
+    db: Session = _db_dependency,
+) -> JSONResponse:
+    """Return an owner-scoped safe PracticeOutcome summary."""
+
+    try:
+        outcome = _practice_integration.get_outcome(
+            outcome_id=outcome_id,
+            local_profile_id=localProfileId,
+            db=db,
+        )
+    except (PracticeLaunchValidationError, PracticeLaunchNotFoundError) as error:
+        raise _launch_error(error) from error
+    return JSONResponse(
+        status_code=200,
+        content=_practice_integration.outcome_detail_response(outcome),
+    )
 
 
 @router.post("/guidance", status_code=200)
