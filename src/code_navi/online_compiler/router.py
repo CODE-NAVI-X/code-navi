@@ -98,7 +98,7 @@ def execute(
     """Execute one Python source submission through the compiler service."""
 
     try:
-        launch = _practice_integration.resolve_launch_for_payload(payload, db)
+        launch = _practice_integration.resolve_launch_for_payload(payload, action="execute", db=db)
     except (PracticeLaunchValidationError, PracticeLaunchNotFoundError) as error:
         raise _launch_error(error) from error
 
@@ -134,7 +134,7 @@ def submit(
     """Judge source against server-owned public and hidden tests."""
 
     try:
-        launch = _practice_integration.resolve_launch_for_payload(payload, db)
+        launch = _practice_integration.resolve_launch_for_payload(payload, action="submit", db=db)
     except (PracticeLaunchValidationError, PracticeLaunchNotFoundError) as error:
         raise _launch_error(error) from error
 

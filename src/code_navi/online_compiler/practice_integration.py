@@ -23,6 +23,7 @@ from .models import PracticeLaunchModel, PracticeOutcomeModel
 _LAUNCH_TTL = timedelta(days=7)
 _MAX_FOCUS_TEXT = 512
 _MAX_IDEMPOTENCY_KEY = 64
+_ACTION_LAUNCH_MODES = {"execute": "free_run", "submit": "problem_submit"}
 _USER_GAP_CATEGORIES = {
     "syntax_error",
     "runtime_error",
@@ -93,6 +94,8 @@ class PracticeIntegrationService:
     def resolve_launch_for_payload(
         self,
         payload: Any,
+        *,
+        action: str,
         db: Session,
     ) -> ResolvedPracticeLaunch | None:
         if not isinstance(payload, dict):
@@ -101,9 +104,13 @@ class PracticeIntegrationService:
         if raw_launch_id is None:
             return None
         launch_id = self._uuid(raw_launch_id, "launchId")
+        self._attempt_id(payload)
         launch = db.query(PracticeLaunchModel).filter(PracticeLaunchModel.id == launch_id).first()
         if launch is None or self._expired(launch.expires_at):
             raise PracticeLaunchNotFoundError("Practice launch not found.")
+        expected_mode = _ACTION_LAUNCH_MODES.get(action)
+        if expected_mode is None or launch.mode != expected_mode:
+            raise PracticeLaunchValidationError("launch mode does not match the compiler action.")
         learner_id = payload.get("learnerId")
         if learner_id is not None and self._uuid(learner_id, "learnerId") != launch.learner_id:
             raise PracticeLaunchValidationError("learnerId does not match the launch.")
@@ -173,7 +180,7 @@ class PracticeIntegrationService:
             severity=safe_data["assessment"]["severity"],
             summary=safe_data["assessment"]["summary"] or safe_data["assessment"]["title"],
             safe_result_data=json.dumps(safe_data, ensure_ascii=False),
-            knowledge_gap_kind=category if category in _USER_GAP_CATEGORIES else None,
+            knowledge_gap_kind=self._knowledge_gap_kind(category),
         )
         return self._insert_outcome_and_activity(
             outcome,
@@ -249,7 +256,7 @@ class PracticeIntegrationService:
             score=str(safe_data["score"]) if safe_data["score"] is not None else None,
             summary=summary,
             safe_result_data=json.dumps(safe_data, ensure_ascii=False),
-            knowledge_gap_kind=category if category in _USER_GAP_CATEGORIES else None,
+            knowledge_gap_kind=self._knowledge_gap_kind(category),
         )
         return self._insert_outcome_and_activity(
             outcome,
@@ -310,6 +317,7 @@ class PracticeIntegrationService:
             "mode": outcome.mode,
             "verdict": outcome.verdict,
             "category": outcome.category,
+            "severity": outcome.severity,
             "summary": outcome.summary,
             "knowledgeGapKind": outcome.knowledge_gap_kind,
             "createdAt": outcome.created_at.isoformat(),
@@ -334,16 +342,53 @@ class PracticeIntegrationService:
     ) -> PracticeOutcomeModel:
         existing = self._existing_outcome(outcome, db)
         if existing is not None:
+            self._ensure_activity_for_outcome(existing, title=title, db=db)
             return existing
         try:
             with db.begin_nested():
                 db.add(outcome)
                 db.flush()
+                self._add_activity_for_outcome(outcome, title=title, db=db)
+                self._touch_context(outcome, db)
         except IntegrityError:
             existing = self._existing_outcome(outcome, db)
             if existing is None:
                 raise
+            self._ensure_activity_for_outcome(existing, title=title, db=db)
             return existing
+        db.commit()
+        db.refresh(outcome)
+        return outcome
+
+    def _ensure_activity_for_outcome(
+        self,
+        outcome: PracticeOutcomeModel,
+        *,
+        title: str,
+        db: Session,
+    ) -> WorkspaceActivityModel:
+        existing = self._activity_for_outcome(outcome, db)
+        if existing is not None:
+            return existing
+        try:
+            with db.begin_nested():
+                activity = self._add_activity_for_outcome(outcome, title=title, db=db)
+                self._touch_context(outcome, db)
+        except IntegrityError:
+            existing = self._activity_for_outcome(outcome, db)
+            if existing is None:
+                raise
+            return existing
+        db.commit()
+        return activity
+
+    def _add_activity_for_outcome(
+        self,
+        outcome: PracticeOutcomeModel,
+        *,
+        title: str,
+        db: Session,
+    ) -> WorkspaceActivityModel:
         activity = WorkspaceActivityModel(
             workspace_id=outcome.workspace_id,
             task_id=outcome.task_id,
@@ -354,17 +399,28 @@ class PracticeIntegrationService:
             title=title,
             summary=outcome.summary,
         )
-        try:
-            with db.begin_nested():
-                db.add(activity)
-                db.flush()
-        except IntegrityError:
-            db.query(WorkspaceActivityModel).filter(
+        db.add(activity)
+        db.flush()
+        return activity
+
+    @staticmethod
+    def _activity_for_outcome(
+        outcome: PracticeOutcomeModel,
+        db: Session,
+    ) -> WorkspaceActivityModel | None:
+        return (
+            db.query(WorkspaceActivityModel)
+            .filter(
                 WorkspaceActivityModel.capability == "practice",
                 WorkspaceActivityModel.action_type == outcome.mode,
                 WorkspaceActivityModel.source_object_type == "practice_outcome",
                 WorkspaceActivityModel.source_object_id == outcome.id,
-            ).first()
+            )
+            .first()
+        )
+
+    @staticmethod
+    def _touch_context(outcome: PracticeOutcomeModel, db: Session) -> None:
         now = datetime.now(UTC)
         workspace = (
             db.query(WorkspaceModel).filter(WorkspaceModel.id == outcome.workspace_id).first()
@@ -375,9 +431,6 @@ class PracticeIntegrationService:
             task = db.query(TaskModel).filter(TaskModel.id == outcome.task_id).first()
             if task is not None:
                 task.updated_at = now
-        db.commit()
-        db.refresh(outcome)
-        return outcome
 
     @staticmethod
     def _existing_outcome(
@@ -506,9 +559,28 @@ class PracticeIntegrationService:
     def _idempotency_key(payload: Any) -> str | None:
         if not isinstance(payload, dict):
             return None
-        return PracticeIntegrationService._optional_text(
-            payload.get("attemptId"), max_length=_MAX_IDEMPOTENCY_KEY
-        )
+        return PracticeIntegrationService._attempt_id(payload)
+
+    @staticmethod
+    def _attempt_id(payload: dict[str, Any]) -> str:
+        value = payload.get("attemptId")
+        if value is None:
+            raise PracticeLaunchValidationError("attemptId is required when launchId is provided")
+        if not isinstance(value, str) or len(value) > _MAX_IDEMPOTENCY_KEY:
+            raise PracticeLaunchValidationError("attemptId must be a UUID v4")
+        try:
+            parsed = UUID(value)
+        except ValueError as error:
+            raise PracticeLaunchValidationError("attemptId must be a UUID v4") from error
+        if parsed.version != 4:
+            raise PracticeLaunchValidationError("attemptId must be a UUID v4")
+        return str(parsed)
+
+    @staticmethod
+    def _knowledge_gap_kind(category: str) -> str | None:
+        if category == "compile_error":
+            return "syntax_error"
+        return category if category in _USER_GAP_CATEGORIES else None
 
     @staticmethod
     def _optional_uuid(value: Any, field: str) -> str | None:
