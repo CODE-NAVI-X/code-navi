@@ -150,7 +150,7 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 
 练习记录当前例外地使用 `COMPILER_DATABASE_PATH` 指向独立 SQLite，并由模块自行创建 `learning_records` 表；它不进入共享 SQLAlchemy Base 或 Alembic。记录保存匿名 UUID、规则与 AI 摘要、代码哈希、代码大小和运行指标，不保存原始代码与标准输入。该路径属于本地原型，生产化前必须统一迁移、所有权和删除规则。
 
-schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；`research_context_summary_v1` 增加 Research 跨 run 摘要，`cli_conversations_v1` 增加项目作用域内的 CLI shell 主对话，`persistent_workspace_foundation_v1` 创建 Workspace、Task 与 Activity 编排表及时间线索引。启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
+schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；`research_context_summary_v1` 增加 Research 跨 run 摘要，`cli_conversations_v1` 增加项目作用域内的 CLI shell 主对话，`persistent_workspace_foundation_v1` 创建 Workspace、Task 与 Activity 编排表及时间线索引，`reproduction_project_evaluation_v1` 增加复现项目评估，`learning_profile_v2` 完成学情画像记录结构，`integrated_feature_heads_v1` 将三条并行演进线收敛为单一迁移 head。启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
 
 ## 6. 架构变更条件
 

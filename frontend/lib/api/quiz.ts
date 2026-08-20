@@ -77,6 +77,12 @@ export interface QuizGenerateResponse {
   provider_name: string;
   source_mode: QuizSourceMode;
   total_points: number;
+  /**
+   * The actual 学情 text injected into the generation prompt (real portrait
+   * segment + manual supplement, or just whichever was present). Echoed back so
+   * the UI can show what the model saw.
+   */
+  effective_student_profile?: string | null;
   audit?: QuizAuditReport | null;
 }
 
@@ -89,6 +95,11 @@ export interface QuizGenerateParams {
   with_latex?: boolean;
   source_mode?: QuizSourceMode;
   student_profile?: string | null;
+  /**
+   * Unified profile key (== the practice learner_id UUID). When set, the server
+   * injects that learner's real portrait into the generation prompt.
+   */
+  profile_id?: string | null;
 }
 
 export const DEFAULT_QUIZ_PARAMS: QuizGenerateParams = {
@@ -121,6 +132,8 @@ export interface GenerateQuizRequest {
   with_latex?: boolean;
   source_mode?: QuizSourceMode;
   student_profile?: string | null;
+  /** Optional profile key → server injects that learner's real portrait. */
+  profile_id?: string | null;
 }
 
 /**
@@ -147,6 +160,7 @@ export async function generateQuiz(
         with_latex: request.with_latex,
         source_mode: request.source_mode,
         student_profile: request.student_profile ?? null,
+        profile_id: request.profile_id ?? null,
       }),
     });
   } catch (networkError) {
@@ -243,8 +257,9 @@ export interface QuizStudentAnswerItem {
   /** Must match an id in the archived quiz being graded. */
   question_id: string;
   /**
-   * fill_blank: one entry per blank, in order. short_answer: a single entry
-   * holding the free-text answer.
+   * single: the selected option value e.g. ["B"]. fill_blank: one entry per
+   * blank, in order. short_answer: a single entry holding the free-text
+   * answer.
    */
   answer: string[];
 }
@@ -264,10 +279,17 @@ export interface QuizQuestionGradeResult {
   is_mock: boolean;
   /** False only when offline mode cannot grade a short answer. */
   graded: boolean;
+  /**
+   * How this score was produced: rules (deterministic single-choice), mock
+   * (offline deterministic fill-blank), or model (LLM judgment).
+   */
+  graded_by: "mock" | "rules" | "model";
 }
 
 export interface QuizGradeResponse {
   session_id: string;
+  /** Echoed idempotency key; addresses the persisted attempts. */
+  attempt_id: string;
   results: QuizQuestionGradeResult[];
   generation_mode: string;
   provider_name: string;
@@ -279,7 +301,17 @@ export interface GradeQuizRequest {
   session_id: string;
   /** The archived quiz to grade (its rubric is loaded server-side). */
   quiz_id: string;
-  /** The student's answers, one entry per answered question. */
+  /**
+   * Client-minted UUID v4 idempotency key — a retried request re-uses it so
+   * the server upserts instead of double-inserting.
+   */
+  attempt_id: string;
+  /**
+   * Optional unified profile key (== the practice ``learner_id`` UUID). When
+   * present, this attempt is aggregated into the learning portrait.
+   */
+  profile_id?: string | null;
+  /** The student's answers, one entry per answered question (single included). */
   student_answers: QuizStudentAnswerItem[];
 }
 
@@ -354,6 +386,10 @@ function validateGenerateResponse(raw: unknown): QuizGenerateResponse {
     provider_name: typeof obj.provider_name === "string" ? (obj.provider_name as string) : "mock",
     source_mode: obj.source_mode === "web" ? "web" : "generated",
     total_points: typeof obj.total_points === "number" ? obj.total_points : questions.reduce((sum, q) => sum + q.points, 0),
+    effective_student_profile:
+      typeof obj.effective_student_profile === "string"
+        ? (obj.effective_student_profile as string)
+        : null,
     audit: obj.audit && typeof obj.audit === "object" ? (obj.audit as QuizAuditReport) : null,
   };
 }

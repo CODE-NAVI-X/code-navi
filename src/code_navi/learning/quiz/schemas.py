@@ -28,6 +28,13 @@ SourceType = Literal["generated", "web", "local_bank"]
 
 SourceMode = Literal["generated", "web"]
 
+#: UUID v4 (the learner profile id format) — enforced at the API edge for the
+#: client-minted idempotency key and the unified portrait aggregation key.
+_UUID_V4_PATTERN = (
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-"
+    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)
+
 
 class QuizQuestionSource(BaseModel):
     """Provenance of one question, shown to the student in the UI."""
@@ -166,7 +173,21 @@ class QuizGenerateRequest(BaseModel):
         max_length=2000,
         description=(
             "Free-text 学情 context — persona, weak points, mastery hints, preferred "
-            "difficulty. The model adapts question difficulty and content to it."
+            "difficulty. The model adapts question difficulty and content to it. "
+            "When ``profile_id`` is also present this text is appended as a "
+            "supplement on top of the real portrait."
+        ),
+    )
+    profile_id: str | None = Field(
+        default=None,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description=(
+            "Optional unified profile key (== the practice learner_id UUID). "
+            "When present the server loads that learner's real portrait "
+            "(graded attempts + 不懂 marks) and injects it into the generation "
+            "prompt so questions adapt to actual mastery."
         ),
     )
 
@@ -191,13 +212,21 @@ class QuizGenerateResponse(BaseModel):
         description="Echo of the effective source mode after fallback.",
     )
     total_points: int = Field(..., description="Sum of question points for display.")
+    effective_student_profile: str | None = Field(
+        default=None,
+        description=(
+            "The actual 学情 text injected into the generation prompt (real "
+            "portrait segment + manual supplement, or just whichever was "
+            "present). Echoed back so the UI can show what the model saw."
+        ),
+    )
     audit: QuizAuditReport | None = Field(
         default=None, description="Post-generation model audit of the paper."
     )
 
 
 class StudentAnswerItem(BaseModel):
-    """One student's answer to a ``fill_blank`` / ``short_answer`` item."""
+    """One student's answer to a single / fill_blank / short_answer item."""
 
     question_id: str = Field(
         ..., description="Must match an id in the archived quiz being graded."
@@ -205,8 +234,9 @@ class StudentAnswerItem(BaseModel):
     answer: list[str] = Field(
         default_factory=list,
         description=(
-            "fill_blank: one entry per blank, in order. short_answer: a single "
-            "entry holding the free-text answer."
+            "single: the selected option value e.g. ['B']. fill_blank: one entry "
+            "per blank, in order. short_answer: a single entry holding the "
+            "free-text answer."
         ),
     )
 
@@ -217,6 +247,10 @@ class GradeRequest(BaseModel):
     The client submits only the quiz id and the student's answers — the grading
     rubric (correct answers, points, ``comment_prompt``) is loaded server-side
     from the archived quiz, so a caller cannot alter the scoring basis.
+    ``attempt_id`` is a client-minted UUID v4 idempotency key: a retried request
+    re-uses it and the server upserts rather than double-inserts.  ``profile_id``
+    (== the practice ``learner_id`` UUID) is optional and keys the cross-session
+    learning portrait.
     """
 
     session_id: str = Field(
@@ -224,6 +258,23 @@ class GradeRequest(BaseModel):
     )
     quiz_id: str = Field(
         ..., min_length=1, max_length=64, description="The archived quiz to grade."
+    )
+    attempt_id: str = Field(
+        ...,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Client-minted UUID v4 idempotency key for this submission.",
+    )
+    profile_id: str | None = Field(
+        default=None,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description=(
+            "Optional unified profile key (== the practice learner_id UUID). "
+            "When present, this attempt is aggregated into the learning portrait."
+        ),
     )
     student_answers: list[StudentAnswerItem] = Field(
         default_factory=list,
@@ -235,7 +286,9 @@ class QuestionGradeResult(BaseModel):
     """One graded question: score plus an LLM comment or a mock fallback marker."""
 
     question_id: str = Field(..., description="Question id this grade refers to.")
-    type: QuestionType = Field(..., description="fill_blank | short_answer.")
+    type: QuestionType = Field(
+        ..., description="single | fill_blank | short_answer."
+    )
     score: int = Field(..., ge=0, description="Awarded points, clamped to 0..max_score.")
     max_score: int = Field(..., ge=1, description="Full points for this item.")
     is_correct: bool = Field(
@@ -258,12 +311,23 @@ class QuestionGradeResult(BaseModel):
             "then prompts self-grading against the reference answer."
         ),
     )
+    graded_by: Literal["mock", "rules", "model"] = Field(
+        default="rules",
+        description=(
+            "How this score was produced: rules (deterministic single-choice "
+            "comparison), mock (offline deterministic fill-blank comparison), or "
+            "model (LLM judgment).  Drives the portrait's fact boundary."
+        ),
+    )
 
 
 class GradeResponse(BaseModel):
     """Response of the grading endpoint."""
 
     session_id: str = Field(..., description="Echoed from the request.")
+    attempt_id: str = Field(
+        ..., description="Echoed idempotency key; addresses the persisted attempts."
+    )
     results: list[QuestionGradeResult] = Field(
         default_factory=list, description="One result per graded question."
     )

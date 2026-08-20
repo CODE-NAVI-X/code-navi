@@ -18,6 +18,7 @@ from code_navi import cli_conversation as cli_conversation_models  # noqa: E402,
 from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
+from code_navi.learning_profile import models as learning_profile_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
 from code_navi.workspaces import models as workspace_models  # noqa: E402,F401
 
@@ -50,6 +51,56 @@ def test_migrations_produce_the_current_models(
         engine.dispose()
 
     assert drift == [], f"models and migrations disagree: {drift}"
+
+
+def test_learning_profile_v2_backfills_confusion_mark_labels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision 0014 adds ``label`` and backfills it from ``source_ref``.
+
+    An old confusion mark predating the column must not lose its human-readable
+    content: after upgrading to head its ``label`` equals its ``source_ref``
+    (the M1 fallback display), exactly what the model now computes on read.
+    """
+    database_url = f"sqlite:///{tmp_path / 'profile-v2-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+
+    command.upgrade(config, "learning_profile_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO confusion_marks "
+                "(id, session_id, profile_id, user_id, knowledge_point, "
+                "source_type, source_ref, status, created_at, updated_at) VALUES "
+                "('mark-legacy-1', 'sess-legacy', NULL, NULL, '集合', 'explain', "
+                "'explain:集合', 'confused', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            row = connection.execute(
+                text(
+                    "SELECT id, label, source_ref FROM confusion_marks "
+                    "WHERE id = 'mark-legacy-1'"
+                )
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert row == ("mark-legacy-1", "explain:集合", "explain:集合")
 
 
 def test_legacy_rows_are_backfilled_not_dropped(

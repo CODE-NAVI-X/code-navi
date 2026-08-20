@@ -6,13 +6,15 @@
  * error / exporting) so the view survives tab switches; this component stays
  * presentational except for the transient answer set and grading state.
  *
- * Answering splits by type:
- * - single: graded client-side against the ``answer`` field.
- * - fill_blank / short_answer: submitted to ``POST /quiz/grade`` where the LLM
- *   scores them (tolerating equivalent math / rewording) and returns a Chinese
- *   analysis comment. In offline mode the backend degrades honestly — exact
- *   match for fill blanks (labeled 离线 Mock 判分), and short answers come back
- *   ``graded=false`` prompting self-grading — never a faked verdict.
+ * Answering submits every answered item to ``POST /quiz/grade``: ``single`` is
+ * judged deterministically server-side against the archived answer
+ * (``graded_by=rules``), ``fill_blank`` / ``short_answer`` through the LLM
+ * (tolerating equivalent math / rewording) with a Chinese analysis comment. In
+ * offline mode the backend degrades honestly — exact match for fill blanks
+ * (labeled 离线 Mock 判分), and short answers come back ``graded=false``
+ * prompting self-grading — never a faked verdict. Every scored answer is
+ * persisted as a ``quiz_attempts`` row keyed by the client-minted
+ * ``attempt_id``, aggregated into the learning portrait via ``profile_id``.
  */
 
 import { useMemo, useState } from "react";
@@ -39,6 +41,9 @@ import type {
   QuizQuestionType,
 } from "@/lib/api/quiz";
 import { gradeQuizAnswers } from "@/lib/api/learning";
+import { markSourceRef } from "@/lib/api/profile";
+import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
+import { MarkButton } from "@/components/learning/MarkButton";
 
 // ── Inline LaTeX ($...$) ───────────────────────────────────────────────────────
 
@@ -122,6 +127,13 @@ function countBlanks(question: string, questionItem: QuizQuestion): number {
   return questionItem.answer?.length ?? 0;
 }
 
+/** Readable portrait label — the question stem without inline LaTeX. */
+function questionStemLabel(stem: string, fallback: string): string {
+  const plain = stem.replace(/\$[^$]+\$/g, "").replace(/\s+/g, " ").trim();
+  if (!plain) return fallback;
+  return plain.length > 100 ? plain.slice(0, 100) + "…" : plain;
+}
+
 // ── Skeleton ───────────────────────────────────────────────────────────────────
 
 function SkeletonLine({ width = "w-full" }: { width?: string }) {
@@ -176,6 +188,8 @@ export function QuizView({
 
   const questions = response?.questions ?? [];
   const controlsDisabled = loading;
+  /** 自动注入真实学情画像（默认开启，由父组件初始化的 ``profile_id`` 决定）。 */
+  const autoProfileActive = !!params.profile_id;
 
   function setQuestionTypes(types: QuizQuestionType[]) {
     onParamsChange({
@@ -204,23 +218,24 @@ export function QuizView({
 
   async function submitAnswers() {
     if (!response) return;
-    const gradable = response.questions
-      .filter((q) => q.type !== "single")
+    const answered = response.questions
       .filter((q) => (answers[q.id] ?? []).some((value) => value.trim() !== ""));
-    if (gradable.length === 0) {
-      // Nothing for the LLM to grade — only single-choice was answered.
-      setGradeResults({});
-      setGradeError(null);
-      setSubmitted(true);
+    if (answered.length === 0) {
+      setGradeError("尚未作答任何题目，请先作答后提交判分。");
       return;
     }
     setGrading(true);
     setGradeError(null);
     try {
+      // Fresh client-minted idempotency key per submission: a network retry of
+      // the same request re-uses it so the server upserts, never double-inserts.
+      const attemptId = newUuidV4();
       const grade = await gradeQuizAnswers({
         session_id: sessionId,
         quiz_id: response.quiz_id,
-        student_answers: gradable.map((q) => ({
+        attempt_id: attemptId,
+        profile_id: getOrCreateLearnerId(),
+        student_answers: answered.map((q) => ({
           question_id: q.id,
           answer: answers[q.id] ?? [],
         })),
@@ -243,13 +258,14 @@ export function QuizView({
     setGradeError(null);
   }
 
-  // Auto-graded score: single + fill_blank (local) plus any LLM/mock-graded
-  // fill_blank & short_answer results. Ungraded short answers stay out of the
-  // auto total so they never drag the objective score down.
+  // Auto-graded score: every server-graded result first (single → rules,
+  // fill_blank → mock/model, short_answer → model), with a local exact-match
+  // fallback only where no server result exists. Ungraded short answers stay
+  // out of the auto total so they never drag the objective score down.
   const earned = questions.reduce((sum, q) => {
-    if (q.type === "single") return sum + (isCorrect(q) ? q.points : 0);
     const grade = gradeResults[q.id];
     if (grade?.graded) return sum + grade.score;
+    if (q.type === "single") return sum + (isCorrect(q) ? q.points : 0);
     if (q.type === "fill_blank") return sum + (isCorrect(q) ? q.points : 0);
     return sum;
   }, 0);
@@ -374,7 +390,7 @@ export function QuizView({
           </div>
         </div>
 
-        {/* 学情画像（可选）— 随组卷请求写入，LLM 据此适配难度与内容 */}
+        {/* 学情画像 — 自动注入真实画像（默认开）+ 手动补充说明 */}
         <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 dark:border-zinc-700 dark:bg-zinc-800/40">
           <button
             type="button"
@@ -382,26 +398,51 @@ export function QuizView({
             className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-xs font-medium text-slate-600 dark:text-zinc-400"
           >
             <UserRound className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
-            学情画像（可选）
-            {params.student_profile?.trim() ? (
+            学情画像
+            {autoProfileActive ? (
               <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
-                已填写
+                自动注入已开启
               </span>
             ) : (
-              <span className="text-[10px] text-slate-400 dark:text-zinc-500">未填写</span>
+              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">
+                仅手动补充
+              </span>
             )}
+            {params.student_profile?.trim() ? (
+              <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+                已填写补充
+              </span>
+            ) : null}
             <span className="ml-auto text-[10px] text-slate-400 dark:text-zinc-500">
               {showProfile ? "收起" : "展开"}
             </span>
           </button>
           {showProfile && (
-            <div className="px-3 pb-3">
+            <div className="space-y-3 px-3 pb-3">
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={autoProfileActive}
+                  disabled={controlsDisabled}
+                  onChange={(event) =>
+                    onParamsChange({
+                      ...params,
+                      profile_id: event.target.checked ? getOrCreateLearnerId() : null,
+                    })
+                  }
+                  className="h-3.5 w-3.5 cursor-pointer accent-violet-600"
+                />
+                自动使用学情画像（判分 + 标记记录）
+              </label>
+              <p className="text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500">
+                开启后，组卷时自动加载本浏览器的练习判分与「不懂」标记记录作为提示词注入，让题目贴合你的实际掌握情况。
+              </p>
               <textarea
                 value={params.student_profile ?? ""}
                 disabled={controlsDisabled}
                 rows={3}
-                placeholder="例如：已掌握集合列举法，但对交集/并集运算和证明题薄弱；希望多出基础题，难度适中。"
-                aria-label="学情画像"
+                placeholder="补充说明（可选）：例如：已掌握集合列举法，但对交集/并集运算和证明题薄弱；希望多出基础题，难度适中。"
+                aria-label="学情画像补充说明"
                 onChange={(event) =>
                   onParamsChange({
                     ...params,
@@ -410,8 +451,8 @@ export function QuizView({
                 }
                 className="app-input w-full resize-y rounded-lg px-3 py-2 text-xs leading-5 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
               />
-              <p className="mt-1 text-[10px] text-slate-400 dark:text-zinc-500">
-                填写后，组卷时会把你的薄弱点与掌握情况交给模型，用于调整题目难度与内容。
+              <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                补充说明会叠加在学情画像之上，一起交给模型。
               </p>
             </div>
           )}
@@ -501,6 +542,18 @@ export function QuizView({
             </div>
           </div>
 
+          {/* Injected 学情 preview — transparent about what the model saw */}
+          {response.effective_student_profile && (
+            <details className="mb-5 rounded-xl border border-violet-200 bg-violet-50/40 p-3 text-xs dark:border-violet-900/40 dark:bg-violet-950/20">
+              <summary className="cursor-pointer font-semibold text-violet-700 dark:text-violet-300">
+                已注入的学情画像（点击查看）
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap leading-relaxed text-slate-600 dark:text-zinc-300">
+                {response.effective_student_profile}
+              </p>
+            </details>
+          )}
+
           {/* Questions */}
           <ol className="space-y-5">
             {response.questions.map((question, index) => {
@@ -518,19 +571,23 @@ export function QuizView({
                       <span className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold ${TYPE_BADGE_CLASSES[question.type]}`}>
                         {TYPE_LABELS[question.type]}
                       </span>
-                      {submitted && question.type === "single" && (
-                        isCorrect(question) ? (
-                          <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-                            正确 · {question.points}/{question.points} 分
+                      {submitted && question.type === "single" && (() => {
+                        // Server-side rules grade is authoritative; fall back to
+                        // the local exact match only if the result is missing.
+                        const server = grade?.graded ? grade : null;
+                        const correct = server ? server.is_correct : isCorrect(question);
+                        const score = server ? server.score : correct ? question.points : 0;
+                        return (
+                          <span className={`flex shrink-0 items-center gap-1 text-[11px] font-semibold ${correct ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                            {correct ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5" strokeWidth={1.5} />
+                            )}
+                            {correct ? `正确 · ${score}/${question.points} 分` : `错误 · ${score}/${question.points} 分`}
                           </span>
-                        ) : (
-                          <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
-                            <XCircle className="h-3.5 w-3.5" strokeWidth={1.5} />
-                            错误 · 0/{question.points} 分
-                          </span>
-                        )
-                      )}
+                        );
+                      })()}
                       {submitted && question.type !== "single" && grade?.graded && (
                         <>
                           <span className={`flex shrink-0 items-center gap-1 text-[11px] font-semibold ${grade.is_correct ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
@@ -570,9 +627,21 @@ export function QuizView({
                         </span>
                       )}
                     </div>
-                    <span className="shrink-0 font-mono text-[11px] text-slate-400 dark:text-zinc-500">
-                      {question.points} 分
-                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <MarkButton
+                        knowledgePoint={knowledgePoint}
+                        sourceType="quiz_question"
+                        sourceRef={markSourceRef(
+                          "quiz_question",
+                          knowledgePoint,
+                          question.id,
+                        )}
+                        label={questionStemLabel(question.question, knowledgePoint)}
+                      />
+                      <span className="font-mono text-[11px] text-slate-400 dark:text-zinc-500">
+                        {question.points} 分
+                      </span>
+                    </div>
                   </div>
 
                   <p className="mb-3 text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-zinc-200">

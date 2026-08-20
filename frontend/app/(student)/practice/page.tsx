@@ -36,6 +36,7 @@ import {
   submitPython,
 } from "@/lib/api/compiler";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
+import { getOrCreateLearnerId } from "@/lib/learner";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
 
@@ -1490,13 +1491,9 @@ function HistoryPanel({
 }
 
 function getLearnerId(): string {
-  const storageKey = "code-navi-compiler-learner-id";
-  if (typeof window === "undefined") return "00000000-0000-4000-8000-000000000000";
-  const existing = window.localStorage.getItem(storageKey);
-  if (existing) return existing;
-  const generated = crypto.randomUUID();
-  window.localStorage.setItem(storageKey, generated);
-  return generated;
+  // Single source of truth for the unified profile key (shared with the
+  // learning module) lives in ``lib/learner.ts``.
+  return getOrCreateLearnerId();
 }
 
 function formatBytes(value: number | null | undefined): string {

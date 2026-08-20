@@ -18,6 +18,8 @@ from code_navi.workspaces.service import (
     WorkspaceService,
 )
 
+from ..learning_profile.schemas import MarkRequest, MarkResponse
+from ..learning_profile.service import ProfileService
 from .models import NotebookItemModel
 from .presentation.schemas import PresentationGenerateRequest
 from .presentation.services import PresentationGenerator
@@ -39,6 +41,7 @@ _orchestrator = QueryOrchestrator()
 _presentation_generator = PresentationGenerator()
 _quiz_generator = QuizGenerator()
 _workspace_service = WorkspaceService()
+_profile_service = ProfileService()
 _db_dependency = Depends(get_db)
 
 _DOCX_MEDIA_TYPE = (
@@ -326,20 +329,35 @@ async def grade_quiz(
     request: GradeRequest,
     db: Session = _db_dependency,
 ) -> GradeResponse:
-    """Grade fill_blank / short_answer answers through the LLM.
+    """Grade a quiz server-side and persist every scored answer.
 
     The scoring rubric is loaded from the archived quiz strictly within the
     requesting ``session_id`` — the client submits only the quiz id and the
     student's answers, so it cannot alter the correct answers or points.
-    ``single`` is graded client-side, not here.  When no online provider is
-    configured the service degrades to honest offline grading (exact match for
-    fill blanks, ``graded=false`` + self-check hint for short answers) and
-    never fakes an LLM verdict.
+    ``single`` is graded deterministically server-side (``graded_by=rules``);
+    ``fill_blank`` / ``short_answer`` go through the LLM when an online
+    provider is configured.  Offline degrades honestly (exact match for fill
+    blanks, ``graded=false`` + self-check hint for short answers) and never
+    fakes an LLM verdict.  All results are persisted as ``quiz_attempts``.
     """
     try:
         return _quiz_generator.grade_quiz(request, db)
     except QuizNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/marks", response_model=MarkResponse, status_code=200)
+async def set_confusion_mark(
+    request: MarkRequest,
+    db: Session = _db_dependency,
+) -> MarkResponse:
+    """Toggle a 不懂/懂了 mark on a learning surface (PPT page / explain / quiz).
+
+    Writes are scoped to ``session_id``; the optional ``profile_id`` lets the
+    mark aggregate into the cross-session portrait.  The toggle is idempotent
+    on ``(session_id, source_type, source_ref)``.
+    """
+    return _profile_service.set_mark(request, db)
 
 
 @router.get("/quiz/export-docx")
