@@ -23,10 +23,14 @@ import {
   CompilerExecutionResult,
   ImportedCompilerProblem,
   CompilerRecord,
+  CompilerApiError,
+  CompilerPracticeFocus,
+  CompilerPracticeLaunch,
   CompilerRuntimeStatus,
   CompilerJudgeResult,
   GeneratedPracticeProblem,
   analyzeProblemImport,
+  createPracticeLaunch,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
@@ -35,8 +39,9 @@ import {
   requestCompilerGuidance,
   submitPython,
 } from "@/lib/api/compiler";
+import { getLocalProfileId } from "@/lib/api/workspaces";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
-import { getOrCreateLearnerId } from "@/lib/learner";
+import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
 
@@ -59,6 +64,13 @@ interface PracticeExercise {
   warnings?: string[];
   sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
 }
+
+type PracticeLaunchState =
+  | { key: string; status: "loading"; launch: null; message: string }
+  | { key: string; status: "ready"; launch: CompilerPracticeLaunch; message: string }
+  | { key: string; status: "unavailable"; launch: null; message: string };
+
+type TimelineNoticeState = { key: string; message: string };
 
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   easy: "入门",
@@ -231,10 +243,34 @@ function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const payload = useFlowStore((s) => s.payload);
-  const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(null);
+  const [learnerId] = useState(() => getLearnerId());
+  const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(() =>
+    typeof window === "undefined" ? null : getPersistedFlowPayload(),
+  );
   const urlKnowledgeName = searchParams.get("knowledge_name");
+  const urlKnowledgeId = searchParams.get("knowledge_id");
   const knowledgeName =
     urlKnowledgeName ?? payload?.masteredKnowledgePoint.name ?? persistedPayload?.masteredKnowledgePoint.name;
+  const knowledgeId =
+    urlKnowledgeId ?? payload?.masteredKnowledgePoint.id ?? persistedPayload?.masteredKnowledgePoint.id;
+  const workspaceId = searchParams.get("workspace_id") ?? undefined;
+  const taskId = searchParams.get("task_id") ?? undefined;
+  const practiceFocus = useMemo(
+    () => buildPracticeFocus(knowledgeId, knowledgeName),
+    [knowledgeId, knowledgeName],
+  );
+  const launchRequestKey = useMemo(
+    () =>
+      JSON.stringify({
+        learnerId,
+        workspaceId: workspaceId ?? "",
+        taskId: taskId ?? "",
+        focusType: practiceFocus?.type ?? "",
+        focusId: practiceFocus?.id ?? "",
+        focusLabel: practiceFocus?.label ?? "",
+      }),
+    [learnerId, practiceFocus, taskId, workspaceId],
+  );
   const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
 
   const [view, setView] = useState<"start" | "workspace">("start");
@@ -270,13 +306,63 @@ function PracticeContent() {
   const [guidanceBusy, setGuidanceBusy] = useState(false);
   const [records, setRecords] = useState<CompilerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [learnerId] = useState(() => getLearnerId());
+  const [launchState, setLaunchState] = useState<PracticeLaunchState>({
+    key: "",
+    status: "loading",
+    launch: null,
+    message: "正在接入 Workspace 时间线。",
+  });
+  const [timelineNotice, setTimelineNotice] = useState<TimelineNoticeState | null>(null);
   const pythonFileInputRef = useRef<HTMLInputElement>(null);
   const problemFileInputRef = useRef<HTMLInputElement>(null);
+  const effectiveLaunchState =
+    launchState.key === launchRequestKey
+      ? launchState
+      : ({
+          key: launchRequestKey,
+          status: "loading",
+          launch: null,
+          message: "正在接入 Workspace 时间线。",
+        } satisfies PracticeLaunchState);
+  const effectiveTimelineNotice =
+    timelineNotice?.key === launchRequestKey ? timelineNotice.message : null;
 
   useEffect(() => {
-    queueMicrotask(() => setPersistedPayload(getPersistedFlowPayload()));
-  }, []);
+    let active = true;
+    void createPracticeLaunch({
+      localProfileId: getLocalProfileId(),
+      learnerId,
+      workspaceId,
+      taskId,
+      mode: "free_run",
+      focus: practiceFocus,
+    })
+      .then((launch) => {
+        if (!active) return;
+        setLaunchState({
+          key: launchRequestKey,
+          status: "ready",
+          launch,
+          message: launch.taskId
+            ? "已接入当前 Task 时间线。"
+            : "已接入个人 Workspace 时间线。",
+        });
+      })
+      .catch((launchError) => {
+        if (!active) return;
+        setLaunchState({
+          key: launchRequestKey,
+          status: "unavailable",
+          launch: null,
+          message: launchError instanceof Error
+            ? `Workspace 时间线接入失败：${launchError.message}`
+            : "Workspace 时间线接入失败。",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [launchRequestKey, learnerId, practiceFocus, taskId, workspaceId]);
 
   const exercises = useMemo(
     () => [...importedExercises, ...EXERCISES],
@@ -516,39 +602,98 @@ function PracticeContent() {
     setRunning(true);
     setError(null);
     setAiFeedback(null);
+    const launch = effectiveLaunchState.launch;
+    const requestKey = launchRequestKey;
     try {
-      const executed = await executePython({ source, stdin, learnerId, enableAi });
-      setResult(executed);
-      setAiFeedback(executed.ai);
-      void refreshRecords();
-      if (executed.ai.evaluationId) {
-        const evaluated = await evaluatePythonRun({
-          evaluationId: executed.ai.evaluationId,
-          learnerId,
-        });
-        setAiFeedback(evaluated.ai);
-        void refreshRecords();
-      }
+      const executed = await executePython({
+        source,
+        stdin,
+        learnerId,
+        enableAi,
+        launchId: launch?.launchId,
+        attemptId: launch ? newUuidV4() : undefined,
+      });
+      await applyExecutionResult(executed, launch, requestKey);
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "代码运行失败。");
+      if (launch && isLaunchScopeError(runError)) {
+        setLaunchState({
+          key: requestKey,
+          status: "unavailable",
+          launch: null,
+          message: "Workspace 时间线接入已失效，已保留旧 Practice 执行能力。",
+        });
+        try {
+          const executed = await executePython({ source, stdin, learnerId, enableAi });
+          await applyExecutionResult(executed, null, requestKey);
+        } catch (fallbackError) {
+          setError(fallbackError instanceof Error ? fallbackError.message : "代码运行失败。");
+        }
+      } else {
+        setError(runError instanceof Error ? runError.message : "代码运行失败。");
+      }
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function applyExecutionResult(
+    executed: CompilerExecutionResult,
+    launch: CompilerPracticeLaunch | null,
+    requestKey: string,
+  ) {
+    setResult(executed);
+    setTimelineNotice({ key: requestKey, message: timelineMessage(executed.practiceOutcome, launch) });
+    setAiFeedback(executed.ai);
+    void refreshRecords();
+    if (executed.ai.evaluationId) {
+      const evaluated = await evaluatePythonRun({
+        evaluationId: executed.ai.evaluationId,
+        learnerId,
+      });
+      setAiFeedback(evaluated.ai);
+      void refreshRecords();
     }
   }
 
   async function submitCode() {
     setRunning(true);
     setError(null);
+    const launch = effectiveLaunchState.launch;
+    const requestKey = launchRequestKey;
     try {
       const judged = await submitPython({
         problemId: activeExercise.problemId ?? activeExercise.id,
         problemVersion: activeExercise.problemVersion,
         source,
         learnerId,
+        launchId: launch?.launchId,
+        attemptId: launch ? newUuidV4() : undefined,
       });
       setJudgeResult(judged);
+      setTimelineNotice({ key: requestKey, message: timelineMessage(judged.practiceOutcome, launch) });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "提交判题失败");
+      if (launch && isLaunchScopeError(submitError)) {
+        setLaunchState({
+          key: requestKey,
+          status: "unavailable",
+          launch: null,
+          message: "Workspace 时间线接入已失效，已保留旧 Practice 执行能力。",
+        });
+        try {
+          const judged = await submitPython({
+            problemId: activeExercise.problemId ?? activeExercise.id,
+            problemVersion: activeExercise.problemVersion,
+            source,
+            learnerId,
+          });
+          setJudgeResult(judged);
+          setTimelineNotice({ key: requestKey, message: timelineMessage(judged.practiceOutcome, null) });
+        } catch (fallbackError) {
+          setError(fallbackError instanceof Error ? fallbackError.message : "提交判题失败");
+        }
+      } else {
+        setError(submitError instanceof Error ? submitError.message : "提交判题失败");
+      }
     } finally {
       setRunning(false);
     }
@@ -587,6 +732,7 @@ function PracticeContent() {
       <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
         <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
           <PracticeTopbar runtime={runtime} error={error} />
+          <TimelineBanner launchState={effectiveLaunchState} notice={effectiveTimelineNotice} />
 
           <section className="mx-auto w-full max-w-5xl py-10 sm:py-14">
             <div className="max-w-3xl">
@@ -984,6 +1130,7 @@ function PracticeContent() {
 
         <section className="min-w-0 p-4 md:p-5">
           <div className="mx-auto max-w-7xl">
+            <TimelineBanner launchState={effectiveLaunchState} notice={effectiveTimelineNotice} />
             <section className="app-card mb-4 grid gap-4 rounded-2xl p-4 md:grid-cols-[minmax(0,1fr)_320px]">
               <div>
                 <span
@@ -1280,6 +1427,32 @@ function RuntimeBadge({
   );
 }
 
+function TimelineBanner({
+  launchState,
+  notice,
+}: {
+  launchState: PracticeLaunchState;
+  notice: string | null;
+}) {
+  const tone =
+    launchState.status === "ready"
+      ? "border-[#9eb3a6] bg-[#e8f3df] text-[#365f2f]"
+      : launchState.status === "loading"
+        ? "border-[#d8c48a] bg-[#fff3c9] text-[#725414]"
+        : "border-[#e7aaa0] bg-[#ffe3dd] text-[#80342b]";
+  return (
+    <div className={`mt-4 rounded-xl border px-4 py-3 text-xs leading-5 ${tone}`}>
+      <p className="font-semibold">{launchState.message}</p>
+      <p className="mt-1">
+        {notice ??
+          (launchState.status === "unavailable"
+            ? "本页仍可运行和判题，本次结果不会进入 Workspace 时间线。"
+            : "运行或提交后会显示本次结果是否进入 Workspace 时间线。")}
+      </p>
+    </div>
+  );
+}
+
 function ResultPanel({
   result,
   error,
@@ -1494,6 +1667,41 @@ function getLearnerId(): string {
   // Single source of truth for the unified profile key (shared with the
   // learning module) lives in ``lib/learner.ts``.
   return getOrCreateLearnerId();
+}
+
+function buildPracticeFocus(
+  knowledgeId: string | undefined,
+  knowledgeName: string | undefined,
+): CompilerPracticeFocus | undefined {
+  if (!knowledgeId && !knowledgeName) return undefined;
+  return {
+    type: "knowledge_point",
+    id: knowledgeId,
+    label: knowledgeName,
+  };
+}
+
+function timelineMessage(
+  outcome: CompilerExecutionResult["practiceOutcome"] | CompilerJudgeResult["practiceOutcome"],
+  launch: CompilerPracticeLaunch | null,
+): string {
+  if (outcome) {
+    return launch?.taskId
+      ? "本次结果已纳入当前 Task 时间线。"
+      : "本次结果已纳入个人 Workspace 时间线。";
+  }
+  if (launch) {
+    return "本次结果未写入 Workspace 时间线；执行服务故障不会归入练习结果。";
+  }
+  return "本次结果不会进入 Workspace 时间线；旧 Practice 执行能力保持可用。";
+}
+
+function isLaunchScopeError(error: unknown): boolean {
+  return (
+    error instanceof CompilerApiError &&
+    (error.status === 400 || error.status === 404) &&
+    error.message.toLowerCase().includes("launch")
+  );
 }
 
 function formatBytes(value: number | null | undefined): string {
