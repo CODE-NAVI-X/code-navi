@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -28,8 +31,10 @@ class ExplainRequest(BaseModel):
     knowledge_point: str = Field(
         ...,
         min_length=1,
-        max_length=512,
-        description="The knowledge-point identifier or free-text query to explain.",
+        max_length=64,
+        description=(
+            "The knowledge-point identifier, question, or source-material excerpt to explain."
+        ),
     )
     session_id: str | None = Field(
         default=None,
@@ -104,3 +109,21 @@ class ExplainResponse(BaseModel):
         default_factory=list,
         description="Ordered list of source citations backing the explanation.",
     )
+
+
+class RecentLearningItem(BaseModel):
+    """A bounded, profile-scoped Learning result that can be restored in the Web UI."""
+
+    id: str
+    knowledge_point: str
+    session_id: str | None = None
+    notebook_item_id: str | None = None
+    summary: str | None = None
+    detail: str | None = None
+    citations: list[Citation] = Field(default_factory=list)
+    created_at: datetime
+    status: Literal["available", "source_unavailable"]
+
+
+class RecentLearningListResponse(BaseModel):
+    items: list[RecentLearningItem]

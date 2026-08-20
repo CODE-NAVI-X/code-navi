@@ -183,6 +183,74 @@ def test_direct_learning_uses_personal_workspace_without_a_task(
     assert workspace.owner_scope_id == profile
 
 
+def test_recent_learning_returns_profile_scoped_recoverable_sources_in_activity_order(
+    client: TestClient,
+) -> None:
+    profile = "profile-recent-learning"
+    other_profile = "profile-other-learning"
+    first = client.post(
+        "/api/v1/learning/explain",
+        json={
+            "knowledge_point": "Q-learning 更新过程",
+            "session_id": "sess-q-learning",
+            "local_profile_id": profile,
+        },
+    )
+    second = client.post(
+        "/api/v1/learning/explain",
+        json={
+            "knowledge_point": "TCP 拥塞控制",
+            "session_id": "sess-tcp",
+            "local_profile_id": profile,
+        },
+    )
+    client.post(
+        "/api/v1/learning/explain",
+        json={"knowledge_point": "不属于当前资料", "local_profile_id": other_profile},
+    )
+
+    response = client.get(f"/api/v1/learning/recent?local_profile_id={profile}")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["knowledge_point"] for item in items] == ["TCP 拥塞控制", "Q-learning 更新过程"]
+    assert all(item["status"] == "available" for item in items)
+    assert items[0]["session_id"] == "sess-tcp"
+    assert items[0]["notebook_item_id"] == second.json()["notebook_item_id"]
+    assert items[0]["summary"] is None
+    assert "不属于当前资料" not in {item["knowledge_point"] for item in items}
+
+    restored = client.get(
+        f"/api/v1/learning/recent/{items[0]['id']}?local_profile_id={profile}"
+    )
+    assert restored.status_code == 200
+    assert restored.json()["summary"] == second.json()["summary"]
+
+
+def test_recent_learning_marks_an_activity_with_a_missing_source_unavailable(
+    client: TestClient,
+    db: Session,
+) -> None:
+    profile = "profile-stale-learning"
+    explained = client.post(
+        "/api/v1/learning/explain",
+        json={"knowledge_point": "旧学习记录", "local_profile_id": profile},
+    )
+    source = db.query(NotebookItemModel).filter_by(id=explained.json()["notebook_item_id"]).one()
+    db.delete(source)
+    db.commit()
+
+    response = client.get(f"/api/v1/learning/recent?local_profile_id={profile}")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["knowledge_point"] == "旧学习记录"
+    assert item["status"] == "source_unavailable"
+    assert item["session_id"] is None
+
+
 def test_learning_rejects_mismatched_context_before_saving_notebook(
     client: TestClient,
     db: Session,

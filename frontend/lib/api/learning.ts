@@ -44,6 +44,22 @@ export interface ExplainResponse {
   citations: CitationItem[];
 }
 
+export type RecentLearningStatus = "available" | "source_unavailable";
+
+export interface RecentLearningItem {
+  id: string;
+  knowledge_point: string;
+  session_id?: string | null;
+  notebook_item_id?: string | null;
+  summary?: string | null;
+  detail?: string | null;
+  citations: CitationItem[];
+  created_at: string;
+  status: RecentLearningStatus;
+}
+
+export const MAX_LEARNING_INPUT_CHARS = 64;
+
 // ── Learning session id ────────────────────────────────────────────────────────
 
 const SESSION_STORAGE_KEY = "code-navi:learning-session-id";
@@ -62,6 +78,13 @@ export function getLearningSessionId(): string {
     window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
   }
   return sessionId;
+}
+
+/** Set the active browser session when restoring a persisted Learning result. */
+export function setLearningSessionId(sessionId: string): void {
+  if (typeof window !== "undefined" && sessionId) {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  }
 }
 
 /**
@@ -147,6 +170,47 @@ export async function explainKnowledgePoint(
 
   const body: unknown = await response.json();
   return validateExplainResponse(body);
+}
+
+/** Load a bounded, profile-scoped list of persisted Learning results. */
+export async function listRecentLearning(localProfileId: string): Promise<RecentLearningItem[]> {
+  const url = `${API_BASE}/api/v1/learning/recent?local_profile_id=${encodeURIComponent(localProfileId)}`;
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (networkError) {
+    throw new LearningApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);
+  }
+  if (!response.ok) {
+    throw new LearningApiError(response.status, (await extractErrorDetail(response)) ?? `Request failed with status ${response.status}`);
+  }
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object" || !Array.isArray((body as Record<string, unknown>).items)) {
+    throw new LearningApiError(502, "Server returned an invalid recent-learning response.");
+  }
+  return (body as { items: RecentLearningItem[] }).items;
+}
+
+/** Load the complete persisted result only after the user selects a recent item. */
+export async function getRecentLearning(
+  activityId: string,
+  localProfileId: string,
+): Promise<RecentLearningItem> {
+  const url = `${API_BASE}/api/v1/learning/recent/${encodeURIComponent(activityId)}?local_profile_id=${encodeURIComponent(localProfileId)}`;
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (networkError) {
+    throw new LearningApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);
+  }
+  if (!response.ok) {
+    throw new LearningApiError(response.status, (await extractErrorDetail(response)) ?? `Request failed with status ${response.status}`);
+  }
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object" || typeof (body as Record<string, unknown>).id !== "string") {
+    throw new LearningApiError(502, "Server returned an invalid recent-learning item.");
+  }
+  return body as RecentLearningItem;
 }
 
 // ── Quiz grading (LLM 判分) ─────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from code_navi.db import get_db
+from code_navi.workspaces.models import WorkspaceActivityModel, WorkspaceModel
 from code_navi.workspaces.service import (
     TaskNotFoundError,
     WorkspaceConflictError,
@@ -23,7 +24,13 @@ from .presentation.services import PresentationGenerator
 from .quiz.docx import export_quiz_docx
 from .quiz.schemas import GradeRequest, GradeResponse, QuizGenerateRequest, QuizGenerateResponse
 from .quiz.services import QuizGenerator, QuizNotFoundError
-from .schemas import ExplainRequest, ExplainResponse
+from .schemas import (
+    Citation,
+    ExplainRequest,
+    ExplainResponse,
+    RecentLearningItem,
+    RecentLearningListResponse,
+)
 from .services import QueryOrchestrator
 
 router = APIRouter(prefix="/api/v1/learning", tags=["Learning"])
@@ -74,6 +81,107 @@ async def explain_knowledge_point(
     except WorkspaceConflictError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get("/recent", response_model=RecentLearningListResponse)
+async def list_recent_learning(
+    local_profile_id: str = Query(..., min_length=1, max_length=64),
+    limit: int = Query(4, ge=1, le=12),
+    db: Session = _db_dependency,
+) -> RecentLearningListResponse:
+    """Return a small, recoverable Learning history for the current local profile.
+
+    Activities are only an index.  The response carries the persisted notebook
+    source required to restore the explanation, and explicitly labels stale
+    indices when that source is no longer available.
+    """
+    rows = (
+        db.query(WorkspaceActivityModel, NotebookItemModel)
+        .join(WorkspaceModel, WorkspaceActivityModel.workspace_id == WorkspaceModel.id)
+        .outerjoin(
+            NotebookItemModel,
+            NotebookItemModel.id == WorkspaceActivityModel.source_object_id,
+        )
+        .filter(
+            WorkspaceModel.owner_scope_id == local_profile_id,
+            WorkspaceActivityModel.capability == "learning",
+            WorkspaceActivityModel.action_type == "knowledge_explained",
+            WorkspaceActivityModel.source_object_type == "notebook_item",
+        )
+        .order_by(WorkspaceActivityModel.created_at.desc(), WorkspaceActivityModel.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return RecentLearningListResponse(
+        items=[_recent_learning_item(activity, notebook_item) for activity, notebook_item in rows]
+    )
+
+
+@router.get("/recent/{activity_id}", response_model=RecentLearningItem)
+async def get_recent_learning(
+    activity_id: str,
+    local_profile_id: str = Query(..., min_length=1, max_length=64),
+    db: Session = _db_dependency,
+) -> RecentLearningItem:
+    """Load one persisted Learning source after a user chooses to restore it."""
+    row = (
+        db.query(WorkspaceActivityModel, NotebookItemModel)
+        .join(WorkspaceModel, WorkspaceActivityModel.workspace_id == WorkspaceModel.id)
+        .outerjoin(
+            NotebookItemModel,
+            NotebookItemModel.id == WorkspaceActivityModel.source_object_id,
+        )
+        .filter(
+            WorkspaceActivityModel.id == activity_id,
+            WorkspaceModel.owner_scope_id == local_profile_id,
+            WorkspaceActivityModel.capability == "learning",
+            WorkspaceActivityModel.action_type == "knowledge_explained",
+            WorkspaceActivityModel.source_object_type == "notebook_item",
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Recent Learning item not found.")
+    return _recent_learning_item(*row, include_content=True)
+
+
+def _recent_learning_item(
+    activity: WorkspaceActivityModel,
+    notebook_item: NotebookItemModel | None,
+    *,
+    include_content: bool = False,
+) -> RecentLearningItem:
+    if notebook_item is None or notebook_item.item_type != "summary":
+        return RecentLearningItem(
+            id=activity.id,
+            knowledge_point=activity.title,
+            created_at=activity.created_at,
+            status="source_unavailable",
+        )
+
+    extra = notebook_item.extra_data or {}
+    citations = (
+        [
+            Citation.model_validate(item)
+            for item in extra.get("citations", [])
+            if isinstance(item, dict)
+        ]
+        if include_content
+        else []
+    )
+    return RecentLearningItem(
+        id=activity.id,
+        knowledge_point=notebook_item.knowledge_id,
+        session_id=notebook_item.session_id,
+        notebook_item_id=notebook_item.id,
+        summary=notebook_item.content if include_content else None,
+        detail=(extra.get("detail") if isinstance(extra.get("detail"), str) else None)
+        if include_content
+        else None,
+        citations=citations,
+        created_at=activity.created_at,
+        status="available",
+    )
 
 
 @router.get("/notebook", status_code=200)
