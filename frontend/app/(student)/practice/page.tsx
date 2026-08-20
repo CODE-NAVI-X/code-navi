@@ -604,7 +604,7 @@ function PracticeContent() {
                     onClick={() => {
                       clearFlowPayload();
                       setPersistedPayload(null);
-                      router.replace("/practice");
+                      router.replace("/learning/practice");
                     }}
                     className="app-button-secondary rounded-full px-3 py-1 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
                   >

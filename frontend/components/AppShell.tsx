@@ -3,17 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense } from "react";
-import { BookOpen, Code2, Microscope } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, Microscope } from "lucide-react";
 import { WorkspaceContextBar } from "@/components/WorkspaceContextBar";
 
 const modules = [
+  { href: "/", label: "工作台", section: "workbench", icon: BriefcaseBusiness },
   { href: "/learning", label: "学习", match: "learning", icon: BookOpen },
-  { href: "/practice", label: "练习", match: "practice", icon: Code2 },
   { href: "/research", label: "科研", match: "research", icon: Microscope },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const isWorkbenchPath =
+    pathname === "/" ||
+    pathname.startsWith("/workspaces/") ||
+    pathname.startsWith("/tasks/");
 
   return (
     <div className="min-h-screen bg-[var(--app-surface)] text-[var(--app-foreground)]">
@@ -27,8 +31,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
 
           <nav aria-label="主要模块" className="grid min-w-0 grid-cols-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-card)] p-0.5 shadow-sm sm:p-1">
-            {modules.map(({ href, label, match, icon: Icon }) => {
-              const active = pathname.includes(`/${match}`);
+            {modules.map(({ href, label, icon: Icon, ...module }) => {
+              const active =
+                "section" in module
+                  ? isWorkbenchPath
+                  : pathname === `/${module.match}` || pathname.startsWith(`/${module.match}/`);
               return (
                 <Link
                   key={href}

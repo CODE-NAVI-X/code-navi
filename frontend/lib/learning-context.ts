@@ -3,17 +3,31 @@
  *
  * Every entry point that leaves the learning page for a downstream module must
  * carry the same context: a FlowPayload (written to the in-memory flow store so
- * the target page can read it) plus a canonical `/student/*` URL with
- * knowledge/session query params. Centralising that keeps the three call sites
- * (ExplanationCard, SlideViewer, DownstreamGoCard) from drifting apart.
+ * the target page can read it) plus the canonical `/learning/practice` URL with
+ * knowledge/session and workspace context query params. Centralising that keeps
+ * the three call sites (ExplanationCard, SlideViewer, DownstreamGoCard) from
+ * drifting apart.
  */
 
 import { createLearningToResearchContext } from "@/lib/api/context-transfers";
 import { setFlowPayload } from "@/lib/store/flow-store";
 
+export const LEARNING_PRACTICE_ROUTE = "/learning/practice";
+const LEARNING_CONTEXT_QUERY_KEYS = [
+  "workspace_id",
+  "task_id",
+  "workspace",
+  "task",
+  "return_to",
+] as const;
+
 /** Minimal push shape — accepts the Next `AppRouterInstance` without importing it. */
 export interface Navigator {
   push: (href: string) => void;
+}
+
+interface SearchParamsLike {
+  get: (name: string) => string | null;
 }
 
 /**
@@ -37,6 +51,34 @@ export interface PracticeFlowOptions {
   knowledgePointId: string;
   sessionId: string;
   exerciseIds?: string[];
+  currentSearchParams?: SearchParamsLike;
+}
+
+function currentBrowserSearchParams(): URLSearchParams | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search);
+}
+
+function appendLearningContextParams(
+  params: URLSearchParams,
+  source: SearchParamsLike | null | undefined,
+) {
+  const current = source ?? currentBrowserSearchParams();
+  if (!current) return;
+  for (const key of LEARNING_CONTEXT_QUERY_KEYS) {
+    const value = current.get(key);
+    if (value && !params.has(key)) params.set(key, value);
+  }
+}
+
+export function buildPracticeHref(options: Partial<PracticeFlowOptions> = {}): string {
+  const params = new URLSearchParams();
+  if (options.knowledgePointId) params.set("knowledge_id", options.knowledgePointId);
+  if (options.knowledgePoint) params.set("knowledge_name", options.knowledgePoint);
+  if (options.sessionId) params.set("session_id", options.sessionId);
+  appendLearningContextParams(params, options.currentSearchParams);
+  const query = params.toString();
+  return query ? `${LEARNING_PRACTICE_ROUTE}?${query}` : LEARNING_PRACTICE_ROUTE;
 }
 
 /** Leave learning for the practice module, carrying the mastered context. */
@@ -54,12 +96,7 @@ export function navigateToPractice(
       exerciseIds: options.exerciseIds,
     },
   });
-  const params = new URLSearchParams({
-    knowledge_id: knowledgePointId,
-    knowledge_name: knowledgePoint,
-    session_id: sessionId,
-  });
-  navigator.push(`/student/practice?${params.toString()}`);
+  navigator.push(buildPracticeHref(options));
 }
 
 export interface ResearchFlowOptions {
