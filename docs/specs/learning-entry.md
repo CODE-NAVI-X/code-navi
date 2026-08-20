@@ -52,7 +52,7 @@
 
 学习入口统一使用“学习入口页”“学习工作区”“六大领域”“方向胶囊”和“探索上下文”。页面不使用阶段编号描述方向选择与知识解析，也不把领域或方向胶囊选择表述为学习状态或进入学习的必要步骤。
 
-讲解结果、PPT、配套练习、学习笔记以及 Learning 向 Practice、Research 的现有下游行为保持不变。
+讲解结果、PPT、配套练习、学习笔记以及 Learning 向 Research 的现有下游行为保持不变。Practice 的产品入口、规范路由和兼容迁移按 [Learning–Practice Integration Spec](learning-practice-integration.md) 执行；系统中的 Practice Capability 和在线编译安全边界保持独立。
 
 ## 6. 验收条件
 

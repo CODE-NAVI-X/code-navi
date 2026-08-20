@@ -17,7 +17,8 @@ Code Navi 的文档按“稳定产品边界、设计决策、可验收行为、�
 
 当前产品级 Epic：
 
-1. [Learning Entry Spec](specs/learning-entry.md) 与 [学习入口页改版计划](plans/learning-entry-redesign.md)
-2. [持久工作区与自由编排 Spec](specs/persistent-workspace-orchestration.md)
-3. [Workspace–Task–Capability 决策](decisions/workspace-task-capability-model.md)
-4. [持久工作区实施计划](plans/persistent-workspace-orchestration-rollout.md)
+1. [Practice 集成进 Learning 决策](decisions/practice-in-learning-experience.md)、[Learning–Practice Integration Spec](specs/learning-practice-integration.md) 与 [实施计划](plans/learning-practice-integration-rollout.md)
+2. [Learning Entry Spec](specs/learning-entry.md) 与 [学习入口页改版计划](plans/learning-entry-redesign.md)
+3. [持久工作区与自由编排 Spec](specs/persistent-workspace-orchestration.md)
+4. [Workspace–Task–Capability 决策](decisions/workspace-task-capability-model.md)
+5. [持久工作区实施计划](plans/persistent-workspace-orchestration-rollout.md)

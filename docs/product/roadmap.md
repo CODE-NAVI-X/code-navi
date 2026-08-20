@@ -10,15 +10,16 @@
 | 知识点学习 | 本地闭环已实现 | FastAPI 与 Next 页面可提交知识点；模型调用经 Runtime；结果写入按学习会话隔离的 SQLite 笔记 |
 | 科研助手 | 本地闭环已实现 | 动态研究对话、画像/会话恢复、规则研究计划、用户主动的 OpenAlex/Crossref/arXiv 元数据与摘要检索和 EvidenceBundle、用户主动选择的引用占位、引用完整性检查与参考文献雏形、难点分析、实验方案、用户确认后的代码草案、实验结果证据包、用户主动的五维复现项目评估与改进任务、论文蓝图、结构化审稿、人工确认修订任务、逐段候选改写与可回退版本管理、用户配置的投稿准备档案与本地规则检查、用户主动受控导出与可追溯思维导图；也可加载用户确认的学习背景；模型不可用时回退到规则。复现评估已提供 A Pipeline 的只读适配边界，主线尚未存在该合同时对应维度保持不可评估 |
 | 代码测试练习 | 本地原型已实现 | Python 3.12 代码通过本机 Piston 执行；支持自由运行、服务端题目判定、规则反馈、可选 AI 指导和匿名学习记录 |
-| 跨模块上下文 | Learning → Research 接收恢复闭环 | 用户确认后原子创建带来源记录的科研会话；Research 展示并在每轮澄清中加载已确认学习背景，来源、画像、消息和规则研究计划均可恢复；Learning → Practice 仍使用同一浏览器的 `FlowPayload` 即时交接与刷新回退，不提供持久工作上下文 |
+| 跨模块上下文 | Learning → Research 与 Learning → Practice 已接通 | Research 继续使用用户确认的可恢复上下文；Practice 由服务端 launch 绑定 Workspace、可选 Task、Focus 与本地画像键，`FlowPayload` 只作轻量主题恢复 |
 | Web/API 宿主 | 本地与受限容器可用 | Next 前端、FastAPI、本地启动脚本，以及由 Caddy 统一入口的 Web Compose 已存在；`/health` 仅检查后端进程存活 |
 | 业务持久化 | 本地可用 | 学习笔记、兼容科研会话、动态对话和证据共用 SQLAlchemy Base；Alembic 管理当前 schema |
 | Docker | 两套容器基线 | `compose.yaml` 运行 CLI、Piston 和 runtime 初始化；`compose.web.yaml` 构建 FastAPI、Next standalone 与 Caddy，但尚未接入 Piston |
 | 生产 Web 服务 | 部署骨架已实现 | 当前 Web Compose 使用本地标签镜像和特定 NAS 的证书挂载；应用身份授权、版本化发布、生产数据运维、监控和已验证回滚尚未完成 |
 | 代码执行 | 本地 Piston 原型 | 已显式配置网络、进程、文件、输出、并发与容器资源限制并提供 live 隔离检查；privileged 容器、应用授权和真实隔离结果仍阻塞生产化 |
 | 远程仓库写入 | 未实现 | 不得描述为可用能力 |
-| 持久工作区编排 | 本地验证完成 | Persistent Workspace Foundation 已接入 Workspace、Task、Learning Activity、基础页面和刷新恢复；Practice、Research、推荐与统一 Artifact 尚未接入 |
+| 持久工作区编排 | Learning 与 Practice 本地验证完成 | Workspace、Task、Learning Activity、PracticeOutcome、Practice Activity、基础页面和刷新恢复已接通；Research、推荐与统一 Artifact 尚未接入 |
 | 学习入口页改版 | 已实现，本地验证完成 | 首屏为发起学习、继续最近学习和探索计算机方向；六大领域作为稳定导航，多对多归属的方向胶囊支持多选，已选方向在搜索框下方显示并可逐项取消 |
+| Practice 集成进 Learning | 已实现，本地验证完成 | 已落地 Learning 内“动手实践”、规范路由与兼容 redirect、独立 Practice Capability、PracticeOutcome、分 mode launch、Activity 和三来源知识缺口投影 |
 
 ## 2. 当前优先事项
 
@@ -26,7 +27,7 @@
 
 Persistent Workspace Foundation 已完成本地 Learning 最小纵向闭环：Task-first、Workspace-first 和直接 Learning 均由服务端持久化并可刷新恢复。具体行为和后续切片见 [持久工作区与自由编排 Spec](../specs/persistent-workspace-orchestration.md) 与 [实施计划](../plans/persistent-workspace-orchestration-rollout.md)。
 
-本切片不接入 Practice、Research 或推荐引擎，不引入统一 Artifact 表和身份系统；后续按实际接口扩展。
+Foundation 当时只接入 Learning；后续 Practice Capability-first 已完成。Research、推荐引擎、统一 Artifact 表和身份系统仍按独立切片推进。
 
 ### 2.2 学习入口页改版
 
@@ -34,7 +35,13 @@ Persistent Workspace Foundation 已完成本地 Learning 最小纵向闭环：Ta
 
 当前代码已移除独立方向首屏和单选方向学习快照；最近学习从持久化 Activity 定位原始 Notebook 结果，材料输入在页面与服务端以 64 字符为界处理，因此该项计为本地验证完成。
 
-### 2.3 收敛已有本地闭环
+### 2.3 Practice 集成进 Learning
+
+产品与系统边界已由 [Practice 集成进 Learning 决策](../decisions/practice-in-learning-experience.md) 确立：全局入口收敛为工作台、学习和科研；Practice 在产品中作为 Learning 的“动手实践”，在系统中继续维护独立执行、判题和安全边界。
+
+该切片已按 [Learning–Practice Integration Spec](../specs/learning-practice-integration.md) 与 [实施计划](../plans/learning-practice-integration-rollout.md) 落地：页面使用规范路由，旧路径保留查询参数并 redirect；自由运行与题目提交分别取得对应 mode 的 launch；服务端持久化安全 PracticeOutcome、派生 Activity，并提供三来源复盘投影。独立 SQLite CompilerRecord 与内存 Submission 仍是兼容事实源，不替代共享数据库中的 PracticeOutcome。
+
+### 2.4 收敛已有本地闭环
 
 1. 保持所有 ORM schema 变化同步新增 Alembic revision，并验证空库和受影响旧库升级；
 2. 保持学习、科研、CLI 的 Provider 配置和错误语义一致；
@@ -49,7 +56,7 @@ Research 当前本地演示覆盖的内部步骤为：**对话澄清 → 研究�
 
 导师演示前可按 [科研论文辅助演示检查表](../research-paper-assistance-demo-checklist.md) 核对本地启动、事实边界、规则降级、会话恢复和已知限制；该清单不改变任何产品能力或权限边界。
 
-### 2.4 收敛代码练习本地闭环
+### 2.5 收敛代码练习本地闭环
 
 当前 Mock/假适配器测试、本机 Piston 接线和显式 live 隔离检查已经存在。下一步先取得真实隔离检查结果并统一持久化与身份边界，再扩展语言或公开部署。
 
@@ -60,7 +67,7 @@ Research 当前本地演示覆盖的内部步骤为：**对话澄清 → 研究�
 3. 在隔离环境运行固定可信示例和恶意边界样例，确认服务端限制不能被请求覆盖；
 4. 保持执行器事实、规则判定和 AI 建议在 API、页面、记录和测试中一致。
 
-### 2.5 生产化 Web/API
+### 2.6 生产化 Web/API
 
 现有本地 Web/API 和受限 Web Compose 不等于生产可用。进入生产前补齐应用身份与授权、跨设备会话、版本化镜像、数据库备份与恢复、速率限制、监控和隔离环境回滚验证。具体准入见 [生产准入](../deployment/production.md)。
 
@@ -71,6 +78,6 @@ Research 当前本地演示覆盖的内部步骤为：**对话澄清 → 研究�
 ## 4. 状态更新
 
 1. 路线按实际运行结果推进，不以页面存在、接口草图或模型输出代替闭环。
-2. 每次只更新受影响能力，不要求三个模块同步达到相同成熟度。
+2. 每次只更新受影响能力，不要求三个系统 Capability 同步达到相同成熟度。
 3. 状态使用根 [AGENTS.md](../../AGENTS.md) 定义的“原型完成”“本地验证完成”“合并就绪”和“生产可用”。
 4. 稳定产品边界变化时同步检查 [scope.md](scope.md)。

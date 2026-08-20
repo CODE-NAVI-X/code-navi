@@ -8,13 +8,13 @@
 
 Code Navi 已允许用户独立进入 Learning、Practice 或 Research，但长期上下文分别依赖学习会话、科研对话、匿名练习标识和浏览器临时状态。用户围绕课程、项目或研究目标持续工作时，缺少一个能够跨模块恢复活动与产物来源的产品层。
 
-新的编排层需要保存长期上下文，又不能把三个业务模块改造成固定流水线，也不能扩大现有工具权限和跨模块数据传递范围。
+新的编排层需要保存长期上下文，又不能把三个系统 Capability 改造成固定流水线，也不能扩大现有工具权限和跨模块数据传递范围。
 
 ## 2. 决策
 
 ### 2.1 产品实体与职责
 
-Workspace 与 Task 是一等产品实体。Workspace 组织长期上下文，Task 聚焦一个目标及其成功标准。Learning、Practice、Research 是可独立使用的业务 Capability，继续维护各自的数据、接口和权限边界。
+Workspace 与 Task 是一等产品实体。Workspace 组织长期上下文，Task 聚焦一个目标及其成功标准。Learning、Practice、Research 是可独立调用的系统 Capability，继续维护各自的数据、接口和权限边界。产品导航和页面层级不必与 Capability 一一对应；Practice 在产品信息架构中进入 Learning 的“动手实践”，系统边界仍按 [Practice 集成进 Learning 决策](practice-in-learning-experience.md) 保持独立。
 
 Activity 是编排层中的跨模块索引。它记录一次已经持久化、用户可识别的模块结果及其安全摘要，不接管模块产物的事实来源，也不替代 Runtime Event 或请求日志。Activity 由服务端从模块结果幂等派生，前端不能自行声明模块执行成功。
 
@@ -28,7 +28,7 @@ Activity 是编排层中的跨模块索引。它记录一次已经持久化、�
 
 ### 2.3 三种入口
 
-产品同时支持 Task-first、Workspace-first 和 Capability-first。Task-first 在没有显式 Workspace 时使用个人工作区；Capability-first 允许用户先完成活动，再整理到现有或新建 Task。任何入口都不能成为使用其他入口的前置条件。
+产品同时支持 Task-first、Workspace-first 和 Capability-first。Task-first 在没有显式 Workspace 时使用个人工作区；Capability-first 允许用户从具体工作方式开始，再整理到现有或新建 Task。任何入口都不能成为使用其他入口的前置条件。Practice 的 Capability-first 页面使用 `/learning/practice`，路由归入 Learning 不改变其 Capability 身份。
 
 ### 2.4 生命周期与完成
 
@@ -50,6 +50,7 @@ Task 只保存目标、成功标准和生命周期状态，不保存 `learning /
 2. 学生公共布局将逐步承载统一工作上下文和轻量 AppShell；各模块仍负责自己的内部流程。
 3. `FlowPayload` 只保留为同一浏览器中的即时恢复缓存，不再承担持久工作上下文。
 4. 统一时间线只保存模块产物引用和允许跨模块展示的摘要。原始练习代码、完整科研对话、隐藏测试内容和工具权限不进入 Activity。
+5. 顶层导航收敛为工作台、学习和科研；真实账号或明确的本地个人资料能力落地前，不用学习画像冒充用户中心。
 
 ## 4. 保持可修改的内容
 

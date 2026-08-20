@@ -2,7 +2,7 @@
 
 Code Navi（智教码航）面向学生自主学习、代码练习和项目科研。当前仓库已经具备 Kernel 与 CLI、知识点学习、科研对话、离线规则研究计划和受限检索的本地闭环，以及基于本机 Piston 的 Python 练习原型。
 
-产品已经采纳 Workspace–Task–Capability 编排模型，用户将可以从长期工作区、当前目标或具体能力任意开始。持久 Workspace、Task 与 Activity 仍处于待实现状态，当前代码能力以产品路线为准。
+产品已经采纳 Workspace–Task–Capability 编排模型；Workspace、Task、Learning Activity 与 Practice Activity 的本地持久闭环已经实现。全局产品入口收敛为工作台、学习和科研，Practice 在产品中进入 Learning 的“动手实践”，在系统中继续作为独立 Capability；PracticeOutcome、服务端 launch 与跨来源复盘投影已接通。当前代码能力以产品路线为准。
 
 ## 本地开发
 
@@ -48,7 +48,8 @@ Windows 使用 `dev-start.cmd` 时会额外启动 Piston 并准备固定 Python 
 | Agent 指令与按任务加载规则 | [AGENTS.md](AGENTS.md) |
 | 产品范围与当前路线 | [产品范围](docs/product/scope.md)、[产品路线](docs/product/roadmap.md) |
 | 持久工作区产品设计 | [文档导航](docs/README.md)、[产品模型](docs/decisions/workspace-task-capability-model.md)、[Feature Spec](docs/specs/persistent-workspace-orchestration.md)、[实施计划](docs/plans/persistent-workspace-orchestration-rollout.md) |
-| 系统、Kernel 与前端架构 | [系统架构](docs/architecture/system.md)、[Kernel](docs/architecture/kernel.md)、[前端](docs/architecture/frontend.md) |
+| Practice 集成进 Learning | [决策](docs/decisions/practice-in-learning-experience.md)、[Feature Spec](docs/specs/learning-practice-integration.md)、[实施计划](docs/plans/learning-practice-integration-rollout.md) |
+| 系统、Kernel 与前端架构 | [系统架构](docs/architecture/system.md)、[Kernel](docs/architecture/kernel.md)、[前端](docs/architecture/frontend.md)、[学情画像](docs/architecture/learning-profile.md) |
 | 开发、测试与高风险能力 | [开发流程](docs/development/workflow.md)、[测试](docs/development/testing.md)、[高风险能力](docs/development/high-risk-capabilities.md) |
 | 本地运行与生产准入 | [本地运行](docs/deployment/local.md)、[生产准入](docs/deployment/production.md) |
 | 外部科研 Skill 试用与论文设计依据 | [Skill 评估](docs/research-skill-evaluation.md)、[EvoScientist 笔记](docs/references/evo_scientist_experiment_notes.md) |
