@@ -91,6 +91,7 @@ export interface CompilerPracticeOutcome {
   mode: "execute" | "submit";
   verdict: string;
   category: string;
+  severity: string;
   summary: string;
   knowledgeGapKind: string | null;
   createdAt: string;
