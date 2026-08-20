@@ -89,9 +89,10 @@ export interface CompilerPracticeOutcome {
   workspaceId: string;
   taskId: string | null;
   mode: "execute" | "submit";
+  verdict: string;
   category: string;
-  severity: string;
   summary: string;
+  knowledgeGapKind: string | null;
   createdAt: string;
 }
 
