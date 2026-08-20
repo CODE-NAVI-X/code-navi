@@ -30,6 +30,7 @@ SKILL_NAMES = (
     "paper-export",
     "submission-readiness",
     "research-mindmap",
+    "reproduction-evaluation",
     "paper-reproduction",
 )
 
@@ -48,6 +49,7 @@ def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
         "citation_scaffold",
         "submission_readiness",
         "paper_export",
+        "reproduction_evaluation",
     ):
         content = (REPOSITORY_ROOT / "docs" / "skills" / skill_name / "SKILL.md").read_text(
             encoding="utf-8"

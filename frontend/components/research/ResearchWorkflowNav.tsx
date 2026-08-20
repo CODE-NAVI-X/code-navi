@@ -36,6 +36,7 @@ function deriveWorkflowSteps(conversation: ResearchConversationResponse): Workfl
     { id: "research-section-difficulty", label: "方向难点分析", available: true, hasContent: conversation.topic_difficulty_analysis.items.length > 0 },
     { id: "research-section-experiment", label: "实验方案", available: hasDesign, hasContent: hasDesign },
     { id: "research-section-evidence", label: "实验证据包", available: hasPlan, hasContent: false },
+    { id: "research-section-reproduction-evaluation", label: "复现项目评估", available: true, hasContent: false },
     { id: "research-section-paper", label: "论文辅助", available: hasPlan, hasContent: false },
     { id: "research-section-mindmap", label: "研究思维导图", available: true, hasContent: conversation.research_mindmap.nodes.length > 0 },
   ];

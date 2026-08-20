@@ -50,6 +50,7 @@ import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
 import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
 import { ReproductionPipelinePanel } from "./ReproductionPipelinePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
+import { ReproductionEvaluationPanel } from "./ReproductionEvaluationPanel";
 import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
@@ -563,6 +564,13 @@ export function ResearchConversation() {
               <ExperimentEvidencePanel conversationId={conversation.conversation_id} />
             </PanelSection>
           )}
+          <PanelSection
+            id="research-section-reproduction-evaluation"
+            title="论文复现项目评估"
+            description="用户主动触发的五维证据完整性检查；缺少 Pipeline 或实验记录的维度保持不可评估，不代表复现成功或论文质量。"
+          >
+            <ReproductionEvaluationPanel conversationId={conversation.conversation_id} />
+          </PanelSection>
           {conversation.research_plan && (
             <PanelSection
               id="research-section-reproduction"

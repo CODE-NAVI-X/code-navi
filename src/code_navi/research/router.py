@@ -69,6 +69,18 @@ from .provider_service import (
     _provider_connection_service,
     browser_provider_configuration_enabled,
 )
+from .reproduction_evaluation_schemas import (
+    CreateReproductionEvaluationRequest,
+    ReproductionImprovementTask,
+    ReproductionProjectEvaluation,
+    UpdateReproductionImprovementTaskRequest,
+)
+from .reproduction_evaluation_service import (
+    InvalidReproductionTaskTransitionError,
+    ReproductionEvaluationNotFoundError,
+    ReproductionEvaluationService,
+    ReproductionImprovementTaskNotFoundError,
+)
 from .schemas import (
     CreateEvidenceBundleRequest,
     CreateResearchSessionRequest,
@@ -88,6 +100,7 @@ _service = ResearchClarificationService()
 _evidence_service = ResearchEvidenceService()
 _conversation_service = ResearchConversationService()
 _conversation_search_service = ResearchConversationSearchService()
+_reproduction_evaluation_service = ReproductionEvaluationService()
 _db_dependency = Depends(get_db)
 
 
@@ -582,6 +595,72 @@ def list_experiment_evidence_bundles(
         return _conversation_service.list_experiment_evidence_bundles(conversation_id, db)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/reproduction-evaluations",
+    response_model=ReproductionProjectEvaluation,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_reproduction_evaluation(
+    conversation_id: str,
+    request: CreateReproductionEvaluationRequest,
+    db: Session = _db_dependency,
+) -> ReproductionProjectEvaluation:
+    """Persist one explicit offline evaluation; never execute or retrieve anything."""
+    del request
+    try:
+        return _reproduction_evaluation_service.create(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reproduction-evaluations",
+    response_model=list[ReproductionProjectEvaluation],
+)
+def list_reproduction_evaluations(
+    conversation_id: str,
+    db: Session = _db_dependency,
+) -> list[ReproductionProjectEvaluation]:
+    """Restore saved evaluation snapshots and current improvement-task states."""
+    try:
+        return _reproduction_evaluation_service.list(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/reproduction-evaluations/{evaluation_id}",
+    response_model=ReproductionProjectEvaluation,
+)
+def get_reproduction_evaluation(
+    evaluation_id: str,
+    db: Session = _db_dependency,
+) -> ReproductionProjectEvaluation:
+    """Restore one saved evaluation without re-running its rules."""
+    try:
+        return _reproduction_evaluation_service.get(evaluation_id, db)
+    except ReproductionEvaluationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Reproduction evaluation not found.") from error
+
+
+@router.patch(
+    "/reproduction-improvement-tasks/{task_id}",
+    response_model=ReproductionImprovementTask,
+)
+def update_reproduction_improvement_task(
+    task_id: str,
+    request: UpdateReproductionImprovementTaskRequest,
+    db: Session = _db_dependency,
+) -> ReproductionImprovementTask:
+    """Record an explicit accept, skip, or complete action for one task."""
+    try:
+        return _reproduction_evaluation_service.update_task(task_id, request, db)
+    except ReproductionImprovementTaskNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Improvement task not found.") from error
+    except InvalidReproductionTaskTransitionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post(
