@@ -4,11 +4,13 @@
 
 ## 项目定位
 
-Code Navi（智教码航）面向学生自主学习、代码练习和项目科研，让用户直接进入当前任务所需模块，不强制固定学习顺序。顶层模块固定为：
+Code Navi（智教码航）面向学生自主学习、代码练习和项目科研。用户可以从 Workspace、Task 或具体 Capability 任意开始，不强制固定学习顺序。顶层业务模块固定为：
 
 1. 知识点学习；
 2. 代码测试练习；
 3. 项目/科研助手。
+
+Workspace 与 Task 属于产品编排层，不构成第四个业务模块。对应产品模型与 Spec 已采纳，持久 Workspace、Task 和 Activity 尚未进入代码。
 
 当前仓库已具备 Kernel 与 CLI、知识点学习、科研对话与受限检索的本地闭环；学习模块还支持逐页生成、归档、预览和导出演示文稿，并可从真实学习摘要创建可恢复、可编辑的 Research 待确认上下文。用户确认后创建带来源记录的科研会话，Research 会展示并在后续澄清中加载已确认背景。代码练习已有基于本机 Piston 的 Python 原型，尚未达到生产隔离和授权要求。复杂教师端、班级管理、完整 LMS 与 OpenMAIC 集成是当前非目标。
 
@@ -52,8 +54,8 @@ Code Navi（智教码航）面向学生自主学习、代码练习和项目科�
 7. **会话隔离**：按学习 `session_id` 隔离的笔记、演示文稿和来源上下文读取必须限定请求会话；科研主流程按 `conversation_id` 恢复；练习记录按匿名 `learner_id` 查询。浏览器标识不代表用户身份或授权。
 8. **科研边界**：规则拥有画像、研究计划、确认和失败回退；模型个性化与外部检索只通过独立确认入口触发。代码草案是预览文本，不写入项目、不安装依赖、不执行命令。
 9. **容器状态**：`compose.yaml` 是 CLI + Piston 本地基线；`compose.web.yaml` 使用本地标签、特定 NAS 域名和证书挂载，但尚未接入 Piston。Basic Auth 不替代应用级认证和资源授权。
-10. **文档归属**：产品事实、架构接口、开发方法和部署状态分别进入 `docs/product/`、`docs/architecture/`、`docs/development/`、`docs/deployment/`；运行时 Skill 留在应用源码目录。
-11. **模块间上下文传递**：学习→科研等下游流转必须复用既有 `context-transfer` 确认流程（服务端以已归档 `notebook_item` 为来源记录），不得仅写浏览器内存状态（FlowPayload/URL 参数）作为跨模块上下文的唯一通道。新增跨模块入口先检查现有 `src/code_navi/context_transfer/` 服务。
+10. **文档归属**：产品事实、架构接口、开发方法和部署状态分别进入 `docs/product/`、`docs/architecture/`、`docs/development/`、`docs/deployment/`；重要选择、可验收行为和实施状态分别进入 `docs/decisions/`、`docs/specs/`、`docs/plans/`；运行时 Skill 留在应用源码目录。
+11. **模块间上下文传递**：跨 Capability 需要传递具体内容时，必须复用既有 `context-transfer` 确认流程（服务端以已归档模块产物为来源记录）。Workspace、Task 与 Activity 引用只组织归属，不能替代内容确认；`FlowPayload` 和 URL 参数只可作为即时交接与刷新回退。新增跨模块入口先检查现有 `src/code_navi/context_transfer/` 服务。
 12. **服务端权威**：判分、审核等涉及信任边界的接口，评分依据（标准答案、满分、评分要点）必须由服务端从已归档数据加载；请求只携带对象 id 与用户提交内容，客户端不得重新提交评分标准。归档资源不存在或跨会话时返回 404。
 13. **打包资源**：运行时读取的资源文件（如 `MML2OMML.XSL`、模板、字体）必须列入 `pyproject.toml` 的 `[tool.setuptools.package-data]`；新增此类资源需同时添加「从构建 wheel 断言资源存在」的回归测试，避免 wheel 安装后静默退化为字面文本。
 14. **前端质量门**：`npm run lint`（react-hooks/set-state-in-effect）与 `npx tsc --noEmit`、`npm run build` 均为 CI 质量门；不要在 effect 内同步调用 setState。数据驱动的状态重置优先用「以变化键重挂载子组件」或事件处理器内重置，而不是 `useEffect` 里 setState。
@@ -82,6 +84,7 @@ CLI Compose 与当前受限 Web Compose 的准确命令、数据路径和前置�
 | 领域 | 文档 |
 | --- | --- |
 | 产品范围与路线 | `docs/product/scope.md`、`docs/product/roadmap.md` |
+| 产品设计 | `docs/decisions/`、`docs/specs/`、`docs/plans/`；入口见 `docs/README.md` |
 | 架构 | `docs/architecture/system.md`、`docs/architecture/kernel.md`、`docs/architecture/frontend.md` |
 | 开发与测试 | `docs/development/workflow.md`、`docs/development/testing.md`、`docs/development/high-risk-capabilities.md` |
 | 部署 | `docs/deployment/local.md`、`docs/deployment/production.md` |

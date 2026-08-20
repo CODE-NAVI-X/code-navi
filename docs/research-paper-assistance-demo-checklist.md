@@ -18,11 +18,13 @@ python scripts/dev.py
 
 打开 `http://127.0.0.1:3000/research`；后端健康检查为 `http://127.0.0.1:8000/health`。
 
+本清单演示独立进入 Research 的当前 Capability-first 路径。Research 尚未接入持久工作区；接入后另行增加 Activity 关联与恢复检查。
+
 ## 导师演示路径与检查点
 
 | 步骤 | 用户主动操作 | 预期展示内容与事实边界 |
 | --- | --- | --- |
-| 1 | 输入模糊研究想法并完成五字段澄清 | 恢复后的 ResearchProfile、规则研究计划；`fact` 仅是用户确认输入，建议为 `inference`，未知为 `to_verify`。 |
+| 1 | 输入模糊研究想法并完成动态 ResearchProfile 澄清 | 恢复后的 ResearchProfile、规则研究计划；`fact` 仅是用户确认输入，建议为 `inference`，未知为 `to_verify`。 |
 | 2 | 点击受限学术检索，并选择 arXiv 或当前允许来源 | EvidenceBundle 显示来源、访问时间、元数据/摘要范围和失败状态；没有点击时不自动联网。 |
 | 3 | 打开已保存证据 | 仅将标题、作者、年份、链接和摘要直接范围视作 `fact`；关键词相关性是 `inference`，摘要外内容保持 `to_verify`。 |
 | 4 | 粘贴实验设置、结果、失败原因和待确认项 | 实验结果证据包标明“用户提交事实（未独立复核）”；系统不读私有文件、不运行代码。 |

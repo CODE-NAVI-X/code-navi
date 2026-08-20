@@ -23,6 +23,7 @@
 | 领域 | 文档职责 |
 | --- | --- |
 | 产品 | [docs/product/scope.md](docs/product/scope.md) 定义稳定范围、模块和非目标；[docs/product/roadmap.md](docs/product/roadmap.md) 记录易变的状态、优先级和里程碑 |
+| 产品设计 | `docs/decisions/` 记录已采纳的重要选择；`docs/specs/` 定义可验收行为；`docs/plans/` 记录实施顺序与当前切片 |
 | 架构 | [docs/architecture/system.md](docs/architecture/system.md) 定义公共系统边界与跨组件接口；[docs/architecture/kernel.md](docs/architecture/kernel.md) 只管 Kernel 内部；[docs/architecture/frontend.md](docs/architecture/frontend.md) 只管 Web 与前端 |
 | 开发 | [docs/development/workflow.md](docs/development/workflow.md) 负责日常实现与贡献；[docs/development/testing.md](docs/development/testing.md) 负责测试；[docs/development/high-risk-capabilities.md](docs/development/high-risk-capabilities.md) 负责高风险能力 |
 | 部署 | [docs/deployment/local.md](docs/deployment/local.md) 负责当前 CLI、本地 Web/API、CLI Compose 和受限 Web 容器运行；[docs/deployment/production.md](docs/deployment/production.md) 负责公网服务、正式发布和生产准入 |
@@ -50,6 +51,8 @@
 | 仅修改文档 | 目标文档 | 只有修改内容涉及其他领域事实时，才读取该领域文档；不因文档任务加载完整开发或测试手册 |
 
 先加载“必须读取”，确认任务实际触及追加条件后再加载对应文件。文件位于某目录中，不表示必须先读该目录的其他文档；表中未命中的文档不读取。跨领域任务按实际影响合并最小组合，不遍历全部文档。
+
+若目标功能已经有相互链接的 Decision、Spec 或 Plan，行为判断优先读取 Spec，稳定原则或跨组件关系变化时追加 Decision，实施与状态任务追加 Plan。三类文档按当前任务选读，不要求成套遍历。目录职责和当前入口见 [docs/README.md](docs/README.md)。
 
 ## 3. 通用执行流程
 

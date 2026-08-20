@@ -24,6 +24,7 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | `src/code_navi/server.py` | FastAPI 装配、CORS、统一异常边界和 `/health` |
 | `src/code_navi/learning/` | 知识讲解 API、Runtime 编排和学习笔记 |
 | `src/code_navi/context_transfer/` | 跨模块上下文的来源校验、可编辑快照、会话范围读取、取消和确认消费 |
+| `src/code_navi/workspaces/` | 本地 Workspace、Task 与来源派生 Activity 的归属校验、持久化和 API |
 | `src/code_navi/online_compiler/` | Python/Piston 接线、服务端判题、规则反馈、可选 AI 指导和匿名学习记录 |
 | `src/code_navi/research/` | 动态科研对话、Provider 状态、兼容澄清流程、检索计划和学术证据 |
 | `src/code_navi/providers.py` | Mock、OpenAI 与 DeepSeek Provider 的统一选择 |
@@ -45,7 +46,11 @@ CLI ─→ QuestionService ─→ AgentRuntime ─→ Provider ─→ Event JSON
 | --- | --- | --- |
 | `code-navi ask` | 问题、项目上下文、Provider 配置 | 无状态的 `RuntimeResult` 和 Event JSONL；不修改项目文件 |
 | `code-navi shell [--resume conversation-id]` | 问题、项目上下文、显式 CLI 对话标识、Provider 配置 | 项目作用域内的主对话状态、`RuntimeResult` 和 Event JSONL；branch 只在当前进程存在 |
-| `POST /api/v1/learning/explain` | `ExplainRequest` | `ExplainResponse`、Runtime Event，并写入 `notebook_items` |
+| `POST /api/v1/workspaces/personal` | 本地 `local_profile_id` | 幂等取得该浏览器资料的个人 Workspace；它不是身份或授权 |
+| `GET`、`POST /api/v1/workspaces...` | 本地 `local_profile_id`、Workspace 数据和资源 ID | 按浏览器资料范围列出、创建或读取 Workspace；跨资料资源统一返回 404 |
+| `POST /api/v1/tasks`、`GET /api/v1/tasks...` | 本地 `local_profile_id`、目标、可选 Workspace 和 Task ID | Task-first 自动取得个人 Workspace；Workspace-first 使用同一服务端创建规则 |
+| `GET /api/v1/workspaces/{id}/activities`、`GET /api/v1/tasks/{id}/activities` | 资源 ID 与本地 `local_profile_id` | 稳定倒序的有界安全 Activity 时间线；不返回原模块完整产物 |
+| `POST /api/v1/learning/explain` | `ExplainRequest`、可选本地 Workspace/Task 上下文 | `ExplainResponse`、Runtime Event，并写入 `notebook_items`；带本地资料时由服务端在同一事务派生 Learning Activity |
 | `GET /api/v1/learning/notebook?session_id=...` | 学习 `session_id` | 该学习会话的 `NotebookItem` 列表 |
 | `POST /api/v1/context-transfers` | Learning 笔记 ID、学习 `session_id`、目标模块和选择内容 | 从真实笔记派生并持久化 `context-transfer.v1` 待确认上下文 |
 | `GET`、`PATCH`、`DELETE /api/v1/context-transfers/{id}` | 上下文 ID 和来源学习 `session_id` | 在来源会话范围内恢复、编辑或清除传递快照；不修改原笔记 |
@@ -127,6 +132,8 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 | Runtime `session_id` | 组织同一来源的 Event JSONL | 业务状态、身份或自动恢复的对话 |
 | CLI `conversation_id` | 通过显式 `shell --resume` 恢复当前项目的主对话消息 | Runtime Event 分组、`run_id`、跨项目恢复或 branch 状态 |
 | 学习 `session_id` | 隔离 `notebook_items` 并关联学习 run | 用户账号或跨设备会话 |
+| 本地 `local_profile_id` | 隔离同一部署中浏览器资料的 Workspace、Task 和 Activity | 身份认证、授权或跨设备账号 |
+| Workspace / Task / Activity ID | 组织长期上下文、目标和模块产物安全索引 | 模块原始产物、完整会话、工具权限或内容传递确认 |
 | 上下文 `id` + 来源 `session_id` | 恢复待确认快照，并在显式确认后绑定一个科研会话 | 身份授权、未经确认的 Research 写入或工具权限 |
 | 练习 `learner_id` | 筛选独立 SQLite 中的匿名练习摘要 | 身份、授权或防止他人读取已知 UUID |
 | 科研 `conversation_id` | 恢复动态画像、消息和 evidence bundle | Kernel 权限、身份或长期记忆 |
@@ -136,11 +143,11 @@ Piston 是应用层外部执行器，不注册为 Kernel Tool。学生代码状�
 
 研究笔记仍由学习 `session_id` 隔离；其 `extra_data` 保存 `research-notebook-note.v1`，包括来源 Conversation、Bundle、选中 Evidence 和下一步建议。当前字符串 `item_type` 与 JSON 扩展列可直接承载该类型，不新增数据库列。
 
-业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。`cli_conversations` 按规范化项目根目录隔离 shell 主对话；Research 与 CLI 分别保留 `research_conversations` 和 `cli_conversations`，不共用全局 Agent 会话表。Runtime Event 单独写入 JSONL，不作为业务数据库。
+业务模块共用 `code_navi.db.Base`、`get_db()` 和 `CODE_NAVI_DATABASE_URL`；`LEARNING_DATABASE_URL` 仅兼容旧配置。默认数据库为 `.code-navi/learning_poc.db`。`workspaces`、`workspace_tasks` 和 `workspace_activities` 共同组成编排层：Task 必须归属 Workspace，Activity 可没有 Task，但只保存来源引用和安全摘要；个人 Workspace 由数据库唯一约束幂等取得。`cli_conversations` 按规范化项目根目录隔离 shell 主对话；Research 与 CLI 分别保留 `research_conversations` 和 `cli_conversations`，不共用全局 Agent 会话表。Runtime Event 单独写入 JSONL，不作为业务数据库。
 
 练习记录当前例外地使用 `COMPILER_DATABASE_PATH` 指向独立 SQLite，并由模块自行创建 `learning_records` 表；它不进入共享 SQLAlchemy Base 或 Alembic。记录保存匿名 UUID、规则与 AI 摘要、代码哈希、代码大小和运行指标，不保存原始代码与标准输入。该路径属于本地原型，生产化前必须统一迁移、所有权和删除规则。
 
-schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；`research_context_summary_v1` 增加 Research 跨 run 摘要，`cli_conversations_v1` 增加项目作用域内的 CLI shell 主对话。启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
+schema 变更必须新增 Alembic revision，并验证空库和受影响旧库升级。`0003` 创建动态科研对话和证据表，`0004` 创建待传递上下文，`0005` 增加确认状态、科研会话关联和来源快照；`research_context_summary_v1` 增加 Research 跨 run 摘要，`cli_conversations_v1` 增加项目作用域内的 CLI shell 主对话，`persistent_workspace_foundation_v1` 创建 Workspace、Task 与 Activity 编排表及时间线索引。启动时的 `Base.metadata.create_all()` 只创建缺失表，不能替代迁移。
 
 ## 6. 架构变更条件
 

@@ -2,6 +2,8 @@
 
 Code Navi（智教码航）面向学生自主学习、代码练习和项目科研。当前仓库已经具备 Kernel 与 CLI、知识点学习、科研对话、离线规则研究计划和受限检索的本地闭环，以及基于本机 Piston 的 Python 练习原型。
 
+产品已经采纳 Workspace–Task–Capability 编排模型，用户将可以从长期工作区、当前目标或具体能力任意开始。持久 Workspace、Task 与 Activity 仍处于待实现状态，当前代码能力以产品路线为准。
+
 ## 本地开发
 
 后端要求 Python 3.11+，前端要求 Node 20.19+。从仓库根目录运行：
@@ -22,7 +24,7 @@ python scripts/dev.py
 
 ## 科研辅助本地演示闭环
 
-当前可演示流程为：**对话澄清 → 规则研究计划 → 用户主动触发的受限学术检索 → 用户主动选择受限证据的引用占位与完整性检查 → 难点分析 → 实验方案 → 用户确认后代码草案 → 实验结果证据包 → 论文蓝图 → 用户粘贴初稿 → 结构化审稿 → 人工确认修订任务 → 修订预览 → 投稿前检查 → 用户主动受控导出 → 研究思维导图**。
+Research Capability 当前可演示的内部流程为：**对话澄清 → 规则研究计划 → 用户主动触发的受限学术检索 → 用户主动选择受限证据的引用占位与完整性检查 → 难点分析 → 实验方案 → 用户确认后代码草案 → 实验结果证据包 → 论文蓝图 → 用户粘贴初稿 → 结构化审稿 → 人工确认修订任务 → 修订预览 → 投稿前检查 → 用户主动受控导出 → 研究思维导图**。这条演示路径不定义产品入口顺序或 Task 生命周期。
 
 - 检索不是自动行为：只有用户主动提交查询后，才会通过受限来源（当前为 OpenAlex、Crossref、arXiv）生成 `EvidenceBundle`。标题、作者、年份和来源摘要是 `fact`；关键词关联是 `inference`；摘要未覆盖的实验、数据集和结论是 `to_verify`。
 - DeepSeek 仅可改善科研追问、难点分析、实验方案和结构化审稿解释的表达；会话、确认、事实边界、受限来源和降级仍由规则控制。无密钥、超时或输出不合法时保持离线规则可用。
@@ -44,11 +46,12 @@ Windows 使用 `dev-start.cmd` 时会额外启动 Piston 并准备固定 Python 
 | --- | --- |
 | Agent 指令与按任务加载规则 | [AGENTS.md](AGENTS.md) |
 | 产品范围与当前路线 | [产品范围](docs/product/scope.md)、[产品路线](docs/product/roadmap.md) |
+| 持久工作区产品设计 | [文档导航](docs/README.md)、[产品模型](docs/decisions/workspace-task-capability-model.md)、[Feature Spec](docs/specs/persistent-workspace-orchestration.md)、[实施计划](docs/plans/persistent-workspace-orchestration-rollout.md) |
 | 系统、Kernel 与前端架构 | [系统架构](docs/architecture/system.md)、[Kernel](docs/architecture/kernel.md)、[前端](docs/architecture/frontend.md) |
 | 开发、测试与高风险能力 | [开发流程](docs/development/workflow.md)、[测试](docs/development/testing.md)、[高风险能力](docs/development/high-risk-capabilities.md) |
 | 本地运行与生产准入 | [本地运行](docs/deployment/local.md)、[生产准入](docs/deployment/production.md) |
 | 外部科研 Skill 试用与论文设计依据 | [Skill 评估](docs/research-skill-evaluation.md)、[EvoScientist 笔记](docs/references/evo_scientist_experiment_notes.md) |
-| 后续论文初稿/评审接口边界 | [论文工作流设计](docs/research-paper-workflow-design.md) |
+| Research 论文辅助模块边界 | [论文工作流设计](docs/research-paper-workflow-design.md) |
 | 导师本地演示与安全降级核对 | [科研论文辅助演示检查表](docs/research-paper-assistance-demo-checklist.md) |
 
 当前本地闭环不等于生产可用；实际能力和生产阻塞项分别以产品路线和生产准入文档为准。
