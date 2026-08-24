@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -23,10 +23,14 @@ import {
   CompilerExecutionResult,
   ImportedCompilerProblem,
   CompilerRecord,
+  CompilerApiError,
+  CompilerPracticeFocus,
+  CompilerPracticeLaunch,
   CompilerRuntimeStatus,
   CompilerJudgeResult,
   GeneratedPracticeProblem,
   analyzeProblemImport,
+  createPracticeLaunch,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
@@ -35,8 +39,9 @@ import {
   requestCompilerGuidance,
   submitPython,
 } from "@/lib/api/compiler";
+import { getLocalProfileId } from "@/lib/api/workspaces";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
-import { getOrCreateLearnerId } from "@/lib/learner";
+import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
 
@@ -59,6 +64,16 @@ interface PracticeExercise {
   warnings?: string[];
   sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
 }
+
+type PracticeLaunchMode = "free_run" | "problem_submit";
+
+type PracticeLaunchState =
+  | { key: string; mode: PracticeLaunchMode; status: "loading"; launch: null; message: string }
+  | { key: string; mode: PracticeLaunchMode; status: "ready"; launch: CompilerPracticeLaunch; message: string }
+  | { key: string; mode: PracticeLaunchMode; status: "unavailable"; launch: null; message: string };
+
+type TimelineNoticeState = { key: string; message: string };
+type KeyedState<T> = { key: string; value: T } | null;
 
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   easy: "入门",
@@ -231,10 +246,36 @@ function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const payload = useFlowStore((s) => s.payload);
-  const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(null);
+  const [learnerId] = useState(() => getLearnerId());
+  const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(() =>
+    typeof window === "undefined" ? null : getPersistedFlowPayload(),
+  );
   const urlKnowledgeName = searchParams.get("knowledge_name");
+  const urlKnowledgeId = searchParams.get("knowledge_id");
   const knowledgeName =
     urlKnowledgeName ?? payload?.masteredKnowledgePoint.name ?? persistedPayload?.masteredKnowledgePoint.name;
+  const knowledgeId =
+    urlKnowledgeId ?? payload?.masteredKnowledgePoint.id ?? persistedPayload?.masteredKnowledgePoint.id;
+  const workspaceId = searchParams.get("workspace_id") ?? undefined;
+  const taskId = searchParams.get("task_id") ?? undefined;
+  const practiceFocus = useMemo(
+    () => buildPracticeFocus(knowledgeId, knowledgeName),
+    [knowledgeId, knowledgeName],
+  );
+  const launchContextKey = useMemo(
+    () =>
+      JSON.stringify({
+        learnerId,
+        workspaceId: workspaceId ?? "",
+        taskId: taskId ?? "",
+        focusType: practiceFocus?.type ?? "",
+        focusId: practiceFocus?.id ?? "",
+        focusLabel: practiceFocus?.label ?? "",
+      }),
+    [learnerId, practiceFocus, taskId, workspaceId],
+  );
+  const freeRunLaunchKey = `${launchContextKey}:free_run`;
+  const problemSubmitLaunchKey = `${launchContextKey}:problem_submit`;
   const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
 
   const [view, setView] = useState<"start" | "workspace">("start");
@@ -242,6 +283,8 @@ function PracticeContent() {
   const [difficulty, setDifficulty] = useState<Difficulty | "all">("all");
   const [selectedExerciseId, setSelectedExerciseId] = useState(EXERCISES[0].id);
   const [activeExercise, setActiveExercise] = useState<PracticeExercise>(EXERCISES[0]);
+  const [practiceSelectionVersion, setPracticeSelectionVersion] = useState(0);
+  const activePracticeKey = `${launchContextKey}:exercise:${activeExercise.id}:selection:${practiceSelectionVersion}`;
   const [importedExercises, setImportedExercises] = useState<PracticeExercise[]>([]);
   const [problemImportText, setProblemImportText] = useState("");
   const [problemImportContentBase64, setProblemImportContentBase64] = useState<string | null>(null);
@@ -261,22 +304,79 @@ function PracticeContent() {
   const [source, setSource] = useState(EXERCISES[0].source);
   const [stdin, setStdin] = useState(EXERCISES[0].stdin);
   const [enableAi, setEnableAi] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<CompilerExecutionResult | null>(null);
-  const [aiFeedback, setAiFeedback] = useState<CompilerAiFeedback | null>(null);
-  const [judgeResult, setJudgeResult] = useState<CompilerJudgeResult | null>(null);
-  const [guidanceMessage, setGuidanceMessage] = useState("");
-  const [guidance, setGuidance] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [runningState, setRunningState] = useState<{ key: string; sequence: number } | null>(null);
+  const [resultState, setResultState] = useState<KeyedState<CompilerExecutionResult>>(null);
+  const [aiFeedbackState, setAiFeedbackState] = useState<KeyedState<CompilerAiFeedback>>(null);
+  const [judgeResultState, setJudgeResultState] = useState<KeyedState<CompilerJudgeResult>>(null);
+  const [guidanceMessageState, setGuidanceMessageState] = useState<KeyedState<string>>(null);
+  const [guidanceState, setGuidanceState] = useState<KeyedState<Array<{ role: "user" | "assistant"; content: string }>>>(null);
   const [guidanceBusy, setGuidanceBusy] = useState(false);
   const [records, setRecords] = useState<CompilerRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [learnerId] = useState(() => getLearnerId());
+  const [launchStates, setLaunchStates] = useState<Record<PracticeLaunchMode, PracticeLaunchState>>({
+    free_run: loadingLaunchState("", "free_run"),
+    problem_submit: loadingLaunchState("", "problem_submit"),
+  });
+  const [timelineNotice, setTimelineNotice] = useState<TimelineNoticeState | null>(null);
+  const operationSequenceRef = useRef(0);
+  const activePracticeKeyRef = useRef(activePracticeKey);
   const pythonFileInputRef = useRef<HTMLInputElement>(null);
   const problemFileInputRef = useRef<HTMLInputElement>(null);
+  const effectiveFreeRunLaunchState =
+    launchStates.free_run.key === freeRunLaunchKey
+      ? launchStates.free_run
+      : loadingLaunchState(freeRunLaunchKey, "free_run");
+  const effectiveProblemSubmitLaunchState =
+    launchStates.problem_submit.key === problemSubmitLaunchKey
+      ? launchStates.problem_submit
+      : loadingLaunchState(problemSubmitLaunchKey, "problem_submit");
+  const result = resultState?.key === activePracticeKey ? resultState.value : null;
+  const aiFeedback = aiFeedbackState?.key === activePracticeKey ? aiFeedbackState.value : null;
+  const judgeResult = judgeResultState?.key === activePracticeKey ? judgeResultState.value : null;
+  const guidanceMessage = guidanceMessageState?.key === activePracticeKey ? guidanceMessageState.value : "";
+  const guidance = guidanceState?.key === activePracticeKey ? guidanceState.value : [];
+  const running = runningState?.key === activePracticeKey;
+  const effectiveTimelineNotice =
+    timelineNotice?.key === activePracticeKey ? timelineNotice.message : null;
+
+  useLayoutEffect(() => {
+    activePracticeKeyRef.current = activePracticeKey;
+  }, [activePracticeKey]);
 
   useEffect(() => {
-    queueMicrotask(() => setPersistedPayload(getPersistedFlowPayload()));
-  }, []);
+    let active = true;
+    const launchRequests: Array<{ mode: PracticeLaunchMode; key: string }> = [
+      { mode: "free_run", key: freeRunLaunchKey },
+      { mode: "problem_submit", key: problemSubmitLaunchKey },
+    ];
+    for (const { mode, key } of launchRequests) {
+      void createPracticeLaunch({
+        localProfileId: getLocalProfileId(),
+        learnerId,
+        workspaceId,
+        taskId,
+        mode,
+        focus: practiceFocus,
+      })
+        .then((launch) => {
+          if (!active) return;
+          setLaunchStates((current) => ({
+            ...current,
+            [mode]: readyLaunchState(key, mode, launch),
+          }));
+        })
+        .catch((launchError) => {
+          if (!active) return;
+          setLaunchStates((current) => ({
+            ...current,
+            [mode]: unavailableLaunchState(key, mode, launchError),
+          }));
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [freeRunLaunchKey, learnerId, practiceFocus, problemSubmitLaunchKey, taskId, workspaceId]);
 
   const exercises = useMemo(
     () => [...importedExercises, ...EXERCISES],
@@ -317,16 +417,24 @@ function PracticeContent() {
     };
   }, [learnerId]);
 
+  function invalidateActiveOperation() {
+    setPracticeSelectionVersion((version) => version + 1);
+    setRunningState(null);
+    setGuidanceBusy(false);
+  }
+
   function openExercise(exercise: PracticeExercise) {
+    invalidateActiveOperation();
     setSelectedExerciseId(exercise.id);
     setActiveExercise(exercise);
     setSource(exercise.source);
     setStdin(exercise.stdin);
-    setResult(null);
-    setAiFeedback(null);
-    setJudgeResult(null);
-    setGuidance([]);
-    setGuidanceMessage("");
+    setResultState(null);
+    setAiFeedbackState(null);
+    setJudgeResultState(null);
+    setGuidanceState(null);
+    setGuidanceMessageState(null);
+    setTimelineNotice(null);
     setError(null);
     setView("workspace");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -512,53 +620,136 @@ function PracticeContent() {
     );
   }
 
+  function isCurrentOperation(requestKey: string, operationSequence: number): boolean {
+    return (
+      activePracticeKeyRef.current === requestKey &&
+      operationSequenceRef.current === operationSequence
+    );
+  }
+
   async function runCode() {
-    setRunning(true);
+    if (effectiveFreeRunLaunchState.status === "loading") return;
+    const requestKey = activePracticeKey;
+    const operationSequence = operationSequenceRef.current + 1;
+    operationSequenceRef.current = operationSequence;
+    setRunningState({ key: requestKey, sequence: operationSequence });
     setError(null);
-    setAiFeedback(null);
+    setAiFeedbackState(null);
+    const launch =
+      effectiveFreeRunLaunchState.status === "ready" ? effectiveFreeRunLaunchState.launch : null;
+    const attemptId = newUuidV4();
     try {
-      const executed = await executePython({ source, stdin, learnerId, enableAi });
-      setResult(executed);
-      setAiFeedback(executed.ai);
-      void refreshRecords();
-      if (executed.ai.evaluationId) {
-        const evaluated = await evaluatePythonRun({
-          evaluationId: executed.ai.evaluationId,
-          learnerId,
-        });
-        setAiFeedback(evaluated.ai);
-        void refreshRecords();
-      }
+      const executed = await executePython({
+        source,
+        stdin,
+        learnerId,
+        enableAi,
+        launchId: launch?.launchId,
+        attemptId,
+      });
+      await applyExecutionResult(executed, launch, requestKey, operationSequence);
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "代码运行失败。");
+      if (isCurrentOperation(requestKey, operationSequence)) {
+        if (launch && isLaunchScopeError(runError)) {
+          setLaunchStates((current) => ({
+            ...current,
+            free_run: unavailableLaunchState(
+              freeRunLaunchKey,
+              "free_run",
+              new Error("Workspace 时间线接入已失效，请重试。"),
+            ),
+          }));
+          setTimelineNotice({
+            key: requestKey,
+            message: "Workspace 时间线接入已失效；请重试，重试将保留旧 Practice 执行能力且不会进入时间线。",
+          });
+        }
+        setError(runError instanceof Error ? runError.message : "代码运行失败。");
+      }
     } finally {
-      setRunning(false);
+      if (isCurrentOperation(requestKey, operationSequence)) {
+        setRunningState(null);
+      }
+    }
+  }
+
+  async function applyExecutionResult(
+    executed: CompilerExecutionResult,
+    launch: CompilerPracticeLaunch | null,
+    requestKey: string,
+    operationSequence: number,
+  ) {
+    if (!isCurrentOperation(requestKey, operationSequence)) return;
+    setResultState({ key: requestKey, value: executed });
+    setTimelineNotice({ key: requestKey, message: timelineMessage(executed.practiceOutcome, launch) });
+    setAiFeedbackState({ key: requestKey, value: executed.ai });
+    void refreshRecords();
+    if (executed.ai.evaluationId) {
+      const evaluated = await evaluatePythonRun({
+        evaluationId: executed.ai.evaluationId,
+        learnerId,
+      });
+      if (!isCurrentOperation(requestKey, operationSequence)) return;
+      setAiFeedbackState({ key: requestKey, value: evaluated.ai });
+      void refreshRecords();
     }
   }
 
   async function submitCode() {
-    setRunning(true);
+    if (effectiveProblemSubmitLaunchState.status === "loading") return;
+    const requestKey = activePracticeKey;
+    const operationSequence = operationSequenceRef.current + 1;
+    operationSequenceRef.current = operationSequence;
+    setRunningState({ key: requestKey, sequence: operationSequence });
     setError(null);
+    const launch =
+      effectiveProblemSubmitLaunchState.status === "ready"
+        ? effectiveProblemSubmitLaunchState.launch
+        : null;
+    const attemptId = newUuidV4();
     try {
       const judged = await submitPython({
         problemId: activeExercise.problemId ?? activeExercise.id,
         problemVersion: activeExercise.problemVersion,
         source,
         learnerId,
+        launchId: launch?.launchId,
+        attemptId,
       });
-      setJudgeResult(judged);
+      if (!isCurrentOperation(requestKey, operationSequence)) return;
+      setJudgeResultState({ key: requestKey, value: judged });
+      setTimelineNotice({ key: requestKey, message: timelineMessage(judged.practiceOutcome, launch) });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "提交判题失败");
+      if (isCurrentOperation(requestKey, operationSequence)) {
+        if (launch && isLaunchScopeError(submitError)) {
+          setLaunchStates((current) => ({
+            ...current,
+            problem_submit: unavailableLaunchState(
+              problemSubmitLaunchKey,
+              "problem_submit",
+              new Error("Workspace 时间线接入已失效，请重试。"),
+            ),
+          }));
+          setTimelineNotice({
+            key: requestKey,
+            message: "Workspace 时间线接入已失效；请重试，重试将保留旧 Practice 判题能力且不会进入时间线。",
+          });
+        }
+        setError(submitError instanceof Error ? submitError.message : "提交判题失败");
+      }
     } finally {
-      setRunning(false);
+      if (isCurrentOperation(requestKey, operationSequence)) {
+        setRunningState(null);
+      }
     }
   }
 
   async function askTutor() {
     if (!judgeResult || !guidanceMessage.trim()) return;
     const message = guidanceMessage.trim();
+    const requestKey = activePracticeKey;
     setGuidanceBusy(true);
-    setGuidanceMessage("");
+    setGuidanceMessageState({ key: requestKey, value: "" });
     try {
       const response = await requestCompilerGuidance({
         submissionId: judgeResult.submissionId,
@@ -566,9 +757,16 @@ function PracticeContent() {
         learnerId,
         history: guidance,
       });
-      setGuidance((items) => [...items, { role: "user", content: message }, { role: "assistant", content: response.ai.reply }]);
+      if (activePracticeKeyRef.current === requestKey) {
+        setGuidanceState({
+          key: requestKey,
+          value: [...guidance, { role: "user", content: message }, { role: "assistant", content: response.ai.reply }],
+        });
+      }
     } catch (tutorError) {
-      setError(tutorError instanceof Error ? tutorError.message : "AI 引导暂不可用");
+      if (activePracticeKeyRef.current === requestKey) {
+        setError(tutorError instanceof Error ? tutorError.message : "AI 引导暂不可用");
+      }
     } finally {
       setGuidanceBusy(false);
     }
@@ -582,11 +780,23 @@ function PracticeContent() {
     }
   }
 
+  const canRunCode =
+    runtime?.ready === true && effectiveFreeRunLaunchState.status !== "loading";
+  const canSubmitCode =
+    runtime?.ready === true &&
+    activeExercise.origin === "built_in" &&
+    effectiveProblemSubmitLaunchState.status !== "loading";
+
   if (view === "start") {
     return (
       <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
         <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
           <PracticeTopbar runtime={runtime} error={error} />
+          <TimelineBanner
+            freeRunLaunchState={effectiveFreeRunLaunchState}
+            problemSubmitLaunchState={effectiveProblemSubmitLaunchState}
+            notice={effectiveTimelineNotice}
+          />
 
           <section className="mx-auto w-full max-w-5xl py-10 sm:py-14">
             <div className="max-w-3xl">
@@ -604,7 +814,7 @@ function PracticeContent() {
                     onClick={() => {
                       clearFlowPayload();
                       setPersistedPayload(null);
-                      router.replace("/practice");
+                      router.replace("/learning/practice");
                     }}
                     className="app-button-secondary rounded-full px-3 py-1 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
                   >
@@ -911,7 +1121,10 @@ function PracticeContent() {
       <header className="sticky top-16 z-30 flex min-h-16 flex-wrap items-center gap-2 border-b border-slate-200 bg-[var(--app-card)]/95 px-3 py-2 shadow-[var(--app-shadow)] backdrop-blur md:px-5 dark:border-zinc-800">
         <button
           type="button"
-          onClick={() => setView("start")}
+          onClick={() => {
+            invalidateActiveOperation();
+            setView("start");
+          }}
           className="app-button-secondary inline-flex h-10 w-10 items-center justify-center rounded-xl transition hover:bg-slate-50 dark:hover:bg-zinc-800"
           aria-label="返回练习选择"
         >
@@ -920,7 +1133,7 @@ function PracticeContent() {
         <button
           type="button"
           onClick={() => void submitCode()}
-          disabled={running || !runtime?.ready || activeExercise.origin !== "built_in"}
+          disabled={running || !canSubmitCode}
           className="app-button-secondary inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800"
         >
           <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />
@@ -941,7 +1154,7 @@ function PracticeContent() {
         <button
           type="button"
           onClick={() => void runCode()}
-          disabled={running || !runtime?.ready}
+          disabled={running || !canRunCode}
           className="app-button-primary inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:hover:bg-zinc-200"
         >
           {running ? (
@@ -984,6 +1197,11 @@ function PracticeContent() {
 
         <section className="min-w-0 p-4 md:p-5">
           <div className="mx-auto max-w-7xl">
+            <TimelineBanner
+              freeRunLaunchState={effectiveFreeRunLaunchState}
+              problemSubmitLaunchState={effectiveProblemSubmitLaunchState}
+              notice={effectiveTimelineNotice}
+            />
             <section className="app-card mb-4 grid gap-4 rounded-2xl p-4 md:grid-cols-[minmax(0,1fr)_320px]">
               <div>
                 <span
@@ -1077,7 +1295,7 @@ function PracticeContent() {
                 messages={guidance}
                 value={guidanceMessage}
                 busy={guidanceBusy}
-                onChange={setGuidanceMessage}
+                onChange={(value) => setGuidanceMessageState({ key: activePracticeKey, value })}
                 onSubmit={() => void askTutor()}
               />
             ) : null}
@@ -1278,6 +1496,100 @@ function RuntimeBadge({
       ) : null}
     </div>
   );
+}
+
+function TimelineBanner({
+  freeRunLaunchState,
+  problemSubmitLaunchState,
+  notice,
+}: {
+  freeRunLaunchState: PracticeLaunchState;
+  problemSubmitLaunchState: PracticeLaunchState;
+  notice: string | null;
+}) {
+  const hasUnavailable =
+    freeRunLaunchState.status === "unavailable" ||
+    problemSubmitLaunchState.status === "unavailable";
+  const hasLoading =
+    freeRunLaunchState.status === "loading" ||
+    problemSubmitLaunchState.status === "loading";
+  const tone = hasUnavailable
+    ? "border-[#e7aaa0] bg-[#ffe3dd] text-[#80342b]"
+    : hasLoading
+      ? "border-[#d8c48a] bg-[#fff3c9] text-[#725414]"
+      : "border-[#9eb3a6] bg-[#e8f3df] text-[#365f2f]";
+  const title = hasUnavailable
+    ? "部分 Practice 结果不会进入 Workspace 时间线。"
+    : hasLoading
+      ? "正在接入 Workspace 时间线。"
+      : freeRunLaunchState.launch?.taskId || problemSubmitLaunchState.launch?.taskId
+        ? "已接入当前 Task 时间线。"
+        : "已接入个人 Workspace 时间线。";
+  return (
+    <div className={`mt-4 rounded-xl border px-4 py-3 text-xs leading-5 ${tone}`}>
+      <p className="font-semibold">{title}</p>
+      <p className="mt-1">
+        {notice ??
+          (hasUnavailable
+            ? "已失效的入口会保留旧 Practice 能力；对应结果不会进入 Workspace 时间线。"
+            : hasLoading
+              ? "运行和提交会等待各自的 launch 签发完成。"
+              : "运行和提交会分别使用对应的 launch 写入安全结果。")}
+      </p>
+      <p className="mt-1">
+        运行：{launchStatusLabel(freeRunLaunchState)}；提交：
+        {launchStatusLabel(problemSubmitLaunchState)}
+      </p>
+    </div>
+  );
+}
+
+function launchStatusLabel(launchState: PracticeLaunchState): string {
+  if (launchState.status === "ready") {
+    return launchState.launch?.taskId ? "当前 Task" : "个人 Workspace";
+  }
+  if (launchState.status === "unavailable") return "旧 API，不进时间线";
+  return "签发中";
+}
+
+function loadingLaunchState(key: string, mode: PracticeLaunchMode): PracticeLaunchState {
+  return {
+    key,
+    mode,
+    status: "loading",
+    launch: null,
+    message: "正在接入 Workspace 时间线。",
+  };
+}
+
+function readyLaunchState(
+  key: string,
+  mode: PracticeLaunchMode,
+  launch: CompilerPracticeLaunch,
+): PracticeLaunchState {
+  return {
+    key,
+    mode,
+    status: "ready",
+    launch,
+    message: launch.taskId ? "已接入当前 Task 时间线。" : "已接入个人 Workspace 时间线。",
+  };
+}
+
+function unavailableLaunchState(
+  key: string,
+  mode: PracticeLaunchMode,
+  launchError: unknown,
+): PracticeLaunchState {
+  return {
+    key,
+    mode,
+    status: "unavailable",
+    launch: null,
+    message: launchError instanceof Error
+      ? `Workspace 时间线接入失败：${launchError.message}`
+      : "Workspace 时间线接入失败。",
+  };
 }
 
 function ResultPanel({
@@ -1494,6 +1806,41 @@ function getLearnerId(): string {
   // Single source of truth for the unified profile key (shared with the
   // learning module) lives in ``lib/learner.ts``.
   return getOrCreateLearnerId();
+}
+
+function buildPracticeFocus(
+  knowledgeId: string | undefined,
+  knowledgeName: string | undefined,
+): CompilerPracticeFocus | undefined {
+  if (!knowledgeId && !knowledgeName) return undefined;
+  return {
+    type: "knowledge_point",
+    id: knowledgeId,
+    label: knowledgeName,
+  };
+}
+
+function timelineMessage(
+  outcome: CompilerExecutionResult["practiceOutcome"] | CompilerJudgeResult["practiceOutcome"],
+  launch: CompilerPracticeLaunch | null,
+): string {
+  if (outcome) {
+    return launch?.taskId
+      ? "本次结果已纳入当前 Task 时间线。"
+      : "本次结果已纳入个人 Workspace 时间线。";
+  }
+  if (launch) {
+    return "本次结果未写入 Workspace 时间线；执行服务故障不会归入练习结果。";
+  }
+  return "本次结果不会进入 Workspace 时间线；旧 Practice 执行能力保持可用。";
+}
+
+function isLaunchScopeError(error: unknown): boolean {
+  return (
+    error instanceof CompilerApiError &&
+    (error.status === 400 || error.status === 404) &&
+    error.message.toLowerCase().includes("launch")
+  );
 }
 
 function formatBytes(value: number | null | undefined): string {

@@ -16,16 +16,37 @@ const nextConfig: NextConfig = {
   // Standalone output: Dockerfile.frontend copies .next/standalone and runs
   // `node server.js` — no `next start` dependency inside the container.
   output: "standalone",
-  async rewrites() {
+  async redirects() {
     return [
       {
-        source: "/student/learning",
-        destination: "/learning",
+        source: "/practice",
+        destination: "/learning/practice",
+        permanent: false,
       },
       {
         source: "/student/practice",
-        destination: "/practice",
+        destination: "/learning/practice",
+        permanent: false,
       },
+      {
+        source: "/portrait",
+        destination: "/learning/portrait",
+        permanent: false,
+      },
+      {
+        source: "/student/portrait",
+        destination: "/learning/portrait",
+        permanent: false,
+      },
+      {
+        source: "/student/learning",
+        destination: "/learning",
+        permanent: false,
+      },
+    ];
+  },
+  async rewrites() {
+    return [
       {
         source: "/student/research",
         destination: "/research",

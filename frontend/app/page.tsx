@@ -205,7 +205,7 @@ export default function HomePage() {
           <h2 className="text-base font-bold text-slate-950 dark:text-zinc-50">直接使用能力</h2>
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <CapabilityLink href="/learning" icon={<BookOpen className="h-5 w-5" />} title="Learning" description="独立学习，结果归入个人工作区。" />
-            <CapabilityLink href="/practice" icon={<Code2 className="h-5 w-5" />} title="Practice" description="独立练习；本切片不写入工作区时间线。" />
+            <CapabilityLink href="/learning/practice" icon={<Code2 className="h-5 w-5" />} title="动手实践" description="从 Learning 进入独立 Practice 执行与判题能力。" />
             <CapabilityLink href="/research" icon={<Microscope className="h-5 w-5" />} title="Research" description="独立科研流程；本切片不改造其持久化。" />
           </div>
         </section>

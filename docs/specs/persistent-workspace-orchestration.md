@@ -4,7 +4,7 @@
 
 | 状态 | 关联决策 | 当前计划 |
 | --- | --- | --- |
-| 已采纳，等待实现 | [Workspace–Task–Capability 产品模型](../decisions/workspace-task-capability-model.md) | [持久工作区实施计划](../plans/persistent-workspace-orchestration-rollout.md) |
+| 已实现，Learning 与 Practice 本地验证完成 | [Workspace–Task–Capability 产品模型](../decisions/workspace-task-capability-model.md) | [持久工作区实施计划](../plans/persistent-workspace-orchestration-rollout.md) |
 
 ## 1. 产品目标
 
@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | Workspace | 一门课程、一个项目、一项研究或个人工作集合 | 保存长期组织边界和最近活动 |
 | Task | 当前希望完成的目标 | 保存目标、成功标准与生命周期 |
-| Capability | Learning、Practice 或 Research | 提供独立业务能力并维护原始产物 |
+| Capability | Learning、Practice 或 Research 的系统能力 | 维护原始产物与权限边界；产品页面不必一一对应 |
 | Activity | 一次可在时间线中找到的工作记录 | 保存来源引用和安全摘要 |
 
 ## 3. 必须成立的用户路径
@@ -31,7 +31,7 @@
 
 ### 3.3 Capability-first
 
-用户直接进入 Practice，运行 Python 文件并获得错误分析。活动先保存到个人工作区且不强制创建 Task。用户之后可以将活动整理到现有 Task，或在目标 Workspace 中新建 Task 后关联。
+用户直接进入 `/learning/practice`，页面取得个人 Workspace 的默认 launch。运行 Python 并获得权威结果后，活动保存到个人工作区且不强制创建 Task。用户之后可以将活动整理到现有 Task，或在目标 Workspace 中新建 Task 后关联。
 
 ## 4. 功能要求
 
@@ -41,8 +41,8 @@
 | 聚焦任务 | Task-first 与 Workspace-first 创建相同语义的 Task |
 | 自由入口 | 没有 Task 时仍可使用任一 Capability，之后可以整理活动 |
 | 统一上下文 | Capability 页面显示当前 Workspace、可选 Task 和明确返回入口 |
-| 活动时间线 | 三个模块的安全摘要出现在同一 Workspace 或 Task 时间线中 |
-| 知识缺口回流 | 错题或代码错误可引用原始来源并回到 Learning |
+| 活动时间线 | Learning、Practice 与 Research 的安全摘要出现在同一 Workspace 或 Task 时间线中 |
+| 知识缺口回流 | QuizAttempt、ConfusionMark 或 PracticeOutcome 可引用原始来源并进入复盘 |
 | 可选建议 | 系统最多突出少量相关下一步，用户可以忽略且不影响完成状态 |
 
 ## 5. 产品不变量
@@ -78,7 +78,7 @@
 
 ## 7. 后续能力
 
-Practice 接入后支持 Capability-first 活动整理；Research 接入后仍保留显式上下文确认；最后再根据已保存 Activity 和知识缺口增加确定性建议。各阶段必须保持三个 Capability 可独立进入。
+Practice 已按 [Learning–Practice Integration Spec](learning-practice-integration.md) 接入 Learning 路由、默认 launch、PracticeOutcome、Activity 和复盘；Research 接入后仍保留显式上下文确认。后续再根据已保存 Activity 和知识缺口增加确定性建议。各阶段保持三个系统 Capability 可独立调用，不要求在全局导航中各占一个入口。
 
 ## 8. 限制
 

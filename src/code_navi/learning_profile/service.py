@@ -13,11 +13,15 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from code_navi.online_compiler.models import PracticeLaunchModel, PracticeOutcomeModel
+
 from .models import ConfusionMarkModel, QuizAttemptModel
 from .schemas import (
     MIN_MASTERY_SAMPLE,
     ConfusionItem,
     ConfusionMarkItem,
+    KnowledgeGapItem,
+    KnowledgeGapResponse,
     MarkRequest,
     MarkResponse,
     ProfileMastery,
@@ -31,6 +35,8 @@ _WEAKNESS_THRESHOLD = 0.6
 
 #: Fixed display order of confusion surfaces in the portrait (三栏).
 _SOURCE_ORDER = ("ppt_page", "explain", "quiz_question")
+_MAX_GAP_LABEL = 160
+_MAX_GAP_SUMMARY = 220
 
 
 def _iso_now() -> str:
@@ -40,6 +46,11 @@ def _iso_now() -> str:
 def _kp_key(knowledge_point: str) -> str:
     """Normalized grouping key — ``UDP``/``udp`` collapse into one group."""
     return knowledge_point.strip().lower()
+
+
+def _trim(value: str | None, *, fallback: str, max_length: int) -> str:
+    text = (value or "").strip() or fallback
+    return text[:max_length]
 
 
 class _GroupIndex:
@@ -191,6 +202,180 @@ class ProfileService:
             weaknesses=weaknesses,
             confusion=confusion,
         )
+
+    def get_knowledge_gaps(
+        self,
+        *,
+        local_profile_id: str,
+        profile_id: str,
+        db: Session,
+        limit: int = 50,
+    ) -> KnowledgeGapResponse:
+        """Project traceable review items from existing facts without writing a new table."""
+        quiz_items = self._quiz_gap_items(profile_id=profile_id, db=db, limit=limit)
+        confusion_items = self._confusion_gap_items(profile_id=profile_id, db=db, limit=limit)
+        practice_items = self._practice_gap_items(
+            local_profile_id=local_profile_id,
+            learner_id=profile_id,
+            db=db,
+            limit=limit,
+        )
+        items = sorted(
+            [*quiz_items, *confusion_items, *practice_items],
+            key=lambda item: item.occurred_at,
+            reverse=True,
+        )[:limit]
+        return KnowledgeGapResponse(
+            local_profile_id=local_profile_id,
+            profile_id=profile_id,
+            generated_at=_iso_now(),
+            items=items,
+        )
+
+    def _quiz_gap_items(
+        self,
+        *,
+        profile_id: str,
+        db: Session,
+        limit: int,
+    ) -> list[KnowledgeGapItem]:
+        rows = (
+            db.query(QuizAttemptModel)
+            .filter(
+                QuizAttemptModel.profile_id == profile_id,
+                QuizAttemptModel.graded.is_(True),
+                QuizAttemptModel.score < QuizAttemptModel.max_score,
+            )
+            .order_by(QuizAttemptModel.created_at.desc(), QuizAttemptModel.id.desc())
+            .limit(limit)
+            .all()
+        )
+        items: list[KnowledgeGapItem] = []
+        for row in rows:
+            gap_kind = "quiz_incorrect" if not row.correct else "quiz_partial_score"
+            score_text = f"{row.score}/{row.max_score}"
+            label = _trim(
+                row.comment,
+                fallback=f"Quiz {row.quiz_id} · {row.question_id}",
+                max_length=_MAX_GAP_LABEL,
+            )
+            items.append(
+                KnowledgeGapItem(
+                    source_type="quiz_attempt",
+                    source_id=row.id,
+                    topic=_trim(row.knowledge_point, fallback="未命名知识点", max_length=512),
+                    label=label,
+                    gap_kind=gap_kind,
+                    occurred_at=row.created_at.isoformat(),
+                    summary=f"理解检查得分 {score_text}，需要回看该题对应知识点。",
+                    source={
+                        "attemptId": row.attempt_id,
+                        "quizId": row.quiz_id,
+                        "questionId": row.question_id,
+                        "questionType": row.question_type,
+                        "sessionId": row.session_id,
+                        "score": row.score,
+                        "maxScore": row.max_score,
+                        "gradedBy": row.graded_by,
+                    },
+                )
+            )
+        return items
+
+    def _confusion_gap_items(
+        self,
+        *,
+        profile_id: str,
+        db: Session,
+        limit: int,
+    ) -> list[KnowledgeGapItem]:
+        rows = (
+            db.query(ConfusionMarkModel)
+            .filter(
+                ConfusionMarkModel.profile_id == profile_id,
+                ConfusionMarkModel.status == "confused",
+            )
+            .order_by(ConfusionMarkModel.updated_at.desc(), ConfusionMarkModel.id.desc())
+            .limit(limit)
+            .all()
+        )
+        items: list[KnowledgeGapItem] = []
+        for row in rows:
+            label = _trim(row.label, fallback=row.source_ref, max_length=_MAX_GAP_LABEL)
+            items.append(
+                KnowledgeGapItem(
+                    source_type="confusion_mark",
+                    source_id=row.id,
+                    topic=_trim(row.knowledge_point, fallback="未命名知识点", max_length=512),
+                    label=label,
+                    gap_kind="self_reported_confusion",
+                    occurred_at=row.updated_at.isoformat(),
+                    summary=f"用户在 {row.source_type} 上标记不懂：{label}",
+                    source={
+                        "sessionId": row.session_id,
+                        "surfaceType": row.source_type,
+                        "surfaceRef": row.source_ref,
+                    },
+                )
+            )
+        return items
+
+    def _practice_gap_items(
+        self,
+        *,
+        local_profile_id: str,
+        learner_id: str,
+        db: Session,
+        limit: int,
+    ) -> list[KnowledgeGapItem]:
+        rows = (
+            db.query(PracticeOutcomeModel, PracticeLaunchModel)
+            .join(PracticeLaunchModel, PracticeOutcomeModel.launch_id == PracticeLaunchModel.id)
+            .filter(
+                PracticeOutcomeModel.local_profile_id == local_profile_id,
+                PracticeOutcomeModel.learner_id == learner_id,
+                PracticeOutcomeModel.knowledge_gap_kind.isnot(None),
+            )
+            .order_by(PracticeOutcomeModel.created_at.desc(), PracticeOutcomeModel.id.desc())
+            .limit(limit)
+            .all()
+        )
+        items: list[KnowledgeGapItem] = []
+        for row, launch in rows:
+            topic = _trim(
+                launch.focus_label or row.problem_id,
+                fallback=row.category or "Practice",
+                max_length=512,
+            )
+            label = _trim(row.summary, fallback=f"Practice {row.mode}", max_length=_MAX_GAP_LABEL)
+            items.append(
+                KnowledgeGapItem(
+                    source_type="practice_outcome",
+                    source_id=row.id,
+                    topic=topic,
+                    label=label,
+                    gap_kind=row.knowledge_gap_kind or row.category,
+                    occurred_at=row.created_at.isoformat(),
+                    summary=_trim(
+                        row.summary,
+                        fallback="Practice 结果需要复盘。",
+                        max_length=_MAX_GAP_SUMMARY,
+                    ),
+                    source={
+                        "launchId": row.launch_id,
+                        "workspaceId": row.workspace_id,
+                        "taskId": row.task_id,
+                        "mode": row.mode,
+                        "problemId": row.problem_id,
+                        "problemVersion": row.problem_version,
+                        "verdict": row.verdict,
+                        "category": row.category,
+                        "severity": row.severity,
+                        "score": row.score,
+                    },
+                )
+            )
+        return items
 
     def set_mark(self, request: MarkRequest, db: Session) -> MarkResponse:
         """Upsert the binary 不懂/懂了 toggle for one surface.

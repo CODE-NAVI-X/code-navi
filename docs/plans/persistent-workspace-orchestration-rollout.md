@@ -6,15 +6,15 @@
 
 ## 1. 交付策略
 
-每次只接入一个真实 Capability，先跑通可恢复的端到端闭环，再确定下一阶段需要稳定的 API 和数据字段。当前执行项是 **Persistent Workspace Foundation**，只接入 Learning。
+每次只接入一个真实 Capability，先跑通可恢复的端到端闭环，再确定下一阶段需要稳定的 API 和数据字段。Persistent Workspace Foundation 与 Practice Capability-first 已完成本地验证；当前后续项是 Research 接入、确定性建议与兼容收敛。
 
 | 阶段 | 范围 | 状态 |
 | --- | --- | --- |
 | 文档基线 | 产品模型、Spec、计划与产品范围对齐 | 已完成 |
 | Persistent Workspace Foundation | Workspace、Task、Learning Activity 与基础页面 | 本地验证完成 |
-| Practice Capability-first | 无 Task 运行、Activity 整理与上下文条 | 待实现 |
+| Practice Capability-first | Learning 内动手实践、默认 launch、权威结果与 Activity | 本地验证完成 |
 | Research 可选接入 | Research 来源引用、显式上下文确认与时间线 | 待实现 |
-| 知识缺口与可选建议 | 持久化缺口与确定性下一步建议 | 待实现 |
+| 知识缺口与可选建议 | 三来源复盘投影已完成；确定性下一步建议待实现 | 进行中 |
 | 交互收敛 | 统一返回语义、导航状态与兼容状态清理 | 待实现 |
 
 ## 2. 已完成纵向切片
@@ -61,21 +61,21 @@ frontend/lib/api/
 
 ## 3. 后续切片
 
-### 3.1 Practice Capability-first
+### 3.1 Practice Capability-first（已完成）
 
-Practice 成功运行或判题后写入安全 Activity。用户可以将无 Task Activity 整理到现有或新 Task；整理只更新索引归属，不复制源代码、输入或隐藏测试。
+Practice 按 [Learning–Practice 集成计划](learning-practice-integration-rollout.md) 先持久化安全的权威 PracticeOutcome，再派生 Activity。正常结束、错误答案和用户代码错误都可以形成 Activity；请求校验失败和执行服务故障不形成用户知识缺口。用户可以将无 Task Activity 整理到现有或新 Task；整理只更新索引归属，不复制源代码、输入或隐藏测试。
 
 ### 3.2 Research 可选接入
 
 Research Conversation 和用户保存的 Evidence 产生来源 Activity。Task 引用不替代 `context-transfer.v1`，也不继承联网、模型或代码执行权限。
 
-### 3.3 知识缺口与可选建议
+### 3.3 知识缺口与可选建议（复盘投影已完成）
 
-持久化 Quiz 错题与 Practice 错误对应的知识缺口，再根据已保存事实运行确定性推荐。推荐只提供少量下一步，不自动调用 Capability，Task 完成仍由目标和成功标准决定。
+当前已将 QuizAttempt、ConfusionMark 与 PracticeOutcome 投影为保留来源的知识缺口。后续根据已保存事实运行确定性推荐；推荐只提供少量下一步，不自动调用 Capability，Task 完成仍由目标和成功标准决定。
 
 ### 3.4 交互与兼容收敛
 
-统一三个 Capability 的上下文条和返回语义，将 `FlowPayload` 收敛为即时恢复缓存，并在实现事实变化后更新 `architecture/system.md` 与 `architecture/frontend.md`。
+统一 Learning 与 Research 产品入口的上下文条和返回语义；Practice 作为 Learning 内部工作方式继续显示其独立执行来源。规范路由稳定后，将 `FlowPayload` 收敛为即时恢复缓存，并在实现事实变化后更新 `architecture/system.md` 与 `architecture/frontend.md`。
 
 ## 4. 已知边界风险
 

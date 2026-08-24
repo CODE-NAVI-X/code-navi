@@ -22,6 +22,7 @@ import {
   BookOpenCheck,
   Check,
   ChevronDown,
+  Code2,
   FileQuestion,
   HelpCircle,
   Inbox,
@@ -36,11 +37,12 @@ import {
 import type {
   ConfusionItem,
   ConfusionMarkItem,
+  KnowledgeGapItem,
   MarkSourceType,
   ProfileMastery,
   ProfileResponse,
 } from "@/lib/api/profile";
-import { fetchProfile, setConfusionMark } from "@/lib/api/profile";
+import { fetchKnowledgeGaps, fetchProfile, setConfusionMark } from "@/lib/api/profile";
 import { getLearningSessionId } from "@/lib/api/learning";
 import { getOrCreateLearnerId } from "@/lib/learner";
 
@@ -116,6 +118,23 @@ const SOURCE_LABELS: Record<MarkSourceType, string> = {
   quiz_question: "练习题",
 };
 
+const GAP_SOURCE_LABELS: Record<KnowledgeGapItem["sourceType"], string> = {
+  quiz_attempt: "理解检查",
+  confusion_mark: "不懂标记",
+  practice_outcome: "动手实践",
+};
+
+const GAP_KIND_LABELS: Record<string, string> = {
+  quiz_incorrect: "答题错误",
+  quiz_partial_score: "部分得分",
+  self_reported_confusion: "主动标记不懂",
+  syntax_error: "语法错误",
+  runtime_error: "运行错误",
+  time_limit: "运行超时",
+  output_limit: "输出超限",
+  wrong_answer: "答案错误",
+};
+
 //: Fixed column order (名词解析 → PPT 页 → 练习题) with per-surface icons.
 const SURFACE_COLUMNS: {
   type: MarkSourceType;
@@ -130,6 +149,18 @@ function formatMarkedAt(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatOccurredAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -262,6 +293,39 @@ function ConfusionRow({
   );
 }
 
+function KnowledgeGapRow({ item }: { item: KnowledgeGapItem }) {
+  const sourceLabel = GAP_SOURCE_LABELS[item.sourceType];
+  const kindLabel = GAP_KIND_LABELS[item.gapKind] ?? item.gapKind;
+  return (
+    <li className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-4 dark:border-zinc-800 dark:bg-zinc-800/30">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300">
+              {sourceLabel}
+            </span>
+            <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+              {kindLabel}
+            </span>
+          </div>
+          <p className="mt-2 truncate text-sm font-semibold text-slate-900 dark:text-zinc-100">
+            {item.topic}
+          </p>
+          <p className="mt-1 break-words text-xs leading-relaxed text-slate-600 dark:text-zinc-300">
+            {item.summary || item.label}
+          </p>
+        </div>
+        <span className="shrink-0 text-[10px] text-slate-400 dark:text-zinc-500">
+          {formatOccurredAt(item.occurredAt)}
+        </span>
+      </div>
+      <p className="mt-2 truncate text-[10px] text-slate-400 dark:text-zinc-500">
+        {item.sourceType}:{item.sourceId}
+      </p>
+    </li>
+  );
+}
+
 function SkeletonBlock() {
   return (
     <div className="animate-pulse space-y-3">
@@ -303,6 +367,7 @@ function SectionCard({
 
 export default function PortraitPage() {
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
+  const [knowledgeGaps, setKnowledgeGaps] = useState<KnowledgeGapItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -313,9 +378,12 @@ export default function PortraitPage() {
   useEffect(() => {
     let cancelled = false;
     const profileId = getOrCreateLearnerId();
-    fetchProfile(profileId)
-      .then((data) => {
-        if (!cancelled) setProfile(data);
+    Promise.all([fetchProfile(profileId), fetchKnowledgeGaps(profileId)])
+      .then(([profileData, gapData]) => {
+        if (!cancelled) {
+          setProfile(profileData);
+          setKnowledgeGaps(gapData.items);
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -344,6 +412,7 @@ export default function PortraitPage() {
   }
 
   const isEmpty = profile && profile.mastery.length === 0 && profile.confusion.length === 0;
+  const hasKnowledgeGaps = knowledgeGaps.length > 0;
   const hasMastery = (profile?.mastery.length ?? 0) > 0;
 
   return (
@@ -367,7 +436,7 @@ export default function PortraitPage() {
               我的学习掌握情况
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-500 dark:text-zinc-400">
-              基于练习判分与「不懂」标记，按匿名 profile_id 跨会话聚合。数据仅保存在本浏览器，不代表用户身份。
+              基于理解检查、动手实践结果与「不懂」标记，按本地资料与匿名 profile_id 聚合。它不是账号权限或跨设备身份。
             </p>
           </div>
           <button
@@ -402,20 +471,39 @@ export default function PortraitPage() {
       )}
 
       {/* Empty state — never a fake score */}
-      {!loading && !error && isEmpty && (
+      {!loading && !error && isEmpty && !hasKnowledgeGaps && (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 py-20 text-center dark:border-zinc-800">
           <Inbox className="mb-3 h-10 w-10 text-slate-300 dark:text-zinc-600" strokeWidth={1.5} />
           <p className="text-sm font-semibold text-slate-600 dark:text-zinc-300">
             还没有学习记录
           </p>
           <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-400 dark:text-zinc-500">
-            完成一次练习题判分，或点击学习页面的「标记不懂」，这里就会生成你的学情画像。
+            完成一次理解检查、动手实践，或点击学习页面的「标记不懂」，这里就会生成可追溯复盘项。
           </p>
         </div>
       )}
 
-      {!loading && !error && profile && !isEmpty && (
+      {!loading && !error && profile && (!isEmpty || hasKnowledgeGaps) && (
         <div className="space-y-6">
+          <SectionCard
+            icon={<Code2 className="h-4 w-4 text-cyan-600" strokeWidth={1.5} />}
+            title="复盘知识缺口"
+            hint="按来源可追溯"
+          >
+            {hasKnowledgeGaps ? (
+              <ul className="space-y-2.5">
+                {knowledgeGaps.map((item) => (
+                  <KnowledgeGapRow key={`${item.sourceType}:${item.sourceId}`} item={item} />
+                ))}
+              </ul>
+            ) : (
+              <div className="flex items-center gap-2 text-xs text-slate-400 dark:text-zinc-500">
+                <Target className="h-4 w-4" strokeWidth={1.5} />
+                暂无可追溯复盘项。
+              </div>
+            )}
+          </SectionCard>
+
           {/* Mastery bars */}
           {hasMastery && (
             <SectionCard
@@ -513,7 +601,7 @@ export default function PortraitPage() {
       {!loading && profile && (
         <p className="mt-8 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-400 dark:text-zinc-600">
           <Activity className="h-3.5 w-3.5" strokeWidth={1.5} />
-          画像数据全部来自真实判分与标记，样本不足时如实提示，不作任何编造。
+          画像与复盘只读取已有事实；Practice 复盘不展示源码、stdin、隐藏测试或 raw 输出。
         </p>
       )}
     </div>

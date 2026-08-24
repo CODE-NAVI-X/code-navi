@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,7 +43,12 @@ from code_navi.learning_profile.service import (  # noqa: E402
     ProfileService,
     build_student_profile_prompt,
 )
+from code_navi.online_compiler.models import (  # noqa: E402
+    PracticeLaunchModel,
+    PracticeOutcomeModel,
+)
 from code_navi.server import app  # noqa: E402
+from code_navi.workspaces.models import WorkspaceModel  # noqa: E402
 
 PROFILE_A = "22222222-2222-4222-8222-222222222222"
 PROFILE_B = "33333333-3333-4333-8333-333333333333"
@@ -133,6 +139,65 @@ def _add_mark(
         )
     )
     db.commit()
+
+
+def _add_practice_outcome(
+    db: Session,
+    *,
+    local_profile_id: str = "profile-owner",
+    learner_id: str = PROFILE_A,
+    focus_label: str = "循环调试",
+    summary: str = "运行时错误：ZeroDivisionError",
+    knowledge_gap_kind: str | None = "runtime_error",
+) -> PracticeOutcomeModel:
+    workspace = WorkspaceModel(
+        owner_scope_id=local_profile_id,
+        personal_owner_scope_id=None,
+        title="Practice workspace",
+        kind="general",
+    )
+    db.add(workspace)
+    db.flush()
+    launch = PracticeLaunchModel(
+        local_profile_id=local_profile_id,
+        learner_id=learner_id,
+        workspace_id=workspace.id,
+        task_id=None,
+        source_activity_id=None,
+        capability="practice",
+        mode="free_run",
+        focus_type="topic",
+        focus_id="loop-debugging",
+        focus_label=focus_label,
+        expires_at=datetime.now(UTC) + timedelta(days=7),
+    )
+    db.add(launch)
+    db.flush()
+    outcome = PracticeOutcomeModel(
+        launch_id=launch.id,
+        local_profile_id=local_profile_id,
+        learner_id=learner_id,
+        workspace_id=workspace.id,
+        task_id=None,
+        mode="execute",
+        idempotency_key=str(uuid.uuid4()),
+        problem_id=None,
+        problem_version=None,
+        verdict="runtime_error",
+        category="runtime_error",
+        severity="error",
+        score=None,
+        summary=summary,
+        safe_result_data=(
+            '{"kind":"compiler_execute.v1","stdout":"secret stdout",'
+            '"stderr":"secret stderr","source":"print(secret)","stdin":"private stdin"}'
+        ),
+        knowledge_gap_kind=knowledge_gap_kind,
+    )
+    db.add(outcome)
+    db.commit()
+    db.refresh(outcome)
+    return outcome
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +490,101 @@ class TestProfileEndpoints:
         assert set(confusion[0]["by_type"]) == {"quiz_question"}
         item = confusion[0]["by_type"]["quiz_question"][0]
         assert item["label"] == "quiz_question:集合:q1"  # falls back to source_ref
+
+
+class TestKnowledgeGapProjection:
+    def test_learning_knowledge_gaps_merges_traceable_sources(
+        self, client: TestClient, db: Session
+    ) -> None:
+        _add_attempt(db, knowledge_point="集合", score=0, max_score=10)
+        _add_mark(
+            db,
+            knowledge_point="函数",
+            source_ref="explain:函数",
+            source_type="explain",
+            status="confused",
+        )
+        practice = _add_practice_outcome(db)
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["localProfileId"] == "profile-owner"
+        assert data["profileId"] == PROFILE_A
+        items = data["items"]
+        by_source = {item["sourceType"]: item for item in items}
+
+        quiz = by_source["quiz_attempt"]
+        assert quiz["sourceId"]
+        assert quiz["topic"] == "集合"
+        assert quiz["gapKind"] == "quiz_incorrect"
+        assert quiz["source"]["score"] == 0
+        assert quiz["source"]["maxScore"] == 10
+
+        mark = by_source["confusion_mark"]
+        assert mark["topic"] == "函数"
+        assert mark["gapKind"] == "self_reported_confusion"
+        assert mark["source"]["surfaceRef"] == "explain:函数"
+
+        practice_item = by_source["practice_outcome"]
+        assert practice_item["sourceId"] == practice.id
+        assert practice_item["topic"] == "循环调试"
+        assert practice_item["gapKind"] == "runtime_error"
+        assert practice_item["source"]["workspaceId"] == practice.workspace_id
+
+    def test_learning_knowledge_gaps_scopes_practice_by_local_profile(
+        self, client: TestClient, db: Session
+    ) -> None:
+        _add_practice_outcome(db, local_profile_id="profile-owner", learner_id=PROFILE_A)
+        _add_practice_outcome(
+            db,
+            local_profile_id="other-owner",
+            learner_id=PROFILE_A,
+            focus_label="不应显示",
+        )
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        practice_items = [
+            item for item in response.json()["items"] if item["sourceType"] == "practice_outcome"
+        ]
+        assert len(practice_items) == 1
+        assert practice_items[0]["topic"] == "循环调试"
+
+    def test_learning_knowledge_gaps_does_not_return_practice_sensitive_fields(
+        self, client: TestClient, db: Session
+    ) -> None:
+        _add_practice_outcome(db, summary="运行时错误摘要")
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        body = response.text
+        assert "secret stdout" not in body
+        assert "secret stderr" not in body
+        assert "print(secret)" not in body
+        assert "private stdin" not in body
+        assert "运行时错误摘要" in body
+
+    def test_learning_knowledge_gaps_invalid_profile_id_is_422(
+        self, client: TestClient
+    ) -> None:
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            "?local_profile_id=profile-owner&profile_id=not-a-uuid"
+        )
+        assert response.status_code == 422
 
 
 class TestGradeToProfileFlow:

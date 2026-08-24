@@ -8,10 +8,12 @@
  *
  * Endpoints:
  *   POST /api/v1/learning/marks   → toggle a 不懂/懂了 mark on one surface
+ *   GET  /api/v1/learning/knowledge-gaps → current local review projection
  *   GET  /api/v1/profile?profile_id=… → aggregate the anonymous portrait
  */
 
 import { API_BASE, getLearningSessionId } from "@/lib/api/learning";
+import { getLocalProfileId } from "@/lib/api/workspaces";
 
 // ── Data types (mirrors learning_profile/schemas.py) ──────────────────────────
 
@@ -83,6 +85,29 @@ export interface ProfileResponse {
   strengths: string[];
   weaknesses: string[];
   confusion: ConfusionItem[];
+}
+
+export type KnowledgeGapSourceType =
+  | "quiz_attempt"
+  | "confusion_mark"
+  | "practice_outcome";
+
+export interface KnowledgeGapItem {
+  sourceType: KnowledgeGapSourceType;
+  sourceId: string;
+  topic: string;
+  label: string;
+  gapKind: string;
+  occurredAt: string;
+  summary: string;
+  source: Record<string, string | number | boolean | null>;
+}
+
+export interface KnowledgeGapResponse {
+  localProfileId: string;
+  profileId: string;
+  generatedAt: string;
+  items: KnowledgeGapItem[];
 }
 
 /**
@@ -190,6 +215,43 @@ export async function fetchProfile(
 
   const body: unknown = await response.json();
   return validateProfileResponse(body);
+}
+
+/**
+ * GET /api/v1/learning/knowledge-gaps — traceable current review items.
+ * The backend scopes PracticeOutcome by localProfileId + profileId and reads
+ * QuizAttempt/ConfusionMark by the same anonymous profileId used by the
+ * existing portrait.
+ */
+export async function fetchKnowledgeGaps(
+  profileId: string,
+): Promise<KnowledgeGapResponse> {
+  const params = new URLSearchParams({
+    local_profile_id: getLocalProfileId(),
+    profile_id: profileId,
+  });
+  const url = `${API_BASE}/api/v1/learning/knowledge-gaps?${params.toString()}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Accept: "application/json" } });
+  } catch (networkError) {
+    throw new ProfileApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new ProfileApiError(
+      response.status,
+      detail ?? `Request failed with status ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response.json();
+  return validateKnowledgeGapResponse(body);
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
@@ -306,4 +368,44 @@ function validateProfileResponse(raw: unknown): ProfileResponse {
     weaknesses: strList(obj.weaknesses),
     confusion,
   };
+}
+
+function validateKnowledgeGapResponse(raw: unknown): KnowledgeGapResponse {
+  if (!raw || typeof raw !== "object") {
+    throw new ProfileApiError(502, "Server returned a non-object response.");
+  }
+  const obj = raw as Record<string, unknown>;
+  const items: KnowledgeGapItem[] = [];
+  if (Array.isArray(obj.items)) {
+    for (const item of obj.items) {
+      if (item && typeof item === "object") {
+        const gap = item as Record<string, unknown>;
+        const source =
+          gap.source && typeof gap.source === "object" && !Array.isArray(gap.source)
+            ? (gap.source as Record<string, string | number | boolean | null>)
+            : {};
+        items.push({
+          sourceType: parseGapSourceType(gap.sourceType),
+          sourceId: typeof gap.sourceId === "string" ? gap.sourceId : "",
+          topic: typeof gap.topic === "string" ? gap.topic : "",
+          label: typeof gap.label === "string" ? gap.label : "",
+          gapKind: typeof gap.gapKind === "string" ? gap.gapKind : "",
+          occurredAt: typeof gap.occurredAt === "string" ? gap.occurredAt : "",
+          summary: typeof gap.summary === "string" ? gap.summary : "",
+          source,
+        });
+      }
+    }
+  }
+  return {
+    localProfileId: typeof obj.localProfileId === "string" ? obj.localProfileId : "",
+    profileId: typeof obj.profileId === "string" ? obj.profileId : "",
+    generatedAt: typeof obj.generatedAt === "string" ? obj.generatedAt : "",
+    items,
+  };
+}
+
+function parseGapSourceType(value: unknown): KnowledgeGapSourceType {
+  if (value === "quiz_attempt" || value === "confusion_mark") return value;
+  return "practice_outcome";
 }
