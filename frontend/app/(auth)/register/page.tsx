@@ -12,11 +12,11 @@ import { Alert, AlertDescription } from "@/components/ui/Alert";
 import { AlertCircle, Eye, EyeOff, Lock, Mail, Sparkles, User } from "lucide-react";
 
 function sanitizeNextUrl(next: string | null): string {
-  if (!next) return "/workspaces";
+  if (!next) return "/";
   if (next.startsWith("/") && !next.startsWith("//") && !next.includes(":")) {
     return next;
   }
-  return "/workspaces";
+  return "/";
 }
 
 function RegisterForm() {

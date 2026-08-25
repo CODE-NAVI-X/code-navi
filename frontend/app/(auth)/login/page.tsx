@@ -12,12 +12,12 @@ import { Alert, AlertDescription } from "@/components/ui/Alert";
 import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail, UserCheck } from "lucide-react";
 
 function sanitizeNextUrl(next: string | null): string {
-  if (!next) return "/workspaces";
+  if (!next) return "/";
   // Protect against open redirects: only allow relative paths starting with / (and not //)
   if (next.startsWith("/") && !next.startsWith("//") && !next.includes(":")) {
     return next;
   }
-  return "/workspaces";
+  return "/";
 }
 
 function LoginForm() {
