@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 // KaTeX math rendering for the knowledge-PPT presentation feature.
 import "katex/dist/katex.min.css";
+import { AuthProvider } from "@/lib/context/auth-context";
 
 export const metadata: Metadata = {
   title: "Code Navi",
@@ -15,7 +16,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

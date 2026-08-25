@@ -1004,6 +1004,8 @@ function validateConversationResponse(data: unknown): ResearchConversationRespon
   return data as ResearchConversationResponse;
 }
 
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -1012,16 +1014,23 @@ async function request<T>(
   let response: Response;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf && init?.method && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method.toUpperCase())) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
       cache: "no-store",
+      credentials: "include",
       signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
+      headers,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {

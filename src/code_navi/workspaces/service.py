@@ -48,18 +48,52 @@ class LearningWorkspaceContext:
 class WorkspaceService:
     """Own local-profile scoping and source-derived Activity rules."""
 
+    @staticmethod
+    def _ownership_filter(
+        model_cls,
+        owned_ids: list[str] | None,
+        local_profile_id: str | None = None,
+    ):
+        """Return SQLAlchemy filter condition for owned principals or fallback."""
+        if owned_ids:
+            return model_cls.owner_principal_id.in_(owned_ids) | (
+                model_cls.owner_principal_id.is_(None)
+                & model_cls.owner_scope_id.in_(owned_ids)
+            )
+        if local_profile_id:
+            return (model_cls.owner_scope_id == local_profile_id) | (
+                model_cls.owner_principal_id == local_profile_id
+            )
+        return model_cls.id == ""
+
     def get_or_create_personal_workspace(
         self,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
+        *,
+        principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
     ) -> WorkspaceModel:
-        existing = self._personal_workspace(local_profile_id, db)
+        if owned_ids:
+            effective_ids = owned_ids
+        elif principal_id:
+            effective_ids = [principal_id]
+        elif local_profile_id:
+            effective_ids = [local_profile_id]
+        else:
+            effective_ids = []
+        existing = self._personal_workspace(
+            local_profile_id, db, principal_id=principal_id, owned_ids=effective_ids
+        )
         if existing is not None:
             return existing
 
+        candidate_owner_principal = principal_id or (effective_ids[0] if effective_ids else None)
+        candidate_scope = local_profile_id or candidate_owner_principal or "default"
         candidate = WorkspaceModel(
-            owner_scope_id=local_profile_id,
-            personal_owner_scope_id=local_profile_id,
+            owner_scope_id=candidate_scope,
+            personal_owner_scope_id=candidate_scope,
+            owner_principal_id=candidate_owner_principal,
             title=_PERSONAL_WORKSPACE_TITLE,
             kind="personal",
         )
@@ -70,7 +104,9 @@ class WorkspaceService:
                 db.add(candidate)
                 db.flush()
         except IntegrityError:
-            existing = self._personal_workspace(local_profile_id, db)
+            existing = self._personal_workspace(
+                local_profile_id, db, principal_id=principal_id, owned_ids=effective_ids
+            )
             if existing is not None:
                 return existing
             raise
@@ -80,9 +116,13 @@ class WorkspaceService:
         self,
         request: CreateWorkspaceRequest,
         db: Session,
+        *,
+        principal_id: str | None = None,
     ) -> WorkspaceResponse:
+        owner_principal = principal_id or request.local_profile_id
         workspace = WorkspaceModel(
-            owner_scope_id=request.local_profile_id,
+            owner_scope_id=request.local_profile_id or owner_principal or "default",
+            owner_principal_id=owner_principal,
             title=request.title,
             kind=request.kind,
             description=request.description,
@@ -94,17 +134,19 @@ class WorkspaceService:
 
     def list_workspaces(
         self,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
         *,
+        owned_ids: list[str] | None = None,
         limit: int = _DEFAULT_LIST_LIMIT,
         offset: int = 0,
     ) -> list[WorkspaceResponse]:
+        filter_cond = self._ownership_filter(WorkspaceModel, owned_ids, local_profile_id)
         return [
             self.workspace_response(workspace)
             for workspace in (
                 db.query(WorkspaceModel)
-                .filter(WorkspaceModel.owner_scope_id == local_profile_id)
+                .filter(filter_cond)
                 .order_by(WorkspaceModel.updated_at.desc(), WorkspaceModel.id.desc())
                 .offset(offset)
                 .limit(self._limit(limit))
@@ -115,14 +157,17 @@ class WorkspaceService:
     def get_workspace(
         self,
         workspace_id: str,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> WorkspaceModel:
+        filter_cond = self._ownership_filter(WorkspaceModel, owned_ids, local_profile_id)
         workspace = (
             db.query(WorkspaceModel)
             .filter(
                 WorkspaceModel.id == workspace_id,
-                WorkspaceModel.owner_scope_id == local_profile_id,
+                filter_cond,
             )
             .first()
         )
@@ -130,11 +175,28 @@ class WorkspaceService:
             raise WorkspaceNotFoundError(workspace_id)
         return workspace
 
-    def create_task(self, request: CreateTaskRequest, db: Session) -> TaskResponse:
+    def create_task(
+        self,
+        request: CreateTaskRequest,
+        db: Session,
+        *,
+        principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> TaskResponse:
         workspace = (
-            self.get_workspace(request.workspace_id, request.local_profile_id, db)
+            self.get_workspace(
+                request.workspace_id,
+                request.local_profile_id,
+                db,
+                owned_ids=owned_ids,
+            )
             if request.workspace_id
-            else self.get_or_create_personal_workspace(request.local_profile_id, db)
+            else self.get_or_create_personal_workspace(
+                request.local_profile_id,
+                db,
+                principal_id=principal_id,
+                owned_ids=owned_ids,
+            )
         )
         title = request.title or request.goal[:200]
         task = TaskModel(
@@ -150,13 +212,21 @@ class WorkspaceService:
         db.refresh(task)
         return self.task_response(task)
 
-    def get_task(self, task_id: str, local_profile_id: str, db: Session) -> TaskModel:
+    def get_task(
+        self,
+        task_id: str,
+        local_profile_id: str | None,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> TaskModel:
+        filter_cond = self._ownership_filter(WorkspaceModel, owned_ids, local_profile_id)
         task = (
             db.query(TaskModel)
             .join(WorkspaceModel, TaskModel.workspace_id == WorkspaceModel.id)
             .filter(
                 TaskModel.id == task_id,
-                WorkspaceModel.owner_scope_id == local_profile_id,
+                filter_cond,
             )
             .first()
         )
@@ -167,13 +237,14 @@ class WorkspaceService:
     def list_workspace_tasks(
         self,
         workspace_id: str,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
         *,
+        owned_ids: list[str] | None = None,
         limit: int = _DEFAULT_LIST_LIMIT,
         offset: int = 0,
     ) -> list[TaskResponse]:
-        self.get_workspace(workspace_id, local_profile_id, db)
+        self.get_workspace(workspace_id, local_profile_id, db, owned_ids=owned_ids)
         return [
             self.task_response(task)
             for task in (
@@ -188,17 +259,19 @@ class WorkspaceService:
 
     def list_recent_tasks(
         self,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
         *,
+        owned_ids: list[str] | None = None,
         limit: int = _DEFAULT_LIST_LIMIT,
     ) -> list[TaskResponse]:
+        filter_cond = self._ownership_filter(WorkspaceModel, owned_ids, local_profile_id)
         return [
             self.task_response(task)
             for task in (
                 db.query(TaskModel)
                 .join(WorkspaceModel, TaskModel.workspace_id == WorkspaceModel.id)
-                .filter(WorkspaceModel.owner_scope_id == local_profile_id)
+                .filter(filter_cond)
                 .order_by(TaskModel.updated_at.desc(), TaskModel.id.desc())
                 .limit(self._limit(limit))
                 .all()
@@ -208,13 +281,14 @@ class WorkspaceService:
     def list_workspace_activities(
         self,
         workspace_id: str,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
         *,
+        owned_ids: list[str] | None = None,
         limit: int = _DEFAULT_LIST_LIMIT,
         offset: int = 0,
     ) -> list[ActivityResponse]:
-        self.get_workspace(workspace_id, local_profile_id, db)
+        self.get_workspace(workspace_id, local_profile_id, db, owned_ids=owned_ids)
         return self._activities_for(
             db.query(WorkspaceActivityModel).filter(
                 WorkspaceActivityModel.workspace_id == workspace_id
@@ -226,13 +300,14 @@ class WorkspaceService:
     def list_task_activities(
         self,
         task_id: str,
-        local_profile_id: str,
+        local_profile_id: str | None,
         db: Session,
         *,
+        owned_ids: list[str] | None = None,
         limit: int = _DEFAULT_LIST_LIMIT,
         offset: int = 0,
     ) -> list[ActivityResponse]:
-        self.get_task(task_id, local_profile_id, db)
+        self.get_task(task_id, local_profile_id, db, owned_ids=owned_ids)
         return self._activities_for(
             db.query(WorkspaceActivityModel).filter(WorkspaceActivityModel.task_id == task_id),
             limit,
@@ -242,25 +317,37 @@ class WorkspaceService:
     def resolve_learning_context(
         self,
         *,
-        local_profile_id: str,
+        local_profile_id: str | None,
         workspace_id: str | None,
         task_id: str | None,
         db: Session,
+        principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
     ) -> LearningWorkspaceContext:
-        task = self.get_task(task_id, local_profile_id, db) if task_id else None
+        task = (
+            self.get_task(task_id, local_profile_id, db, owned_ids=owned_ids)
+            if task_id
+            else None
+        )
         if task is not None:
             if workspace_id and workspace_id != task.workspace_id:
                 raise WorkspaceConflictError("Task does not belong to the requested Workspace.")
-            workspace = self.get_workspace(task.workspace_id, local_profile_id, db)
+            workspace = self.get_workspace(
+                task.workspace_id, local_profile_id, db, owned_ids=owned_ids
+            )
             return LearningWorkspaceContext(workspace=workspace, task=task)
 
         if workspace_id:
             return LearningWorkspaceContext(
-                workspace=self.get_workspace(workspace_id, local_profile_id, db),
+                workspace=self.get_workspace(
+                    workspace_id, local_profile_id, db, owned_ids=owned_ids
+                ),
                 task=None,
             )
         return LearningWorkspaceContext(
-            workspace=self.get_or_create_personal_workspace(local_profile_id, db),
+            workspace=self.get_or_create_personal_workspace(
+                local_profile_id, db, principal_id=principal_id, owned_ids=owned_ids
+            ),
             task=None,
         )
 
@@ -380,13 +467,46 @@ class WorkspaceService:
             created_at=activity.created_at,
         )
 
-    @staticmethod
-    def _personal_workspace(local_profile_id: str, db: Session) -> WorkspaceModel | None:
-        return (
-            db.query(WorkspaceModel)
-            .filter(WorkspaceModel.personal_owner_scope_id == local_profile_id)
-            .first()
-        )
+    @classmethod
+    def _personal_workspace(
+        cls,
+        local_profile_id: str | None,
+        db: Session,
+        *,
+        principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> WorkspaceModel | None:
+        query = db.query(WorkspaceModel).filter(WorkspaceModel.kind == "personal")
+        if owned_ids:
+            query = query.filter(
+                (WorkspaceModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (WorkspaceModel.owner_principal_id.is_(None))
+                    & (
+                        WorkspaceModel.personal_owner_scope_id.in_(owned_ids)
+                        | WorkspaceModel.owner_scope_id.in_(owned_ids)
+                    )
+                )
+            )
+        elif principal_id:
+            query = query.filter(
+                (WorkspaceModel.owner_principal_id == principal_id)
+                | (
+                    (WorkspaceModel.owner_principal_id.is_(None))
+                    & (
+                        (WorkspaceModel.personal_owner_scope_id == principal_id)
+                        | (WorkspaceModel.owner_scope_id == principal_id)
+                    )
+                )
+            )
+        elif local_profile_id:
+            query = query.filter(
+                (WorkspaceModel.personal_owner_scope_id == local_profile_id)
+                | (WorkspaceModel.owner_scope_id == local_profile_id)
+            )
+        else:
+            return None
+        return query.order_by(WorkspaceModel.updated_at.desc(), WorkspaceModel.id.desc()).first()
 
     def _activities_for(self, query, limit: int, offset: int) -> list[ActivityResponse]:
         return [

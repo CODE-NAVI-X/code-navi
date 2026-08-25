@@ -1,39 +1,60 @@
 "use client";
 
 import { Suspense, useEffect, type ReactNode } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { getLearningSessionId } from "@/lib/api/learning";
+import { useAuth } from "@/lib/context/auth-context";
 
-/**
- * Lightweight session guard for every page under the `(student)` route group.
- *
- * There is no login wall yet — the project's "session" is the anonymous,
- * localStorage-backed learning session id. What this layout guarantees is
- * structural isolation:
- *
- * 1. the browser's session id is read-or-minted synchronously (localStorage),
- *    so it is confirmed during render — no "ready" state gate is needed, and
- * 2. a `session_id` passed in the URL that disagrees with the browser's own id
- *    is rewritten to the real id, so directly typing a URL can never smuggle
- *    another session's context in.
- */
 function SessionGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { mode, loading } = useAuth();
 
   const sessionId = getLearningSessionId();
 
+  // Rewrite session_id in URL if it conflicts with browser session
   useEffect(() => {
     const urlSessionId = searchParams?.get("session_id");
     if (urlSessionId && urlSessionId !== sessionId) {
       const params = new URLSearchParams(searchParams.toString());
       params.set("session_id", sessionId);
       router.replace(
-        `${window.location.pathname}?${params.toString()}${window.location.hash}`,
+        `${pathname}?${params.toString()}${window.location.hash}`,
       );
     }
-  }, [router, searchParams, sessionId]);
+  }, [router, pathname, searchParams, sessionId]);
+
+  // Hard Login Wall check
+  useEffect(() => {
+    if (!loading && mode !== "authenticated") {
+      const query = searchParams?.toString();
+      const currentUrl = `${pathname}${query ? `?${query}` : ""}`;
+      router.replace(`/login?next=${encodeURIComponent(currentUrl)}`);
+    }
+  }, [loading, mode, pathname, searchParams, router]);
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center min-h-[50vh]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-900 dark:border-zinc-700 dark:border-t-zinc-100" />
+          <p className="text-xs text-slate-500 dark:text-zinc-400">正在验证登录状态...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode !== "authenticated") {
+    return (
+      <div className="flex-1 flex items-center justify-center min-h-[50vh]">
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-xs text-slate-500 dark:text-zinc-400">正在跳转至登录页面...</p>
+        </div>
+      </div>
+    );
+  }
 
   return <>{children}</>;
 }
@@ -49,3 +70,4 @@ export default function StudentLayout({
     </AppShell>
   );
 }
+

@@ -11,6 +11,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from code_navi.auth.dependencies import (
+    CurrentPrincipal,
+    get_optional_principal,
+    get_owned_principal_ids,
+)
 from code_navi.db import get_db
 
 from .schemas import UUID_V4_PATTERN, ProfileResponse
@@ -20,6 +25,7 @@ router = APIRouter(prefix="/api/v1/profile", tags=["Profile"])
 
 _profile_service = ProfileService()
 _db_dependency = Depends(get_db)
+_opt_principal_dep = Depends(get_optional_principal)
 
 
 @router.get("", response_model=ProfileResponse, status_code=200)
@@ -31,13 +37,10 @@ async def get_profile(
         max_length=36,
         description="Unified profile key (UUID v4, == the practice learner_id).",
     ),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> ProfileResponse:
-    """Return the anonymous learning portrait for one profile key.
+    """Return the learning portrait for one profile key or owned principals."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    return _profile_service.get_profile(profile_id, db, owned_ids=owned_ids)
 
-    Same semantics as ``GET /api/v1/compiler/records``: no authentication —
-    the caller reads only what it knows the key for, this is not an
-    authorization query.  An unknown key yields an empty portrait (200 with
-    ``sample_size=0``), never 404, so a client cannot probe key existence.
-    """
-    return _profile_service.get_profile(profile_id, db)

@@ -27,6 +27,7 @@ server = [
     "latex2mathml>=3.76,<4",
     "lxml>=5,<7",
     "pypdf>=6,<7",
+    "pwdlib[argon2]>=0.2,<1",
 ]
 online = [
     "openai>=1.0,<3",

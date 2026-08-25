@@ -29,11 +29,12 @@
 ### 安全与可观测性
 
 1. 用应用级认证和资源所有权校验保护 Workspace 编排与学习、科研、练习 API；Caddy Basic Auth 只作为当前入口的额外访问门槛。
-2. 增加认证失败、授权失败、请求大小、速率限制和超时边界。
-3. 凭据通过正式密钥管理注入；当前复制到数据卷的 `provider.env` 不作为生产密钥管理方案。
-4. 对日志、错误、Event 和数据库字段执行敏感信息检查。
-5. 为健康、请求失败、Provider、数据库迁移和外部检索建立必要指标、告警和负责人。
-6. 公开环境保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`。
+2. 生产环境（HTTPS）部署时必须设置 `CODE_NAVI_COOKIE_SECURE=1`，确保会话 Cookie 仅通过安全通道传输（附带 `Secure; HttpOnly; SameSite=Lax`）。
+3. 增加认证失败、授权失败、请求大小、速率限制（滑动窗口 IP / 账号双层防护）和超时边界。
+4. 凭据通过正式密钥管理注入；当前复制到数据卷的 `provider.env` 不作为生产密钥管理方案。
+5. 对日志、错误、Event 和数据库字段执行敏感信息检查。
+6. 为健康、请求失败、Provider、数据库迁移和外部检索建立必要指标、告警和负责人。
+7. 公开环境保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`。
 
 当前 `/health` 只证明 FastAPI 进程存活，不检查数据库或外部依赖；生产 readiness 需要覆盖实际关键依赖。
 

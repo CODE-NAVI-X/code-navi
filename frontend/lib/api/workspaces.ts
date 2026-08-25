@@ -161,13 +161,25 @@ function withProfile(path: string): string {
   return `${path}${joiner}local_profile_id=${encodeURIComponent(getLocalProfileId())}`;
 }
 
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init.headers as Record<string, string>),
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf && init.method && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method.toUpperCase())) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init.headers },
+      headers,
+      credentials: "include",
     });
   } catch (networkError) {
     throw new WorkspaceApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);

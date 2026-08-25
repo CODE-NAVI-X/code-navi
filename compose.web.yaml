@@ -28,6 +28,9 @@ services:
       CODE_NAVI_DATABASE_URL: sqlite:////data/code-navi.db
       CODE_NAVI_DATA_DIR: /data
       CODE_NAVI_EVENTS_DIR: /data/runs
+      CODE_NAVI_CORS_ORIGINS: "https://91666.icu:25000"
+      CODE_NAVI_COOKIE_SECURE: "1"
+      CODE_NAVI_ENV: "production"
     volumes:
       - code_navi_data:/data
     expose:

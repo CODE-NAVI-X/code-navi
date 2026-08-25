@@ -23,8 +23,11 @@ import {
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
 
+import { useAuth } from "@/lib/context/auth-context";
+
 export default function HomePage() {
   const router = useRouter();
+  const { mode, loading: authLoading } = useAuth();
   const [goal, setGoal] = useState("");
   const [workspaceTitle, setWorkspaceTitle] = useState("");
   const [recentTasks, setRecentTasks] = useState<WorkspaceTask[]>([]);
@@ -34,7 +37,14 @@ export default function HomePage() {
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!authLoading && mode !== "authenticated") {
+      router.replace("/login");
+    }
+  }, [authLoading, mode, router]);
+
   const load = useCallback(async () => {
+    if (mode !== "authenticated") return;
     setLoading(true);
     setError(null);
     try {
@@ -46,14 +56,16 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [load]);
+    if (mode === "authenticated") {
+      const timeoutId = window.setTimeout(() => {
+        void load();
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
+    }
+  }, [load, mode]);
 
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

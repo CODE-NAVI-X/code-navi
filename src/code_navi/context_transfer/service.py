@@ -44,21 +44,30 @@ class ContextTransferService:
         self,
         request: CreateContextTransferRequest,
         db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
     ) -> ContextTransferResponse:
-        source = (
-            db.query(NotebookItemModel)
-            .filter(
-                NotebookItemModel.id == request.source_object.id,
-                NotebookItemModel.user_id == "poc-user",
-                NotebookItemModel.session_id == request.source_scope_id,
-            )
-            .first()
+        query = db.query(NotebookItemModel).filter(
+            NotebookItemModel.id == request.source_object.id,
         )
+        if owned_ids:
+            query = query.filter(
+                (NotebookItemModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (NotebookItemModel.owner_principal_id.is_(None))
+                    & (NotebookItemModel.session_id == request.source_scope_id)
+                )
+            )
+        else:
+            query = query.filter(NotebookItemModel.session_id == request.source_scope_id)
+        source = query.first()
         if source is None:
             raise ContextTransferNotFoundError(request.source_object.id)
 
         selected_content = self._selected_content(source, request.selected_parts)
         transfer = ContextTransferModel(
+            owner_principal_id=owner_principal_id,
             source_module=request.source_module,
             source_object_type=request.source_object.type,
             source_object_id=source.id,
@@ -78,8 +87,12 @@ class ContextTransferService:
         transfer_id: str,
         source_scope_id: str,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> ContextTransferResponse:
-        return self._response(self._get_model(transfer_id, source_scope_id, db))
+        return self._response(
+            self._get_model(transfer_id, source_scope_id, db, owned_ids=owned_ids)
+        )
 
     def update(
         self,
@@ -87,8 +100,10 @@ class ContextTransferService:
         source_scope_id: str,
         request: UpdateContextTransferRequest,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> ContextTransferResponse:
-        transfer = self._get_model(transfer_id, source_scope_id, db)
+        transfer = self._get_model(transfer_id, source_scope_id, db, owned_ids=owned_ids)
         self._require_draft(transfer)
         changes = request.model_dump(exclude_unset=True)
         if "topic" in changes:
@@ -103,8 +118,15 @@ class ContextTransferService:
         db.refresh(transfer)
         return self._response(transfer)
 
-    def delete(self, transfer_id: str, source_scope_id: str, db: Session) -> None:
-        transfer = self._get_model(transfer_id, source_scope_id, db)
+    def delete(
+        self,
+        transfer_id: str,
+        source_scope_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> None:
+        transfer = self._get_model(transfer_id, source_scope_id, db, owned_ids=owned_ids)
         self._require_draft(transfer)
         db.delete(transfer)
         db.commit()
@@ -115,9 +137,12 @@ class ContextTransferService:
         source_scope_id: str,
         request: ConfirmContextTransferRequest,
         db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
     ) -> ResearchConversationResponse:
         """Atomically persist the final snapshot and create its Research conversation."""
-        transfer = self._get_model(transfer_id, source_scope_id, db)
+        transfer = self._get_model(transfer_id, source_scope_id, db, owned_ids=owned_ids)
         if transfer.status == "confirmed":
             if not transfer.confirmed_conversation_id:
                 raise ContextTransferStateError("Confirmed context has no conversation.")
@@ -142,6 +167,7 @@ class ContextTransferService:
             conversation = self.research_service.create_from_confirmed_context(
                 provenance,
                 db,
+                owner_principal_id=owner_principal_id or transfer.owner_principal_id,
                 commit=False,
             )
             transfer.topic = request.topic
@@ -163,15 +189,23 @@ class ContextTransferService:
         transfer_id: str,
         source_scope_id: str,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> ContextTransferModel:
-        transfer = (
-            db.query(ContextTransferModel)
-            .filter(
-                ContextTransferModel.id == transfer_id,
-                ContextTransferModel.source_scope_id == source_scope_id,
-            )
-            .first()
+        query = db.query(ContextTransferModel).filter(
+            ContextTransferModel.id == transfer_id,
         )
+        if owned_ids:
+            query = query.filter(
+                (ContextTransferModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (ContextTransferModel.owner_principal_id.is_(None))
+                    & (ContextTransferModel.source_scope_id == source_scope_id)
+                )
+            )
+        else:
+            query = query.filter(ContextTransferModel.source_scope_id == source_scope_id)
+        transfer = query.first()
         if transfer is None:
             raise ContextTransferNotFoundError(transfer_id)
         return transfer

@@ -14,6 +14,7 @@ import type {
   QuizGradeResponse,
   QuizQuestionGradeResult,
 } from "@/lib/api/quiz";
+import { getStoredCsrfToken } from "@/lib/api/auth";
 
 // ── Data types (mirrors backend ExplainRequest / Citation / ExplainResponse) ────
 
@@ -137,12 +138,16 @@ export async function explainKnowledgePoint(
   request: ExplainRequest,
 ): Promise<ExplainResponse> {
   const url = `${API_BASE}/api/v1/learning/explain`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         knowledge_point: request.knowledge_point,
         session_id: request.session_id ?? getLearningSessionId(),
@@ -177,7 +182,7 @@ export async function listRecentLearning(localProfileId: string): Promise<Recent
   const url = `${API_BASE}/api/v1/learning/recent?local_profile_id=${encodeURIComponent(localProfileId)}`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { credentials: "include" });
   } catch (networkError) {
     throw new LearningApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);
   }
@@ -199,7 +204,7 @@ export async function getRecentLearning(
   const url = `${API_BASE}/api/v1/learning/recent/${encodeURIComponent(activityId)}?local_profile_id=${encodeURIComponent(localProfileId)}`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { credentials: "include" });
   } catch (networkError) {
     throw new LearningApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);
   }
@@ -233,12 +238,16 @@ export async function gradeQuizAnswers(
   request: GradeQuizRequest,
 ): Promise<QuizGradeResponse> {
   const url = `${API_BASE}/api/v1/learning/quiz/grade`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         session_id: request.session_id,
         quiz_id: request.quiz_id,
@@ -511,12 +520,16 @@ export async function* streamPresentation(
   signal?: AbortSignal,
 ): AsyncGenerator<PresentationStreamEvent, void, void> {
   const url = `${API_BASE}/api/v1/learning/presentations/generate`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         knowledge_point: request.knowledge_point,
         session_id: request.session_id ?? getLearningSessionId(),
@@ -606,7 +619,10 @@ export async function fetchPresentation(
 ): Promise<PresentationDetail> {
   const params = new URLSearchParams({ session_id: sessionId });
   const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}?${params.toString()}`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     throw new LearningApiError(
       res.status,
@@ -656,7 +672,10 @@ export async function fetchNotebookItems(
 ): Promise<NotebookItem[]> {
   const url = `${API_BASE}/api/v1/learning/notebook?session_id=${encodeURIComponent(sessionId)}`;
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const res = await fetch(url, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data) ? data : [];

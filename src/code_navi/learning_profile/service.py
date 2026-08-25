@@ -84,35 +84,44 @@ def _by_latest(rows: list[ConfusionMarkModel]) -> dict[tuple[str, str], Confusio
 class ProfileService:
     """Read the portrait and persist binary confusion marks."""
 
-    def get_profile(self, profile_id: str, db: Session) -> ProfileResponse:
-        """Aggregate the anonymous portrait for one ``profile_id``.
+    def get_profile(
+        self,
+        profile_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ProfileResponse:
+        """Aggregate the portrait for one ``profile_id`` or owned principals.
 
-        The portrait is intentionally **not** session-scoped (CLAUDE.md rule 10
-        applies to single-item detail reads).  It aggregates quiz attempts and
-        confusion marks across every session that shared this ``profile_id`` —
-        that is what makes it a portrait rather than a single-session snapshot.
+        The portrait aggregates quiz attempts and confusion marks across every
+        session that shared this ``profile_id`` / owned principals.
         """
         # Both queries order by created_at so the "first-seen" spelling of a
         # normalized group is the earliest persisted row — deterministic, not
         # whatever order SQLite happened to scan.
-        quiz_rows = (
-            db.query(QuizAttemptModel)
-            .filter(
-                QuizAttemptModel.profile_id == profile_id,
-                QuizAttemptModel.graded.is_(True),
+        quiz_query = db.query(QuizAttemptModel).filter(QuizAttemptModel.graded.is_(True))
+        mark_query = db.query(ConfusionMarkModel).filter(ConfusionMarkModel.status == "confused")
+        if owned_ids:
+            quiz_query = quiz_query.filter(
+                (QuizAttemptModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (QuizAttemptModel.owner_principal_id.is_(None))
+                    & (QuizAttemptModel.profile_id == profile_id)
+                )
             )
-            .order_by(QuizAttemptModel.created_at.asc())
-            .all()
-        )
-        mark_rows = (
-            db.query(ConfusionMarkModel)
-            .filter(
-                ConfusionMarkModel.profile_id == profile_id,
-                ConfusionMarkModel.status == "confused",
+            mark_query = mark_query.filter(
+                (ConfusionMarkModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (ConfusionMarkModel.owner_principal_id.is_(None))
+                    & (ConfusionMarkModel.profile_id == profile_id)
+                )
             )
-            .order_by(ConfusionMarkModel.created_at.asc())
-            .all()
-        )
+        else:
+            quiz_query = quiz_query.filter(QuizAttemptModel.profile_id == profile_id)
+            mark_query = mark_query.filter(ConfusionMarkModel.profile_id == profile_id)
+
+        quiz_rows = quiz_query.order_by(QuizAttemptModel.created_at.asc()).all()
+        mark_rows = mark_query.order_by(ConfusionMarkModel.created_at.asc()).all()
 
         # Mastery groups by the normalized key (UDP/udp → one row), displaying
         # the first-seen original spelling.
@@ -209,16 +218,22 @@ class ProfileService:
         local_profile_id: str,
         profile_id: str,
         db: Session,
+        owned_ids: list[str] | None = None,
         limit: int = 50,
     ) -> KnowledgeGapResponse:
         """Project traceable review items from existing facts without writing a new table."""
-        quiz_items = self._quiz_gap_items(profile_id=profile_id, db=db, limit=limit)
-        confusion_items = self._confusion_gap_items(profile_id=profile_id, db=db, limit=limit)
+        quiz_items = self._quiz_gap_items(
+            profile_id=profile_id, db=db, limit=limit, owned_ids=owned_ids
+        )
+        confusion_items = self._confusion_gap_items(
+            profile_id=profile_id, db=db, limit=limit, owned_ids=owned_ids
+        )
         practice_items = self._practice_gap_items(
             local_profile_id=local_profile_id,
             learner_id=profile_id,
             db=db,
             limit=limit,
+            owned_ids=owned_ids,
         )
         items = sorted(
             [*quiz_items, *confusion_items, *practice_items],
@@ -238,15 +253,24 @@ class ProfileService:
         profile_id: str,
         db: Session,
         limit: int,
+        owned_ids: list[str] | None = None,
     ) -> list[KnowledgeGapItem]:
-        rows = (
-            db.query(QuizAttemptModel)
-            .filter(
-                QuizAttemptModel.profile_id == profile_id,
-                QuizAttemptModel.graded.is_(True),
-                QuizAttemptModel.score < QuizAttemptModel.max_score,
+        query = db.query(QuizAttemptModel).filter(
+            QuizAttemptModel.graded.is_(True),
+            QuizAttemptModel.score < QuizAttemptModel.max_score,
+        )
+        if owned_ids:
+            query = query.filter(
+                (QuizAttemptModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (QuizAttemptModel.owner_principal_id.is_(None))
+                    & (QuizAttemptModel.profile_id == profile_id)
+                )
             )
-            .order_by(QuizAttemptModel.created_at.desc(), QuizAttemptModel.id.desc())
+        else:
+            query = query.filter(QuizAttemptModel.profile_id == profile_id)
+        rows = (
+            query.order_by(QuizAttemptModel.created_at.desc(), QuizAttemptModel.id.desc())
             .limit(limit)
             .all()
         )
@@ -288,14 +312,23 @@ class ProfileService:
         profile_id: str,
         db: Session,
         limit: int,
+        owned_ids: list[str] | None = None,
     ) -> list[KnowledgeGapItem]:
-        rows = (
-            db.query(ConfusionMarkModel)
-            .filter(
-                ConfusionMarkModel.profile_id == profile_id,
-                ConfusionMarkModel.status == "confused",
+        query = db.query(ConfusionMarkModel).filter(
+            ConfusionMarkModel.status == "confused",
+        )
+        if owned_ids:
+            query = query.filter(
+                (ConfusionMarkModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (ConfusionMarkModel.owner_principal_id.is_(None))
+                    & (ConfusionMarkModel.profile_id == profile_id)
+                )
             )
-            .order_by(ConfusionMarkModel.updated_at.desc(), ConfusionMarkModel.id.desc())
+        else:
+            query = query.filter(ConfusionMarkModel.profile_id == profile_id)
+        rows = (
+            query.order_by(ConfusionMarkModel.updated_at.desc(), ConfusionMarkModel.id.desc())
             .limit(limit)
             .all()
         )
@@ -327,16 +360,33 @@ class ProfileService:
         learner_id: str,
         db: Session,
         limit: int,
+        owned_ids: list[str] | None = None,
     ) -> list[KnowledgeGapItem]:
-        rows = (
+        query = (
             db.query(PracticeOutcomeModel, PracticeLaunchModel)
             .join(PracticeLaunchModel, PracticeOutcomeModel.launch_id == PracticeLaunchModel.id)
             .filter(
-                PracticeOutcomeModel.local_profile_id == local_profile_id,
-                PracticeOutcomeModel.learner_id == learner_id,
                 PracticeOutcomeModel.knowledge_gap_kind.isnot(None),
             )
-            .order_by(PracticeOutcomeModel.created_at.desc(), PracticeOutcomeModel.id.desc())
+        )
+        if owned_ids:
+            query = query.filter(
+                (PracticeOutcomeModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (PracticeOutcomeModel.owner_principal_id.is_(None))
+                    & (
+                        PracticeOutcomeModel.local_profile_id == local_profile_id,
+                        PracticeOutcomeModel.learner_id == learner_id,
+                    )
+                )
+            )
+        else:
+            query = query.filter(
+                PracticeOutcomeModel.local_profile_id == local_profile_id,
+                PracticeOutcomeModel.learner_id == learner_id,
+            )
+        rows = (
+            query.order_by(PracticeOutcomeModel.created_at.desc(), PracticeOutcomeModel.id.desc())
             .limit(limit)
             .all()
         )
@@ -377,19 +427,14 @@ class ProfileService:
             )
         return items
 
-    def set_mark(self, request: MarkRequest, db: Session) -> MarkResponse:
-        """Upsert the binary 不懂/懂了 toggle for one surface.
-
-        Within a session the unique ``(session_id, source_type, source_ref)``
-        pair keeps the toggle idempotent.  ``mark`` True → ``confused``; False
-        → ``understood`` (removes it from the portrait's 待复习 list without
-        deleting history).
-
-        A "已懂" with a ``profile_id`` clears **every** confused mark on that
-        ``(profile_id, source_type, source_ref)`` across sessions — the portrait
-        surface is "this specific 不懂 content", and one 已懂 should dismiss it
-        everywhere, not just in the current session.
-        """
+    def set_mark(
+        self,
+        request: MarkRequest,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+    ) -> MarkResponse:
+        """Toggle a mark on one learning surface, idempotent on (session_id, type, ref)."""
         target = "confused" if request.mark else "understood"
         label = request.label.strip() or request.source_ref
 
@@ -440,7 +485,8 @@ class ProfileService:
                 ConfusionMarkModel(
                     session_id=request.session_id,
                     profile_id=request.profile_id,
-                    user_id=None,
+                    user_id=owner_principal_id or "poc-user",
+                    owner_principal_id=owner_principal_id,
                     knowledge_point=request.knowledge_point,
                     source_type=request.source_type,
                     source_ref=request.source_ref,
@@ -453,6 +499,8 @@ class ProfileService:
             existing.knowledge_point = request.knowledge_point
             existing.profile_id = request.profile_id
             existing.label = label
+            if owner_principal_id and not existing.owner_principal_id:
+                existing.owner_principal_id = owner_principal_id
             existing.updated_at = datetime.now(UTC)
         db.commit()
         return MarkResponse(

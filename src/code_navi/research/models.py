@@ -44,6 +44,9 @@ class ResearchConversationModel(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+    # Auth: principal-based ownership (nullable during compat period)
+    owner_principal_id = Column(String(36), nullable=True, index=True)
+
 
 
 class ResearchEvidenceBundleModel(Base):

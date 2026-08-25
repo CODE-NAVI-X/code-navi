@@ -60,6 +60,8 @@ class QuizAttemptModel(Base):
     is_mock = Column(Boolean, nullable=False)
     comment = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_now)
+    # Auth: principal-based ownership (nullable during compat period)
+    owner_principal_id = Column(String(36), nullable=True, index=True)
 
 
 class ConfusionMarkModel(Base):
@@ -94,3 +96,6 @@ class ConfusionMarkModel(Base):
     status = Column(String(16), nullable=False)
     created_at = Column(DateTime, nullable=False, default=_now)
     updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    # Auth: principal-based ownership (nullable during compat period)
+    owner_principal_id = Column(String(36), nullable=True, index=True)
+

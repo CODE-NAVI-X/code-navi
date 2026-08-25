@@ -138,9 +138,17 @@ class ResearchConversationStore:
         self,
         conversation_id: str,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> ResearchConversationModel:
         conversation = db.get(ResearchConversationModel, conversation_id)
         if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        if (
+            owned_ids is not None
+            and conversation.owner_principal_id
+            and conversation.owner_principal_id not in owned_ids
+        ):
             raise ConversationNotFoundError(conversation_id)
         return conversation
 
@@ -165,11 +173,14 @@ class ResearchConversationService:
         self,
         request: CreateResearchConversationRequest,
         db: Session,
+        *,
+        owner_principal_id: str | None = None,
     ) -> ResearchConversationResponse:
         """Create a conversation and optionally process its first user message."""
         conversation = ResearchConversationModel(
             profile_data=ResearchProfile().model_dump(mode="json"),
             messages_data=[],
+            owner_principal_id=owner_principal_id,
         )
         db.add(conversation)
         db.flush()
@@ -207,6 +218,7 @@ class ResearchConversationService:
         provenance: ConfirmedContextProvenance,
         db: Session,
         *,
+        owner_principal_id: str | None = None,
         commit: bool = True,
     ) -> ResearchConversationResponse:
         """Create a rules-only conversation from one final confirmed snapshot."""
@@ -221,6 +233,7 @@ class ResearchConversationService:
             profile_data=profile.model_dump(mode="json"),
             messages_data=[],
             context_provenance=provenance.model_dump(mode="json"),
+            owner_principal_id=owner_principal_id,
         )
         db.add(conversation)
         db.flush()
@@ -263,15 +276,25 @@ class ResearchConversationService:
         conversation_id: str,
         request: SendResearchMessageRequest,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> ResearchConversationResponse:
         """Process one free-form user message and return the restorable state."""
-        conversation = self._get_model(conversation_id, db)
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
         self._process_message(conversation, request.message, db)
         return self._to_response(conversation, db)
 
-    def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
+    def get(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationResponse:
         """Restore a conversation without invoking a model or external service."""
-        return self._to_response(self._get_model(conversation_id, db), db)
+        return self._to_response(
+            self._get_model(conversation_id, db, owned_ids=owned_ids), db
+        )
 
     def generate_topic_difficulty_analysis(
         self,
@@ -1021,8 +1044,14 @@ class ResearchConversationService:
         )
         return PaperRevision.model_validate(record.revision_data) if record is not None else None
 
-    def _get_model(self, conversation_id: str, db: Session) -> ResearchConversationModel:
-        return self.conversation_store.load(conversation_id, db)
+    def _get_model(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationModel:
+        return self.conversation_store.load(conversation_id, db, owned_ids=owned_ids)
 
     def _process_message(
         self,
