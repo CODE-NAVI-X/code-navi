@@ -10,16 +10,14 @@ import {
   UserPlus,
   LogOut,
   ChevronDown,
-  Sparkles,
   Settings,
 } from "lucide-react";
 
 export function AuthNav(): React.ReactElement {
   const router = useRouter();
-  const { mode, user, loading, logout, claimResult } = useAuth();
+  const { mode, user, loading, logout } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on click outside
@@ -35,20 +33,6 @@ export function AuthNav(): React.ReactElement {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-
-  // Display claim notification toast if any guest data was merged
-  useEffect(() => {
-    if (claimResult && claimResult.claimed && claimResult.workspaceCount > 0) {
-      const showTimer = setTimeout(() => {
-        setToastMessage(`已为您关联 ${claimResult.workspaceCount} 个访客工作区数据`);
-      }, 0);
-      const dismissTimer = setTimeout(() => setToastMessage(null), 5000);
-      return () => {
-        clearTimeout(showTimer);
-        clearTimeout(dismissTimer);
-      };
-    }
-  }, [claimResult]);
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -71,13 +55,6 @@ export function AuthNav(): React.ReactElement {
 
   return (
     <div className="flex items-center gap-2 relative" ref={dropdownRef}>
-      {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 rounded-xl bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-4 py-3 text-xs font-medium shadow-2xl border border-slate-700/50 animate-in fade-in slide-in-from-bottom-3 duration-300">
-          <Sparkles className="h-4 w-4 text-amber-400 dark:text-amber-500" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
       {mode === "authenticated" && user ? (
         <div className="relative">
           <button

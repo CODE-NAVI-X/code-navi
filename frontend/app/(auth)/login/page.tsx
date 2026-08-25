@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/Card";
 import { Alert, AlertDescription } from "@/components/ui/Alert";
-import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail, UserCheck } from "lucide-react";
+import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react";
 
 function sanitizeNextUrl(next: string | null): string {
   if (!next) return "/";
@@ -64,10 +64,6 @@ function LoginForm() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleGuestContinue = () => {
-    router.push(targetUrl);
   };
 
   return (
@@ -166,27 +162,6 @@ function LoginForm() {
             立即登录
           </Button>
         </form>
-
-        <div className="relative my-6">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-slate-200 dark:border-zinc-800" />
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-white dark:bg-zinc-900 px-2 text-slate-400 dark:text-zinc-500">
-              或
-            </span>
-          </div>
-        </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full text-xs"
-          onClick={handleGuestContinue}
-        >
-          <UserCheck className="w-4 h-4 mr-2 text-slate-500" />
-          以游客身份继续探索
-        </Button>
       </CardContent>
 
       <CardFooter className="justify-center">

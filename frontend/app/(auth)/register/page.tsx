@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/Card";
 import { Alert, AlertDescription } from "@/components/ui/Alert";
-import { AlertCircle, Eye, EyeOff, Lock, Mail, Sparkles, User } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Lock, Mail, User } from "lucide-react";
 
 function sanitizeNextUrl(next: string | null): string {
   if (!next) return "/";
@@ -31,7 +31,6 @@ function RegisterForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [claimGuestData, setClaimGuestData] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +66,7 @@ function RegisterForm() {
     setError(null);
 
     try {
-      await register(email.trim(), password, displayName.trim(), claimGuestData);
+      await register(email.trim(), password, displayName.trim(), true);
       router.push(targetUrl);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -177,26 +176,6 @@ function RegisterForm() {
               autoComplete="new-password"
               required
             />
-          </div>
-
-          <div className="pt-1">
-            <label className="flex items-start gap-2.5 cursor-pointer select-none p-3 rounded-lg bg-slate-50 dark:bg-zinc-800/60 border border-slate-200/60 dark:border-zinc-700/60">
-              <input
-                type="checkbox"
-                checked={claimGuestData}
-                onChange={(e) => setClaimGuestData(e.target.checked)}
-                className="rounded border-slate-300 dark:border-zinc-700 text-slate-900 focus:ring-slate-900 dark:bg-zinc-800 h-4 w-4 mt-0.5"
-              />
-              <div>
-                <span className="text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-                  导入当前浏览器未登录数据
-                </span>
-                <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 leading-snug">
-                  自动将您在当前设备上创建的工作区、任务和做题历史关联至新账号
-                </p>
-              </div>
-            </label>
           </div>
 
           <Button
