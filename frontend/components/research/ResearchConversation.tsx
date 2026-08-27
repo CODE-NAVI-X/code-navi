@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowLeft,
   Bot,
   BrainCircuit,
   ChevronDown,
@@ -17,14 +16,15 @@ import {
   Sparkles,
   UserRound,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import {
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 
 import {
@@ -45,6 +45,11 @@ import { ResearchPlanPanel } from "./ResearchPlanPanel";
 import { ResearchMindMapPanel } from "./ResearchMindMapPanel";
 import { ResearchDifficultyPanel } from "./ResearchDifficultyPanel";
 import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
+import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
+import { ReproductionPipelinePanel } from "./ReproductionPipelinePanel";
+import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
+import { ReproductionEvaluationPanel } from "./ReproductionEvaluationPanel";
+import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
 
@@ -101,7 +106,7 @@ function MessageItem({ message }: { message: ResearchConversationMessage }) {
   return (
     <article className={`flex min-w-0 gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white shadow-sm">
+        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-950">
           <Sparkles className="h-4 w-4" />
         </div>
       )}
@@ -116,7 +121,7 @@ function MessageItem({ message }: { message: ResearchConversationMessage }) {
           {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownText content={message.content} />}
         </div>
         {!isUser && message.next_question && (
-          <div className="mt-3 break-words rounded-xl border-l-2 border-sky-500 bg-sky-50/70 px-4 py-3 text-sm font-medium leading-6 text-slate-800 dark:bg-sky-950/20 dark:text-zinc-200">
+          <div className="app-card-subtle mt-3 break-words rounded-xl px-4 py-3 text-sm font-medium leading-6 text-slate-800 dark:text-zinc-200">
             {message.next_question}
           </div>
         )}
@@ -134,12 +139,12 @@ function MessageItem({ message }: { message: ResearchConversationMessage }) {
 function ThinkingMessage() {
   return (
     <div className="flex gap-3" role="status" aria-live="polite">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
         <Bot className="h-4 w-4" />
       </div>
       <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
         <span className="flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin text-sky-500" />
+          <Loader2 className="h-4 w-4 animate-spin text-slate-500 dark:text-zinc-400" />
           正在理解并整理研究画像
         </span>
         <p className="mt-1 text-[11px] text-slate-400 dark:text-zinc-500">分析本轮信息、更新候选问题与下一步建议…</p>
@@ -148,8 +153,55 @@ function ThinkingMessage() {
   );
 }
 
+const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1024px)";
+
+function subscribeDesktopBreakpoint(callback: () => void) {
+  const media = window.matchMedia(DESKTOP_BREAKPOINT_QUERY);
+  media.addEventListener("change", callback);
+  return () => media.removeEventListener("change", callback);
+}
+
+function readDesktopBreakpoint() {
+  return window.matchMedia(DESKTOP_BREAKPOINT_QUERY).matches;
+}
+
+function PanelSection({
+  id,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  // Responsive default: collapsed on narrow screens, expanded on desktop
+  // (lg and up). The details content stays mounted either way, so panel
+  // state and saved inputs are never discarded. SSR and the hydration pass
+  // always render collapsed; the desktop snapshot only applies after mount.
+  const desktop = useSyncExternalStore(subscribeDesktopBreakpoint, readDesktopBreakpoint, () => false);
+  return (
+    <details
+      id={id}
+      open={desktop}
+      className="app-card group scroll-mt-20 rounded-2xl"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+        <span className="min-w-0">
+          <span className="block text-sm font-bold text-slate-900 dark:text-zinc-100">{title}</span>
+          <span className="mt-0.5 block text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{description}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-slate-200 p-3 sm:p-4 dark:border-zinc-800">{children}</div>
+    </details>
+  );
+}
+
 export function ResearchConversation() {
-  const router = useRouter();
+  const [searchPanelMounted, setSearchPanelMounted] = useState(false);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<RequestPhase>("initializing");
@@ -257,9 +309,9 @@ export function ResearchConversation() {
 
   if (phase === "initializing" && !conversation) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 dark:bg-zinc-950">
-        <div className="text-center text-slate-500 dark:text-zinc-400">
-          <Loader2 className="mx-auto h-6 w-6 animate-spin text-sky-500" />
+      <main className="flex min-h-screen items-center justify-center bg-[var(--app-surface)] px-4">
+        <div role="status" aria-live="polite" className="text-center text-slate-500 dark:text-zinc-400">
+          <Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-500 dark:text-zinc-400" />
           <p className="mt-3 text-sm font-medium">正在连接并恢复科研会话…</p>
           <p className="mt-1 text-xs">只恢复已保存记录，不会重复调用 Agent。</p>
         </div>
@@ -269,15 +321,15 @@ export function ResearchConversation() {
 
   if (!conversation) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 dark:bg-zinc-950">
-        <div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-6 text-center shadow-sm dark:border-rose-900/50 dark:bg-zinc-900">
+      <main className="flex min-h-screen items-center justify-center bg-[var(--app-surface)] px-4">
+        <div role="alert" className="app-card w-full max-w-md rounded-2xl p-6 text-center">
           <CircleAlert className="mx-auto h-7 w-7 text-rose-500" />
           <h1 className="mt-3 text-base font-bold text-slate-900 dark:text-zinc-100">科研会话暂时无法连接</h1>
           <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-400">{error}</p>
           <button
             type="button"
             onClick={() => void restoreOrCreate()}
-            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+            className="app-button-primary mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium"
           >
             <RotateCcw className="h-4 w-4" /> 重新连接
           </button>
@@ -290,19 +342,11 @@ export function ResearchConversation() {
   const latestAssistant = [...conversation.messages].reverse().find((message) => message.role === "assistant");
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <div className="mx-auto w-full max-w-[1380px] overflow-x-hidden px-3 py-3 sm:px-5 sm:py-5">
-        <header className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm backdrop-blur sm:px-4 dark:border-zinc-800 dark:bg-zinc-900/90">
+    <main className="min-h-screen bg-[var(--app-surface)] text-slate-900 dark:text-zinc-100">
+      <div className="mx-auto w-full max-w-[1380px] overflow-x-hidden px-3 py-2 sm:px-5 sm:py-3">
+        <header className="app-card mb-2 flex min-w-0 items-center justify-between gap-2 rounded-xl px-3 py-2 backdrop-blur">
           <div className="flex min-w-0 items-center gap-3">
-            <button
-              type="button"
-              onClick={() => router.push("/learning")}
-              className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              aria-label="返回知识点学习"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
               <MessageSquareText className="h-4 w-4" />
             </div>
             <div className="min-w-0">
@@ -311,7 +355,7 @@ export function ResearchConversation() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span className="hidden items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-xs font-semibold text-indigo-700 md:inline-flex dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-300">
+            <span className="app-button-secondary hidden items-center gap-1.5 rounded-xl px-2.5 py-2 text-xs font-semibold md:inline-flex">
               <Route className="h-3.5 w-3.5" /> 需求确认 Skill
             </span>
             <ProviderStatusCard />
@@ -322,7 +366,7 @@ export function ResearchConversation() {
               type="button"
               onClick={() => void startNewConversation()}
               disabled={disabled}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              className="app-button-secondary inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800"
             >
               <Plus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">新建会话</span>
             </button>
@@ -365,8 +409,10 @@ export function ResearchConversation() {
           </aside>
         )}
 
+        <ResearchWorkflowNav conversation={conversation} />
+
         <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
-          <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900/70">
+          <section id="research-section-chat" className="app-card min-w-0 scroll-mt-20 overflow-hidden rounded-2xl">
             <div className="max-h-[calc(100vh-13rem)] min-h-[520px] space-y-7 overflow-y-auto px-4 py-6 sm:px-7" aria-label="科研对话消息">
               {conversation.messages.map((message) => (
                 <MessageItem key={message.message_id} message={message} />
@@ -389,21 +435,38 @@ export function ResearchConversation() {
               </div>
             )}
 
-            {conversation.next_skill === "academic-search" && (
-              <>
-                <div className="mx-4 mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200 sm:mx-7">
-                  <p className="flex items-center gap-2 font-bold">
-                    <SearchCheck className="h-4 w-4" /> 需求确认 Skill 已完成
-                  </p>
-                  <p className="mt-2 text-xs leading-5">
-                    当前科研画像已交给“信息源检索 Skill”。系统不会自动全网搜索，请检查下方检索计划后再确认启动。
-                  </p>
-                </div>
-                <AcademicSearchPanel
-                  key={conversation.conversation_id}
-                  conversationId={conversation.conversation_id}
-                />
-              </>
+            {(conversation.research_plan || conversation.next_skill === "academic-search") && (
+              <div id="research-section-search" className="mx-4 mb-3 scroll-mt-20 sm:mx-7">
+                {conversation.next_skill === "academic-search" && (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200">
+                    <p className="flex items-center gap-2 font-bold">
+                      <SearchCheck className="h-4 w-4" /> 需求确认 Skill 已完成
+                    </p>
+                    <p className="mt-2 text-xs leading-5">
+                      当前科研画像已交给“信息源检索 Skill”。系统不会自动全网搜索，请检查下方检索计划后再确认启动。
+                    </p>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchPanelMounted(true);
+                    setSearchPanelOpen((open) => !open);
+                  }}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-50 dark:border-emerald-800 dark:bg-zinc-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+                >
+                  <SearchCheck className="h-3.5 w-3.5" />
+                  {searchPanelOpen ? "收起受限检索与已保存证据" : "打开受限检索与已保存证据"}
+                </button>
+                {searchPanelMounted && (
+                  <div className={searchPanelOpen ? undefined : "hidden"}>
+                    <AcademicSearchPanel
+                      key={conversation.conversation_id}
+                      conversationId={conversation.conversation_id}
+                    />
+                  </div>
+                )}
+              </div>
             )}
 
             {latestAssistant?.suggested_answers.length ? (
@@ -414,7 +477,7 @@ export function ResearchConversation() {
                     type="button"
                     disabled={disabled}
                     onClick={() => void send(answer)}
-                    className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-800 transition hover:border-sky-400 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300"
+                    className="app-button-secondary shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800"
                   >
                     {answer}
                   </button>
@@ -423,7 +486,7 @@ export function ResearchConversation() {
             ) : null}
 
             <form onSubmit={submit} className="min-w-0 border-t border-slate-200 bg-slate-50/70 p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-950/50">
-              <div className="min-w-0 rounded-2xl border border-slate-300 bg-white p-2 shadow-sm transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-100 dark:border-zinc-700 dark:bg-zinc-900 dark:focus-within:border-sky-700 dark:focus-within:ring-sky-950/40">
+              <div className="app-card min-w-0 rounded-2xl p-2 transition focus-within:border-slate-400 focus-within:ring-4 focus-within:ring-slate-100 dark:focus-within:border-zinc-600 dark:focus-within:ring-zinc-800">
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
@@ -432,6 +495,7 @@ export function ResearchConversation() {
                   rows={2}
                   maxLength={4000}
                   placeholder="继续描述你的想法、纠正当前理解，或直接选择上方建议…"
+                  aria-label="科研对话输入"
                   className="max-h-40 min-h-14 min-w-0 w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-slate-400 disabled:opacity-60 dark:placeholder:text-zinc-600"
                 />
                 <div className="flex items-center justify-between gap-3 px-1">
@@ -439,7 +503,7 @@ export function ResearchConversation() {
                   <button
                     type="submit"
                     disabled={disabled || !draft.trim()}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                    className="app-button-primary inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-35 dark:hover:bg-white"
                   >
                     {phase === "thinking" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                     发送
@@ -452,27 +516,76 @@ export function ResearchConversation() {
             </form>
           </section>
 
-          <div className="hidden lg:block">
-            <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
-            {conversation.research_plan && <div className="mt-4"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
-            <div className="mt-4"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
-            <div className="mt-4"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
-            {conversation.experiment_design && <div className="mt-4"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>}
-          </div>
-
-          <details className="group rounded-2xl border border-slate-200 bg-white lg:hidden dark:border-zinc-800 dark:bg-zinc-900">
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-semibold">
-              查看科研画像与下一步
-              <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
-            </summary>
-            <div className="border-t border-slate-200 p-3 dark:border-zinc-800">
+          <aside className="min-w-0 space-y-4">
+            <div id="research-section-profile" className="scroll-mt-20">
               <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
-              {conversation.research_plan && <div className="mt-3"><ResearchPlanPanel plan={conversation.research_plan} /></div>}
-              <div className="mt-3"><ResearchMindMapPanel mindmap={conversation.research_mindmap} /></div>
-              <div className="mt-3"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
-              {conversation.experiment_design && <div className="mt-3"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>}
             </div>
-          </details>
+            {conversation.research_plan && (
+              <div id="research-section-plan" className="scroll-mt-20">
+                <ResearchPlanPanel plan={conversation.research_plan} />
+              </div>
+            )}
+          </aside>
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <PanelSection
+            id="research-section-difficulty"
+            title="方向难点分析"
+            description="基于科研画像、规则计划或已保存摘要的风险与缺口提示；每条均标注事实分类与生成方式。"
+          >
+            <ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} />
+          </PanelSection>
+          {conversation.experiment_design && (
+            <PanelSection
+              id="research-section-experiment"
+              title="实验方案与代码草案"
+              description="建议性实验设计；代码草案需你明确确认，且只能预览、复制或下载文本，不会写入项目或执行。"
+            >
+              <ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-evidence"
+              title="实验结果证据包"
+              description="只有你主动粘贴的实验记录才会成为事实来源；没有结果时仍可生成“待补充”的论文蓝图。"
+            >
+              <ExperimentEvidencePanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          <PanelSection
+            id="research-section-reproduction-evaluation"
+            title="论文复现项目评估"
+            description="用户主动触发的五维证据完整性检查；缺少 Pipeline 或实验记录的维度保持不可评估，不代表复现成功或论文质量。"
+          >
+            <ReproductionEvaluationPanel conversationId={conversation.conversation_id} />
+          </PanelSection>
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-reproduction"
+              title="论文复现辅助"
+              description="从已保存论文来源主动生成可核对的复现步骤；系统不自动执行代码或补造实验结果。"
+            >
+              <ReproductionPipelinePanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-paper"
+              title="论文辅助：初稿、审稿、修订与引用"
+              description="初稿由你粘贴；审稿、候选修订与投稿前检查均为建议，不代表导师或同行评审结论。"
+            >
+              <PaperDraftReviewPanel conversationId={conversation.conversation_id} />
+            </PanelSection>
+          )}
+          <PanelSection
+            id="research-section-mindmap"
+            title="研究思维导图"
+            description="只可视化已保存画像、规则计划与证据包；支持缩放、拖拽节点与 SVG 导出。"
+          >
+            <ResearchMindMapPanel mindmap={conversation.research_mindmap} />
+          </PanelSection>
         </div>
       </div>
     </main>

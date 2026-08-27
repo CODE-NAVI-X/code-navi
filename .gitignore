@@ -1,8 +1,12 @@
 __pycache__/
 *.py[cod]
+._*
+**/._*
 *.egg-info/
+._*
 .pytest_cache/
 .ruff_cache/
+.npm-cache/
 .quality-tmp/
 .venv/
 venv/

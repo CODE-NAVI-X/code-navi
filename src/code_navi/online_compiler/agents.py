@@ -50,3 +50,50 @@ guided_code_tutor_agent = AgentSpec(
 )
 
 __all__.append("guided_code_tutor_agent")
+
+problem_import_organizer_agent = AgentSpec(
+    name="problem_import_organizer",
+    description="Organizes rule-parsed programming exercises into a learning path.",
+    system_prompt=(
+        "你是编程练习题整理助手。只根据用户提供的规则解析结果整理题目，不能补造题意、"
+        "输入输出、样例或隐藏测试事实。只能返回已有 importId 的建议。输出 JSON："
+        '{"orderedProblems":[{"importId":"...","difficulty":"easy|medium|hard",'
+        '"tags":["..."],"orderReason":"..."}],"warnings":["..."]}。'
+        "排序优先体现基础语法、分支、循环、字符串/列表、字典/栈/算法的递进关系；"
+        "题目样例不足时必须在 warnings 说明。"
+    ),
+    tool_names=(),
+    default_config=KernelConfig(
+        max_steps=1,
+        max_tool_calls=0,
+        retry_max_attempts=1,
+        retry_backoff_seconds=0.25,
+    ),
+    output_format="json",
+)
+
+__all__.append("problem_import_organizer_agent")
+
+practice_set_planner_agent = AgentSpec(
+    name="practice_set_planner",
+    description="Plans an ordered Python practice set from existing candidate problems.",
+    system_prompt=(
+        "你是编程练习路径规划助手。根据学生目标和已有候选题生成练习顺序。"
+        "必须优先复用已有题库和用户上传题目，只能返回候选题里已有的 id；"
+        "不要生成隐藏测试，不要声称题目可自动判题，除非 candidate.source 是 built_in。"
+        "输出 JSON："
+        '{"orderedProblems":[{"id":"...","generationReason":"..."}],'
+        '"rationale":"...","coverage":["..."],"warnings":["..."]}。'
+        "排序必须体现递进关系，并说明每题承接上一题的原因。"
+    ),
+    tool_names=(),
+    default_config=KernelConfig(
+        max_steps=1,
+        max_tool_calls=0,
+        retry_max_attempts=1,
+        retry_backoff_seconds=0.25,
+    ),
+    output_format="json",
+)
+
+__all__.append("practice_set_planner_agent")

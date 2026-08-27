@@ -84,6 +84,14 @@ docker compose config
 docker compose up --build
 ```
 
+Compose 先通过 `cli-database-migrate` 将 `/data/code-navi.db` 升级到 Alembic head，再启动 shell。新 shell 会显示业务 `conversation_id` 和显式恢复命令；恢复已有主对话使用：
+
+```bash
+code-navi shell --project /workspace --events-dir /data/runs --resume <conversation-id>
+```
+
+`conversation_id` 只恢复同一项目作用域的主对话。`--session-id` 仍只组织 Runtime Event；临时 branch、focus 和 `last_context` 不跨进程保存。`code-navi ask` 保持无状态。
+
 在另一个终端执行一次请求：
 
 ```bash
@@ -147,7 +155,7 @@ docker compose -f compose.web.yaml restart backend
 | 基础镜像 | `python:3.11-slim`，分阶段构建 |
 | 运行用户 | 非 root UID/GID `10001` |
 | 项目目录 | `/workspace`，只读 bind mount |
-| Event 数据 | `/data/runs`，位于 `code_navi_runs` volume |
+| 业务数据库与 Event | `/data/code-navi.db` 与 `/data/runs`，位于 `code_navi_runs` volume |
 | 根文件系统 | 只读；`/tmp` 为 tmpfs |
 | 权限 | `no-new-privileges`，丢弃全部 Linux capabilities |
 | 网络端口 | 不开放端口 |

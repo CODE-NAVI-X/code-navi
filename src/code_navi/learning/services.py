@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -221,7 +222,14 @@ class QueryOrchestrator:
             citations=citations,
         )
 
-    def explain(self, request: ExplainRequest, db: Session) -> ExplainResponse:
+    def explain(
+        self,
+        request: ExplainRequest,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        on_notebook_persisted: Callable[[NotebookItemModel], None] | None = None,
+    ) -> ExplainResponse:
         """Run the full explain pipeline and persist the result."""
 
         # 1. Compose the user turn (decontamination guard baked into the prompt)
@@ -257,7 +265,8 @@ class QueryOrchestrator:
 
         # 5. Archive to notebook
         notebook_entry = NotebookItemModel(
-            user_id="poc-user",  # TODO: replace with real auth user id
+            user_id=owner_principal_id or "poc-user",
+            owner_principal_id=owner_principal_id,
             session_id=session_id,
             knowledge_id=request.knowledge_point,
             item_type="summary",
@@ -271,7 +280,22 @@ class QueryOrchestrator:
             },
         )
         db.add(notebook_entry)
-        db.commit()
+        # The source must exist before an orchestration Activity can be
+        # derived, while one transaction keeps a successful API response from
+        # leaving a Notebook item without its requested Activity.
+        db.flush()
+        if on_notebook_persisted is not None:
+            on_notebook_persisted(notebook_entry)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        # The id is a client-side default assigned at flush; it is available
+        # once committed, so we can hand it back for the downstream context
+        # transfer without a second lookup.
+        response.notebook_item_id = notebook_entry.id
 
         return response
 

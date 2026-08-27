@@ -37,6 +37,7 @@ class ProviderStatusResponse(BaseModel):
     configured: bool
     mode: Literal["model", "rules"]
     configuration_method: Literal["local_file", "server_environment"]
+    browser_configuration_enabled: bool
     configuration_issue: Literal["invalid_api_key", "missing_model"] | None = None
 
 

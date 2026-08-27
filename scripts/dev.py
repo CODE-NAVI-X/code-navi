@@ -33,6 +33,20 @@ def _npm_command() -> str:
     return command
 
 
+def _port_from_environment(name: str, default: int) -> int:
+    """Read one local development port without accepting an invalid value."""
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        port = int(raw_value)
+    except ValueError as error:
+        raise ValueError(f"{name} must be an integer port number.") from error
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{name} must be between 1 and 65535.")
+    return port
+
+
 def main() -> int:
     """Start both services and stop the other one if either process exits."""
     try:
@@ -44,6 +58,12 @@ def main() -> int:
 
     environment = os.environ.copy()
     environment.setdefault("CODE_NAVI_PROJECT_ROOT", str(PROJECT_ROOT))
+    try:
+        backend_port = _port_from_environment("CODE_NAVI_BACKEND_PORT", 8000)
+        frontend_port = _port_from_environment("CODE_NAVI_FRONTEND_PORT", 3000)
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 2
     processes = [
         subprocess.Popen(
             [
@@ -57,19 +77,19 @@ def main() -> int:
                 "--host",
                 "127.0.0.1",
                 "--port",
-                "8000",
+                str(backend_port),
             ],
             cwd=PROJECT_ROOT,
             env=environment,
         ),
         subprocess.Popen(
-            [npm, "run", "dev", "--", "--port", "3000"],
+            [npm, "run", "dev", "--", "--port", str(frontend_port)],
             cwd=FRONTEND_ROOT,
             env=environment,
         ),
     ]
-    print("Code Navi backend: http://127.0.0.1:8000")
-    print("Code Navi frontend: http://127.0.0.1:3000/research")
+    print(f"Code Navi backend: http://127.0.0.1:{backend_port}")
+    print(f"Code Navi frontend: http://127.0.0.1:{frontend_port}/research")
     print("Press Ctrl+C to stop both services.")
     try:
         while all(process.poll() is None for process in processes):

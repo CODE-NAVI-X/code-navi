@@ -7,6 +7,15 @@
  * All requests go to ``POST /api/v1/learning/explain``.
  */
 
+// Type-only imports are erased at compile time, so ``quiz.ts`` may keep
+// importing ``API_BASE`` from this module without a runtime import cycle.
+import type {
+  GradeQuizRequest,
+  QuizGradeResponse,
+  QuizQuestionGradeResult,
+} from "@/lib/api/quiz";
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 // ── Data types (mirrors backend ExplainRequest / Citation / ExplainResponse) ────
 
 export interface ExplainRequest {
@@ -14,6 +23,10 @@ export interface ExplainRequest {
   session_id?: string;
   persona?: string | null;
   include_citations?: boolean;
+  /** Local Workspace scope; never an account credential or authorization token. */
+  local_profile_id?: string;
+  workspace_id?: string;
+  task_id?: string;
 }
 
 export interface CitationItem {
@@ -25,10 +38,28 @@ export interface CitationItem {
 export interface ExplainResponse {
   knowledge_point: string;
   session_id: string;
+  /** Id of the archived summary notebook item, used for learning → research. */
+  notebook_item_id?: string | null;
   summary: string;
   detail?: string | null;
   citations: CitationItem[];
 }
+
+export type RecentLearningStatus = "available" | "source_unavailable";
+
+export interface RecentLearningItem {
+  id: string;
+  knowledge_point: string;
+  session_id?: string | null;
+  notebook_item_id?: string | null;
+  summary?: string | null;
+  detail?: string | null;
+  citations: CitationItem[];
+  created_at: string;
+  status: RecentLearningStatus;
+}
+
+export const MAX_LEARNING_INPUT_CHARS = 64;
 
 // ── Learning session id ────────────────────────────────────────────────────────
 
@@ -50,12 +81,19 @@ export function getLearningSessionId(): string {
   return sessionId;
 }
 
+/** Set the active browser session when restoring a persisted Learning result. */
+export function setLearningSessionId(sessionId: string): void {
+  if (typeof window !== "undefined" && sessionId) {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  }
+}
+
 /**
  * Mint a fresh opaque session id.
  *
  * ``crypto.randomUUID`` is only defined in secure contexts (HTTPS or
- * localhost). On plain HTTP — e.g. this LAN deployment
- * ``http://192.168.0.32:25000`` — it is undefined and throws at runtime.
+ * localhost). On plain HTTP through a LAN hostname or address, it is undefined
+ * and throws at runtime.
  * ``crypto.getRandomValues`` is available in every context, so use it
  * instead, and fall back to ``Math.random`` only as a last resort.
  */
@@ -71,7 +109,7 @@ function newSessionId(): string {
 
 // ── API base URL ───────────────────────────────────────────────────────────────
 
-const API_BASE =
+export const API_BASE =
   process.env.NEXT_PUBLIC_CODE_NAVI_API_URL ??
   process.env.NEXT_PUBLIC_API_BASE ??
   "http://localhost:8000";
@@ -100,17 +138,24 @@ export async function explainKnowledgePoint(
   request: ExplainRequest,
 ): Promise<ExplainResponse> {
   const url = `${API_BASE}/api/v1/learning/explain`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         knowledge_point: request.knowledge_point,
         session_id: request.session_id ?? getLearningSessionId(),
         persona: request.persona ?? "academic",
         include_citations: request.include_citations ?? true,
+        local_profile_id: request.local_profile_id,
+        workspace_id: request.workspace_id,
+        task_id: request.task_id,
       }),
     });
   } catch (networkError) {
@@ -130,6 +175,104 @@ export async function explainKnowledgePoint(
 
   const body: unknown = await response.json();
   return validateExplainResponse(body);
+}
+
+/** Load a bounded, profile-scoped list of persisted Learning results. */
+export async function listRecentLearning(localProfileId: string): Promise<RecentLearningItem[]> {
+  const url = `${API_BASE}/api/v1/learning/recent?local_profile_id=${encodeURIComponent(localProfileId)}`;
+  let response: Response;
+  try {
+    response = await fetch(url, { credentials: "include" });
+  } catch (networkError) {
+    throw new LearningApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);
+  }
+  if (!response.ok) {
+    throw new LearningApiError(response.status, (await extractErrorDetail(response)) ?? `Request failed with status ${response.status}`);
+  }
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object" || !Array.isArray((body as Record<string, unknown>).items)) {
+    throw new LearningApiError(502, "Server returned an invalid recent-learning response.");
+  }
+  return (body as { items: RecentLearningItem[] }).items;
+}
+
+/** Load the complete persisted result only after the user selects a recent item. */
+export async function getRecentLearning(
+  activityId: string,
+  localProfileId: string,
+): Promise<RecentLearningItem> {
+  const url = `${API_BASE}/api/v1/learning/recent/${encodeURIComponent(activityId)}?local_profile_id=${encodeURIComponent(localProfileId)}`;
+  let response: Response;
+  try {
+    response = await fetch(url, { credentials: "include" });
+  } catch (networkError) {
+    throw new LearningApiError(0, `Network error while contacting ${url}: ${String(networkError)}`);
+  }
+  if (!response.ok) {
+    throw new LearningApiError(response.status, (await extractErrorDetail(response)) ?? `Request failed with status ${response.status}`);
+  }
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object" || typeof (body as Record<string, unknown>).id !== "string") {
+    throw new LearningApiError(502, "Server returned an invalid recent-learning item.");
+  }
+  return body as RecentLearningItem;
+}
+
+// ── Quiz grading (LLM 判分) ─────────────────────────────────────────────────────
+// The request/response types live in ``quiz.ts``; the method lives here so the
+// learning client owns the quiz-grade call, matching the module's API layout.
+
+/**
+ * POST /api/v1/learning/quiz/grade — grade the student's answers server-side
+ * and return per-question scores plus Chinese analysis comments.
+ *
+ * All answered items (single included) go through the server: ``single`` is
+ * judged deterministically against the archived answer (``graded_by=rules``),
+ * ``fill_blank`` / ``short_answer`` through the LLM when an online provider is
+ * configured — or an honest offline fallback, never a faked verdict. Each
+ * scored answer is persisted as a ``quiz_attempts`` row keyed by the
+ * client-minted ``attempt_id``; ``profile_id`` aggregates them into the
+ * cross-session learning portrait.
+ */
+export async function gradeQuizAnswers(
+  request: GradeQuizRequest,
+): Promise<QuizGradeResponse> {
+  const url = `${API_BASE}/api/v1/learning/quiz/grade`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: JSON.stringify({
+        session_id: request.session_id,
+        quiz_id: request.quiz_id,
+        attempt_id: request.attempt_id,
+        profile_id: request.profile_id ?? null,
+        student_answers: request.student_answers,
+      }),
+    });
+  } catch (networkError) {
+    throw new LearningApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new LearningApiError(
+      response.status,
+      detail ?? `Request failed with status ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response.json();
+  return validateGradeResponse(body);
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
@@ -186,10 +329,75 @@ function validateExplainResponse(raw: unknown): ExplainResponse {
   return {
     knowledge_point: obj.knowledge_point as string,
     session_id: obj.session_id as string,
+    notebook_item_id:
+      typeof obj.notebook_item_id === "string"
+        ? (obj.notebook_item_id as string)
+        : undefined,
     summary: obj.summary as string,
     detail:
       typeof obj.detail === "string" ? (obj.detail as string) : undefined,
     citations,
+  };
+}
+
+function validateGradeResponse(raw: unknown): QuizGradeResponse {
+  if (!raw || typeof raw !== "object") {
+    throw new LearningApiError(502, "Server returned a non-object response.");
+  }
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.session_id !== "string") {
+    throw new LearningApiError(502, "Response missing 'session_id' field.");
+  }
+
+  const results: QuizQuestionGradeResult[] = [];
+  if (Array.isArray(obj.results)) {
+    for (const item of obj.results) {
+      if (item && typeof item === "object") {
+        const r = item as Record<string, unknown>;
+        const type: QuizQuestionGradeResult["type"] =
+          r.type === "single"
+            ? "single"
+            : r.type === "fill_blank"
+              ? "fill_blank"
+              : "short_answer";
+        const gradedBy: QuizQuestionGradeResult["graded_by"] =
+          r.graded_by === "rules"
+            ? "rules"
+            : r.graded_by === "model"
+              ? "model"
+              : "mock";
+        results.push({
+          question_id: typeof r.question_id === "string" ? r.question_id : "",
+          type,
+          score: typeof r.score === "number" ? r.score : 0,
+          max_score: typeof r.max_score === "number" ? r.max_score : 0,
+          is_correct: r.is_correct === true,
+          comment: typeof r.comment === "string" ? (r.comment as string) : null,
+          is_mock: r.is_mock === true,
+          graded: r.graded !== false,
+          graded_by: gradedBy,
+        });
+      }
+    }
+  }
+
+  return {
+    session_id: obj.session_id as string,
+    attempt_id:
+      typeof obj.attempt_id === "string" ? (obj.attempt_id as string) : "",
+    results,
+    generation_mode:
+      typeof obj.generation_mode === "string" ? (obj.generation_mode as string) : "mock",
+    provider_name:
+      typeof obj.provider_name === "string" ? (obj.provider_name as string) : "mock",
+    total_score:
+      typeof obj.total_score === "number"
+        ? (obj.total_score as number)
+        : results.reduce((sum, r) => sum + (r.graded ? r.score : 0), 0),
+    total_max_score:
+      typeof obj.total_max_score === "number"
+        ? (obj.total_max_score as number)
+        : results.reduce((sum, r) => sum + (r.graded ? r.max_score : 0), 0),
   };
 }
 
@@ -312,12 +520,16 @@ export async function* streamPresentation(
   signal?: AbortSignal,
 ): AsyncGenerator<PresentationStreamEvent, void, void> {
   const url = `${API_BASE}/api/v1/learning/presentations/generate`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         knowledge_point: request.knowledge_point,
         session_id: request.session_id ?? getLearningSessionId(),
@@ -407,7 +619,10 @@ export async function fetchPresentation(
 ): Promise<PresentationDetail> {
   const params = new URLSearchParams({ session_id: sessionId });
   const url = `${API_BASE}/api/v1/learning/presentations/${encodeURIComponent(presentationId)}?${params.toString()}`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     throw new LearningApiError(
       res.status,
@@ -457,7 +672,10 @@ export async function fetchNotebookItems(
 ): Promise<NotebookItem[]> {
   const url = `${API_BASE}/api/v1/learning/notebook?session_id=${encodeURIComponent(sessionId)}`;
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const res = await fetch(url, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data) ? data : [];

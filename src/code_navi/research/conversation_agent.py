@@ -11,13 +11,10 @@ from typing import Literal
 
 from code_navi.context_transfer.schemas import ConfirmedContextProvenance
 from code_navi.providers import ProviderSettings, create_provider
+from kernel.core import Message
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
-from .conversation_schemas import (
-    ResearchConversationDecision,
-    ResearchConversationMessage,
-    ResearchProfile,
-)
+from .conversation_schemas import ResearchConversationDecision, ResearchProfile
 from .llm import DeepSeekGuidanceProvider
 from .skill_runtime import (
     RESEARCH_CLARIFICATION_SKILL_ID,
@@ -85,10 +82,11 @@ class RuntimeConversationDecisionGenerator:
         self,
         *,
         profile: ResearchProfile | Mapping[str, object],
-        messages: Sequence[ResearchConversationMessage | Mapping[str, object]],
+        conversation_history: Sequence[Message] = (),
         user_message: str,
         conversation_id: str,
         confirmed_context: ConfirmedContextProvenance | None = None,
+        runtime_input: str | None = None,
     ) -> ConversationDecisionOutcome:
         """Return a validated decision or a safe status for application fallback."""
         try:
@@ -96,12 +94,8 @@ class RuntimeConversationDecisionGenerator:
             if provider is None:
                 return ConversationDecisionOutcome.unavailable()
             request = RuntimeRequest(
-                self._runtime_input(
-                    profile,
-                    messages,
-                    user_message,
-                    confirmed_context,
-                ),
+                runtime_input
+                or self._runtime_input(profile, user_message, confirmed_context),
                 session_id=conversation_id,
                 metadata={
                     "interface": "research_conversation",
@@ -109,6 +103,7 @@ class RuntimeConversationDecisionGenerator:
                     "skill": RESEARCH_CLARIFICATION_SKILL_ID,
                     "skill_version": RESEARCH_CLARIFICATION_SKILL_VERSION,
                 },
+                conversation_history=tuple(conversation_history),
             )
             runtime = AgentRuntime(provider, session_dir=_events_dir())
             value = runtime.run(research_conversation_agent, request)
@@ -146,7 +141,6 @@ class RuntimeConversationDecisionGenerator:
     @staticmethod
     def _runtime_input(
         profile: ResearchProfile | Mapping[str, object],
-        messages: Sequence[ResearchConversationMessage | Mapping[str, object]],
         user_message: str,
         confirmed_context: ConfirmedContextProvenance | None = None,
     ) -> str:
@@ -155,16 +149,6 @@ class RuntimeConversationDecisionGenerator:
             if isinstance(profile, ResearchProfile)
             else dict(profile)
         )
-        normalized_messages: list[dict[str, object]] = []
-        for message in messages[-12:]:
-            item = (
-                message.model_dump(mode="json")
-                if isinstance(message, ResearchConversationMessage)
-                else dict(message)
-            )
-            normalized_messages.append(
-                {"role": item.get("role"), "content": item.get("content")}
-            )
         payload = {
             "task": "根据本轮消息更新科研画像并决定下一步对话",
             "confirmed_learning_context": (
@@ -175,7 +159,6 @@ class RuntimeConversationDecisionGenerator:
                 "也不要把一般知识内容改写成用户尚未表达的研究选择。"
             ),
             "current_profile": normalized_profile,
-            "recent_messages": normalized_messages,
             "latest_user_message": user_message,
             "required_json_shape": {
                 "reply": "string",
@@ -206,9 +189,23 @@ class RuntimeConversationDecisionGenerator:
         return json.dumps(payload, ensure_ascii=False)
 
 
+def build_research_conversation_input(
+    profile: ResearchProfile,
+    user_message: str,
+    confirmed_context: ConfirmedContextProvenance | None = None,
+) -> str:
+    """Build the exact pinned user payload used for one research Runtime call."""
+    return RuntimeConversationDecisionGenerator._runtime_input(
+        profile,
+        user_message,
+        confirmed_context,
+    )
+
+
 __all__ = [
     "ConversationDecisionOutcome",
     "ResearchConversationDecision",
     "RuntimeConversationDecisionGenerator",
+    "build_research_conversation_input",
     "research_conversation_agent",
 ]

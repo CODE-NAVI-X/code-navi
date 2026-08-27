@@ -33,4 +33,4 @@ EXPOSE 8000
 
 # Migrate first, then serve. CODE_NAVI_DATABASE_URL / CODE_NAVI_DATA_DIR /
 # CODE_NAVI_EVENTS_DIR are injected by compose, all pointing into /data.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn code_navi.server:app --app-dir src --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn code_navi.server:app --app-dir src --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=\"*\""]

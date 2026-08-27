@@ -9,12 +9,17 @@ from alembic import context
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
+from code_navi import cli_conversation as cli_conversation_models  # noqa: F401
+
 # Import every model module so Base.metadata is complete before autogenerate.
 from code_navi.context_transfer import models as context_transfer_models  # noqa: F401
 from code_navi.db import DATABASE_URL as APP_DATABASE_URL
 from code_navi.db import Base
 from code_navi.learning import models as learning_models  # noqa: F401
+from code_navi.learning_profile import models as learning_profile_models  # noqa: F401
+from code_navi.online_compiler import models as compiler_models  # noqa: F401
 from code_navi.research import models as research_models  # noqa: F401
+from code_navi.workspaces import models as workspace_models  # noqa: F401
 
 config = context.config
 

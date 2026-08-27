@@ -13,8 +13,9 @@
 1. 学习笔记当前使用固定 `poc-user`，学习 `session_id` 由浏览器持有；必须改为服务端认证身份与授权查询。
 2. 科研主流程当前可凭 `conversation_id` 读取，兼容流程可凭 `session_id` 读取；两者都必须绑定所有者并验证访问权限。
 3. 练习记录当前可凭浏览器生成的 `learner_id` 查询；必须绑定服务端身份，并为记录读取、保留和删除建立授权。
-4. `localStorage` 中的标识不能作为授权凭据或多用户隔离措施。
-5. 确定生产数据库，并把独立的练习 SQLite 纳入迁移、连接、备份、恢复、保留期和删除流程。
+4. 持久 Workspace、Task 和 Activity 实现后，必须绑定服务端所有者并验证跨 Workspace 读写、Activity 整理和模块来源访问权限。
+5. `localStorage` 中的 `session_id`、`conversation_id`、`learner_id` 或 `local_profile_id` 都不能作为授权凭据或多用户隔离措施。
+6. 确定生产数据库，并把独立的练习 SQLite 纳入迁移、连接、备份、恢复、保留期和删除流程。
 
 ### 发布产物与拓扑
 
@@ -27,12 +28,13 @@
 
 ### 安全与可观测性
 
-1. 用应用级认证和资源所有权校验保护学习、科研与练习 API；Caddy Basic Auth 只作为当前入口的额外访问门槛。
-2. 增加认证失败、授权失败、请求大小、速率限制和超时边界。
-3. 凭据通过正式密钥管理注入；当前复制到数据卷的 `provider.env` 不作为生产密钥管理方案。
-4. 对日志、错误、Event 和数据库字段执行敏感信息检查。
-5. 为健康、请求失败、Provider、数据库迁移和外部检索建立必要指标、告警和负责人。
-6. 公开环境保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`。
+1. 用应用级认证和资源所有权校验保护 Workspace 编排与学习、科研、练习 API；Caddy Basic Auth 只作为当前入口的额外访问门槛。
+2. 生产环境（HTTPS）部署时必须设置 `CODE_NAVI_COOKIE_SECURE=1`，确保会话 Cookie 仅通过安全通道传输（附带 `Secure; HttpOnly; SameSite=Lax`）。
+3. 增加认证失败、授权失败、请求大小、速率限制（滑动窗口 IP / 账号双层防护）和超时边界。
+4. 凭据通过正式密钥管理注入；当前复制到数据卷的 `provider.env` 不作为生产密钥管理方案。
+5. 对日志、错误、Event 和数据库字段执行敏感信息检查。
+6. 为健康、请求失败、Provider、数据库迁移和外部检索建立必要指标、告警和负责人。
+7. 公开环境保持 `CODE_NAVI_ALLOW_BROWSER_PROVIDER_CONFIG=false`。
 
 当前 `/health` 只证明 FastAPI 进程存活，不检查数据库或外部依赖；生产 readiness 需要覆盖实际关键依赖。
 

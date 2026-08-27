@@ -236,6 +236,7 @@ export interface ProviderStatusResponse {
   configured: boolean;
   mode: "model" | "rules";
   configuration_method: "local_file" | "server_environment";
+  browser_configuration_enabled: boolean;
   configuration_issue: "invalid_api_key" | "missing_model" | null;
 }
 
@@ -341,6 +342,339 @@ export interface ConversationEvidenceBundle {
   provenance_note: string;
   tool_audit: Record<string, unknown> | null;
   cache_hit: boolean;
+}
+
+export type ExperimentEvidenceCategory =
+  | "data_or_sample"
+  | "setup"
+  | "baseline_or_control"
+  | "random_seed_or_reason"
+  | "metric_or_result"
+  | "result_table"
+  | "chart_description"
+  | "failure_or_limitation"
+  | "ethics_or_data_governance"
+  | "pending_item";
+
+export interface ExperimentEvidenceItem {
+  category: ExperimentEvidenceCategory;
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+  source_scope: "user_submitted_text";
+  related_plan_item: string | null;
+  related_evidence_urls: string[];
+}
+
+export interface ExperimentEvidenceBundle {
+  schema_version: "experiment-evidence.v1";
+  bundle_id: string;
+  conversation_id: string;
+  experiment_name: ExperimentEvidenceItem;
+  goal: ExperimentEvidenceItem;
+  items: ExperimentEvidenceItem[];
+  submitted_at: string;
+  provenance_note: string;
+}
+
+export interface CreateExperimentEvidenceBundleRequest {
+  experiment_name: string;
+  goal: string;
+  items: Array<Pick<ExperimentEvidenceItem, "category" | "content" | "classification"> & {
+    related_plan_item?: string | null;
+    related_evidence_urls?: string[];
+  }>;
+}
+
+export type ReproductionEvaluationDimension =
+  | "research_definition"
+  | "source_traceability"
+  | "reproduction_plan"
+  | "execution_evidence"
+  | "reflection_and_compliance";
+export type ReproductionEvaluationStatus =
+  | "not_evaluable"
+  | "needs_revision"
+  | "evidence_partial"
+  | "checklist_complete";
+export type ReproductionImprovementTaskStatus =
+  | "pending"
+  | "accepted"
+  | "skipped"
+  | "completed";
+export interface ReproductionEvaluationEvidence {
+  source_type:
+    | "research_profile"
+    | "selected_citation"
+    | "reproduction_pipeline"
+    | "experiment_evidence";
+  source_id: string | null;
+  label: string;
+  classification: AnalysisClassification;
+  information_scope: string;
+  basis: string;
+}
+export interface ReproductionEvaluationDimensionResult {
+  dimension: ReproductionEvaluationDimension;
+  label: string;
+  status: ReproductionEvaluationStatus;
+  score: number | null;
+  maximum_score: 20;
+  issues: string[];
+  evidence: ReproductionEvaluationEvidence[];
+  fact_boundary: string;
+  to_verify: string[];
+  next_suggestions: string[];
+}
+export interface ReproductionEvaluationScoreSummary {
+  earned_score: number;
+  scored_maximum: number;
+  total_maximum: 100;
+  scored_dimension_count: number;
+  unscored_dimension_count: number;
+  display: string;
+}
+export interface ReproductionImprovementTask {
+  schema_version: "reproduction-improvement-task.v1";
+  task_id: string;
+  evaluation_id: string;
+  conversation_id: string;
+  dimension: ReproductionEvaluationDimension;
+  title: string;
+  description: string;
+  status: ReproductionImprovementTaskStatus;
+  classification: "to_verify";
+  basis: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface ReproductionProjectEvaluation {
+  schema_version: "reproduction-project-evaluation.v1";
+  evaluation_id: string;
+  conversation_id: string;
+  pipeline_id: string | null;
+  pipeline_contract_status: "available" | "unavailable";
+  selected_paper_count: number;
+  experiment_record_count: number;
+  score_summary: ReproductionEvaluationScoreSummary;
+  dimensions: ReproductionEvaluationDimensionResult[];
+  improvement_tasks: ReproductionImprovementTask[];
+  created_at: string;
+  boundary_note: string;
+}
+
+export interface ReproductionPipelineItem {
+  content: string;
+  classification: "fact" | "inference" | "to_verify";
+  basis: string;
+  source_scope: string;
+}
+
+export interface ReproductionPipeline {
+  schema_version: "reproduction-pipeline.v1";
+  pipeline_id: string;
+  conversation_id: string;
+  source_bundle_id: string;
+  selected_paper: {
+    url: string;
+    title: string;
+    source_name: string;
+    year: number | null;
+    identifier: string | null;
+    abstract_scope: "metadata_only" | "metadata_and_abstract";
+    abstract_excerpt: string | null;
+  };
+  reproduction_goal: ReproductionPipelineItem;
+  research_question: ReproductionPipelineItem;
+  known_method: ReproductionPipelineItem;
+  data_and_sample_conditions: ReproductionPipelineItem[];
+  candidate_baselines: ReproductionPipelineItem[];
+  metrics: ReproductionPipelineItem[];
+  experiment_steps: ReproductionPipelineItem[];
+  resources: ReproductionPipelineItem[];
+  risks: ReproductionPipelineItem[];
+  ethics: ReproductionPipelineItem[];
+  confirmation_items: ReproductionPipelineItem[];
+  tasks: Array<{
+    task_id: string;
+    title: string;
+    description: string;
+    classification: "fact" | "inference" | "to_verify";
+    basis: string;
+    source_scope: string;
+    status: "not_started" | "evidence_linked";
+    evidence_links: Array<{
+      experiment_bundle_id: string;
+      source_scope: "user_submitted_text_unverified";
+      content: string;
+      classification: "fact" | "inference" | "to_verify";
+    }>;
+  }>;
+  two_week_mvp: ReproductionPipelineItem[];
+  created_at: string;
+  provenance_note: string;
+}
+
+export interface PaperBlueprintReference {
+  source_type: "research_profile" | "research_plan" | "academic_evidence" | "experiment_evidence";
+  bundle_id: string | null;
+  label: string;
+  classification: AnalysisClassification;
+  source_url: string | null;
+  information_scope: string;
+}
+
+export interface PaperBlueprintEntry {
+  content: string;
+  classification: AnalysisClassification;
+  basis: string;
+}
+
+export interface PaperBlueprintSection {
+  section: "引言" | "相关工作" | "方法" | "实验" | "讨论" | "结论";
+  writing_goal: PaperBlueprintEntry;
+  evidence_references: PaperBlueprintReference[];
+  missing_evidence: PaperBlueprintEntry[];
+  forbidden_claims: string[];
+  citation_placeholders: PaperBlueprintReference[];
+}
+
+export interface PaperBlueprint {
+  schema_version: "paper-blueprint.v1";
+  conversation_id: string;
+  candidate_titles: PaperBlueprintEntry[];
+  target_submission_direction: PaperBlueprintEntry;
+  abstract_requirements: PaperBlueprintEntry[];
+  sections: PaperBlueprintSection[];
+  submission_readiness: PaperBlueprintEntry;
+  gaps: PaperBlueprintEntry[];
+  provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+}
+
+export interface PaperSection { section_id: string; heading: string; content: string; order: number; }
+export interface PaperDraft {
+  schema_version: "paper-draft.v1"; draft_id: string; conversation_id: string; title: string;
+  content: string; format: "markdown" | "plain_text"; version: number; sections: PaperSection[];
+  created_at: string; source_scope: "user_pasted_local_session";
+}
+export type ReviewSeverity = "blocker" | "major" | "minor" | "suggestion";
+export interface ReviewFinding {
+  id: string; severity: ReviewSeverity; section: string; issue: string; why_it_matters: string;
+  recommended_action: string; classification: AnalysisClassification; basis: string;
+  source_scope: string; related_blueprint_item: string | null; can_auto_suggest: boolean;
+}
+export interface RevisionTask { task_id: string; finding_id: string; status: "pending" | "accepted" | "skipped" | "completed"; finding: ReviewFinding; created_at: string; updated_at: string; }
+export interface RevisionSuggestion {
+  schema_version: "revision-suggestion.v1"; suggestion_id: string; revision_task_id: string; draft_id: string;
+  section_heading: string; paragraph_anchor: string; original_excerpt: string; candidate_text: string;
+  rationale: string; classification: AnalysisClassification; basis: string; source_scope: string;
+  to_verify_items: string[]; generation_mode: "llm" | "rules" | "rules_fallback"; run_id: string | null; created_at: string;
+}
+export interface PaperReview {
+  schema_version: "paper-review.v1"; review_id: string; draft_id: string; conversation_id: string;
+  findings: ReviewFinding[]; revision_tasks: RevisionTask[]; provenance_note: string;
+  generation_mode: "llm" | "rules" | "rules_fallback"; run_id: string | null; event_count: number; created_at: string;
+}
+export interface PaperRevision {
+  schema_version: "paper-revision.v1"; revision_id: string; parent_draft_id: string; review_id: string;
+  parent_revision_id: string | null;
+  version: number; content: string; applied_task_ids: string[]; change_summary: string[];
+  applied_suggestion_ids: string[];
+  diff_preview: string; created_at: string; source_scope: "user_pasted_draft_plus_accepted_suggestions";
+}
+export type CitationTargetDocument = "paper_draft" | "paper_revision" | "paper_blueprint";
+export type SelectedCitationStatus = "selected" | "inserted" | "skipped";
+export interface CitationCandidate {
+  schema_version: "citation-candidate.v1"; citation_id: string; conversation_id: string;
+  evidence_bundle_id: string; paper_title: string; authors: string[]; year: number | null;
+  source_name: string | null; url: string; doi: string | null; arxiv_id: string | null;
+  abstract_scope: "metadata_only" | "metadata_and_abstract";
+  metadata_completeness: "complete" | "partial"; classification: AnalysisClassification;
+  source_scope: "metadata_and_abstract_only"; created_at: string;
+}
+export interface ReferenceEntryDraft {
+  reference_id: string; selected_citation_id: string; display_text: string; citation_key: string;
+  metadata_fields: Record<string, string | number | null>; classification: AnalysisClassification;
+  to_verify_items: string[]; source_scope: "metadata_and_abstract_only";
+}
+export interface ReferenceDraftItem {
+  selected_citation_id: string; source_url: string; citation_placeholder: string;
+  display_text: string; classification: AnalysisClassification; to_verify_items: string[];
+  format_notice: string;
+}
+export interface ReferenceDraftVerificationItem {
+  selected_citation_id: string; source_url: string; missing_fields: string[];
+  classification: "to_verify"; basis: string;
+}
+export interface ReferenceDraftPackage {
+  schema_version: "reference-draft-package.v1"; session_id: string;
+  entries: ReferenceDraftItem[]; copy_text: string;
+  verification_items: ReferenceDraftVerificationItem[];
+  empty_state_message: string | null; boundary_note: string;
+  source_scope: "local_selected_evidence_only";
+}
+export interface SelectedCitation {
+  schema_version: "selected-citation.v1"; selected_citation_id: string; session_id: string;
+  citation: CitationCandidate; target_document: CitationTargetDocument; target_section: string;
+  paragraph_anchor: string; citation_placeholder: string; user_note: string | null;
+  status: SelectedCitationStatus; reference_entry: ReferenceEntryDraft; created_at: string;
+}
+export type CitationQualityStatus = "empty" | "needs_review" | "review_ready";
+export interface CitationQualityIssue {
+  issue_code: string; message: string; selected_citation_ids: string[];
+  classification: AnalysisClassification; basis: string;
+}
+export interface CitationCoverageItem {
+  target_document: CitationTargetDocument; target_section: string;
+  selected_citation_ids: string[]; source_titles: string[]; citation_placeholders: string[];
+  status: "mapped" | "needs_verification"; classification: "inference";
+  information_scopes: ("metadata_only" | "metadata_and_abstract")[];
+  basis: string; to_verify_items: string[];
+}
+export interface CitationQualityCheck {
+  schema_version: "citation-quality-check.v1"; check_id: string; session_id: string;
+  checked_at: string; quality_status: CitationQualityStatus; selected_source_count: number;
+  unique_source_count: number; mapped_section_count: number;
+  core_section_coverage_percent: number; coverage_items: CitationCoverageItem[];
+  unmapped_core_sections: string[]; uninserted_placeholders: CitationQualityIssue[];
+  duplicate_selections: CitationQualityIssue[]; metadata_gaps: CitationQualityIssue[];
+  author_verification_items: CitationQualityIssue[]; empty_state_message: string | null;
+  boundary_note: string; source_scope: "local_selected_evidence_only";
+}
+export interface SubmissionProfileInput {
+  target_venue?: string | null;
+  anonymity_required?: boolean | null;
+  length_or_section_requirements?: string | null;
+  ethics_and_data_requirements?: string | null;
+  user_notes?: string | null;
+}
+export interface SubmissionProfile extends SubmissionProfileInput {
+  schema_version: "submission-profile.v1"; profile_id: string; conversation_id: string;
+  created_at: string; updated_at: string;
+}
+export type SubmissionReadinessStatus = "not_ready" | "needs_review" | "checklist_complete";
+export interface SubmissionReadinessItem {
+  id: string; category: string; message: string; classification: AnalysisClassification;
+  basis: string; source_scope: string;
+}
+export interface SubmissionReadinessCheck {
+  schema_version: "submission-readiness.v1"; check_id: string; draft_id: string;
+  revision_id: string | null; conversation_id: string; submission_profile: SubmissionProfile | null;
+  readiness_status: SubmissionReadinessStatus;
+  blockers: SubmissionReadinessItem[]; warnings: SubmissionReadinessItem[];
+  manual_checks: SubmissionReadinessItem[]; fact_boundary_notes: SubmissionReadinessItem[];
+  recommended_next_actions: SubmissionReadinessItem[]; created_at: string;
+  source_scope: "local_saved_research_artifacts";
+}
+export interface PaperExportFile {
+  filename: string; content_type: "text/markdown" | "application/json"; content: string;
+}
+export interface PaperExportPackage {
+  schema_version: "paper-export.v1"; draft_id: string; revision_id: string;
+  readiness_check_id: string; files: PaperExportFile[]; provenance_note: string;
 }
 
 export interface SavedResearchNotebookNote {
@@ -510,6 +844,144 @@ export async function createExperimentCodeDraft(
   );
 }
 
+export async function createExperimentEvidenceBundle(
+  conversationId: string,
+  payload: CreateExperimentEvidenceBundleRequest,
+): Promise<ExperimentEvidenceBundle> {
+  return request<ExperimentEvidenceBundle>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listExperimentEvidenceBundles(
+  conversationId: string,
+): Promise<ExperimentEvidenceBundle[]> {
+  return request<ExperimentEvidenceBundle[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-evidence-bundles`,
+  );
+}
+
+export async function createReproductionEvaluation(
+  conversationId: string,
+): Promise<ReproductionProjectEvaluation> {
+  return request<ReproductionProjectEvaluation>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-evaluations`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function listReproductionEvaluations(
+  conversationId: string,
+): Promise<ReproductionProjectEvaluation[]> {
+  return request<ReproductionProjectEvaluation[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-evaluations`,
+  );
+}
+
+export async function updateReproductionImprovementTask(
+  taskId: string,
+  status: "accepted" | "skipped" | "completed",
+): Promise<ReproductionImprovementTask> {
+  return request<ReproductionImprovementTask>(
+    `/api/v1/research/reproduction-improvement-tasks/${encodeURIComponent(taskId)}`,
+    { method: "PATCH", body: JSON.stringify({ status }) },
+  );
+}
+
+export async function createReproductionPipeline(
+  conversationId: string,
+  payload: { evidence_bundle_id: string; paper_url: string },
+): Promise<ReproductionPipeline> {
+  return request<ReproductionPipeline>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listReproductionPipelines(conversationId: string): Promise<ReproductionPipeline[]> {
+  return request<ReproductionPipeline[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
+  );
+}
+
+export async function generatePaperBlueprint(conversationId: string): Promise<PaperBlueprint> {
+  return request<PaperBlueprint>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-blueprint`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+  );
+}
+
+export async function createPaperDraft(conversationId: string, payload: { title: string; content: string; format: "markdown" | "plain_text" }): Promise<PaperDraft> {
+  return request<PaperDraft>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-drafts`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function listPaperDrafts(conversationId: string): Promise<PaperDraft[]> {
+  return request<PaperDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-drafts`);
+}
+export async function createPaperReview(draftId: string): Promise<PaperReview> {
+  return request<PaperReview>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/reviews`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) }, MODEL_TURN_TIMEOUT_MS);
+}
+export async function listPaperReviews(draftId: string): Promise<PaperReview[]> {
+  return request<PaperReview[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/reviews`);
+}
+export async function updatePaperRevisionTask(reviewId: string, taskId: string, status: "accepted" | "skipped"): Promise<PaperReview> {
+  return request<PaperReview>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+export async function createRevisionSuggestion(reviewId: string, taskId: string): Promise<RevisionSuggestion> {
+  return request<RevisionSuggestion>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}/suggestions`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) }, MODEL_TURN_TIMEOUT_MS);
+}
+export async function listRevisionSuggestions(reviewId: string, taskId: string): Promise<RevisionSuggestion[]> {
+  return request<RevisionSuggestion[]>(`/api/v1/research/paper-reviews/${encodeURIComponent(reviewId)}/revision-tasks/${encodeURIComponent(taskId)}/suggestions`);
+}
+export async function applyRevisionSuggestion(suggestionId: string, action: "accepted" | "skipped", candidateText?: string): Promise<PaperRevision | null> {
+  return request<PaperRevision | null>(`/api/v1/research/revision-suggestions/${encodeURIComponent(suggestionId)}/apply`, { method: "POST", body: JSON.stringify({ action, candidate_text: candidateText || null }) });
+}
+export async function listPaperRevisions(draftId: string): Promise<PaperRevision[]> {
+  return request<PaperRevision[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/revisions`);
+}
+export async function listCitationCandidates(conversationId: string): Promise<CitationCandidate[]> {
+  return request<CitationCandidate[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-candidates`);
+}
+export async function createSelectedCitation(conversationId: string, payload: {
+  evidence_bundle_id: string; paper_url: string; target_document: CitationTargetDocument;
+  target_section: string; paragraph_anchor: string; user_note?: string | null;
+}): Promise<SelectedCitation> {
+  return request<SelectedCitation>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/selected-citations`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function listSelectedCitations(conversationId: string): Promise<SelectedCitation[]> {
+  return request<SelectedCitation[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/selected-citations`);
+}
+export async function updateSelectedCitation(selectedCitationId: string, status: "inserted" | "skipped"): Promise<SelectedCitation> {
+  return request<SelectedCitation>(`/api/v1/research/selected-citations/${encodeURIComponent(selectedCitationId)}`, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+export async function listReferenceEntryDrafts(conversationId: string): Promise<ReferenceEntryDraft[]> {
+  return request<ReferenceEntryDraft[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-entry-drafts`);
+}
+export async function getReferenceDraftPackage(conversationId: string): Promise<ReferenceDraftPackage> {
+  return request<ReferenceDraftPackage>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reference-draft-package`);
+}
+export async function createCitationQualityCheck(conversationId: string): Promise<CitationQualityCheck> {
+  return request<CitationQualityCheck>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`, { method: "POST" });
+}
+export async function listCitationQualityChecks(conversationId: string): Promise<CitationQualityCheck[]> {
+  return request<CitationQualityCheck[]>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/citation-quality-checks`);
+}
+export async function getSubmissionProfile(conversationId: string): Promise<SubmissionProfile | null> {
+  return request<SubmissionProfile | null>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`);
+}
+export async function saveSubmissionProfile(conversationId: string, payload: SubmissionProfileInput): Promise<SubmissionProfile> {
+  return request<SubmissionProfile>(`/api/v1/research/conversations/${encodeURIComponent(conversationId)}/submission-profile`, { method: "PUT", body: JSON.stringify(payload) });
+}
+export async function createSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck> {
+  return request<SubmissionReadinessCheck>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
+}
+export async function listSubmissionReadiness(draftId: string): Promise<SubmissionReadinessCheck[]> {
+  return request<SubmissionReadinessCheck[]>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/submission-readiness`);
+}
+export async function createPaperExportPackage(draftId: string): Promise<PaperExportPackage> {
+  return request<PaperExportPackage>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/export-package`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
+}
+
 function validateConversationResponse(data: unknown): ResearchConversationResponse {
   if (!data || typeof data !== "object") {
     throw new ResearchApiError(502, "科研服务返回了无法识别的数据。请刷新后重试。");
@@ -532,6 +1004,8 @@ function validateConversationResponse(data: unknown): ResearchConversationRespon
   return data as ResearchConversationResponse;
 }
 
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -540,16 +1014,23 @@ async function request<T>(
   let response: Response;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf && init?.method && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method.toUpperCase())) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
       cache: "no-store",
+      credentials: "include",
       signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
+      headers,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {

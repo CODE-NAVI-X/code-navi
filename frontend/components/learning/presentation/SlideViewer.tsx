@@ -15,6 +15,7 @@ import {
   Loader2,
   Presentation as PresentationIcon,
   Download,
+  FileQuestion,
 } from "lucide-react";
 import type {
   PresentationGenerationMode,
@@ -22,6 +23,8 @@ import type {
   Slide,
 } from "@/lib/api/learning";
 import { SlideRenderer } from "./SlideRenderer";
+import { MarkButton } from "@/components/learning/MarkButton";
+import { markSourceRef } from "@/lib/api/profile";
 
 interface SlideViewerProps {
   knowledgePoint: string;
@@ -34,6 +37,12 @@ interface SlideViewerProps {
   exporting?: boolean;
   generationMode?: PresentationGenerationMode;
   providerName?: string;
+  /**
+   * When provided, a "generate companion exercises" action is rendered in the
+   * top bar. Optional so the read-only preview in the notebook drawer stays
+   * without it.
+   */
+  onGenerateQuiz?: () => void;
 }
 
 function ThumbPlaceholder() {
@@ -55,6 +64,7 @@ export function SlideViewer({
   exporting,
   generationMode,
   providerName,
+  onGenerateQuiz,
 }: SlideViewerProps) {
   const mainRef = useRef<HTMLDivElement>(null);
   const [mainWidth, setMainWidth] = useState(800);
@@ -78,9 +88,9 @@ export function SlideViewer({
   const currentSlide = hasCurrent ? slides[currentIndex] : null;
 
   return (
-    <div className="flex gap-5">
+    <div className="flex flex-col gap-5 lg:flex-row">
       {/* Thumbnail rail */}
-      <div className="w-40 shrink-0 space-y-3">
+      <div className="flex w-full shrink-0 gap-3 overflow-x-auto pb-1 lg:block lg:w-40 lg:space-y-3 lg:overflow-visible">
         {outlines.map((outline, idx) => {
           const slide = slides[idx];
           const isActive = idx === currentIndex;
@@ -91,9 +101,9 @@ export function SlideViewer({
               type="button"
               onClick={() => onNavigate(idx)}
               disabled={pending}
-              className={`group w-full rounded-xl border p-1.5 text-left transition-all cursor-pointer ${
+              className={`group w-36 shrink-0 rounded-xl border p-1.5 text-left transition-all cursor-pointer lg:w-full ${
                 isActive
-                  ? "border-indigo-400 bg-indigo-50/60 dark:border-indigo-500 dark:bg-indigo-950/30"
+                  ? "border-slate-400 bg-slate-50 dark:border-zinc-600 dark:bg-zinc-800"
                   : "border-slate-200/70 bg-white hover:border-slate-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
               } ${pending ? "opacity-70" : ""}`}
             >
@@ -107,7 +117,7 @@ export function SlideViewer({
               <p
                 className={`mt-1.5 truncate px-0.5 text-[11px] font-medium ${
                   isActive
-                    ? "text-indigo-700 dark:text-indigo-300"
+                    ? "text-slate-900 dark:text-zinc-100"
                     : "text-slate-600 dark:text-zinc-400"
                 }`}
               >
@@ -125,7 +135,7 @@ export function SlideViewer({
 
       {/* Main canvas */}
       <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-zinc-400">
             <PresentationIcon className="h-4 w-4" strokeWidth={1.5} />
             <span className="truncate">{knowledgePoint}</span>
@@ -144,12 +154,24 @@ export function SlideViewer({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+            {hasCurrent && (
+              <MarkButton
+                knowledgePoint={knowledgePoint}
+                sourceType="ppt_page"
+                sourceRef={markSourceRef(
+                  "ppt_page",
+                  knowledgePoint,
+                  String(currentIndex),
+                )}
+                label={`第 ${currentIndex + 1} 页`}
+              />
+            )}
             <button
               type="button"
               onClick={() => onNavigate(currentIndex - 1)}
               disabled={currentIndex <= 0}
-              className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              className="app-button-secondary flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-zinc-800"
             >
               <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.5} />
               上一页
@@ -158,17 +180,27 @@ export function SlideViewer({
               type="button"
               onClick={() => onNavigate(currentIndex + 1)}
               disabled={!hasCurrent || currentIndex >= slides.length - 1}
-              className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              className="app-button-secondary flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-zinc-800"
             >
               下一页
               <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.5} />
             </button>
+            {onGenerateQuiz && (
+              <button
+                type="button"
+                onClick={onGenerateQuiz}
+                className="app-button-secondary flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+              >
+                <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
+                根据 PPT 生成配套练习题
+              </button>
+            )}
             {onExport && (
               <button
                 type="button"
                 onClick={onExport}
                 disabled={exporting || slides.length === 0}
-                className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                className="app-button-primary flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-zinc-200"
               >
                 {exporting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
@@ -192,7 +224,7 @@ export function SlideViewer({
             <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-xl border border-slate-200/80 bg-slate-50 text-slate-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500">
               {isGeneratingCurrent ? (
                 <>
-                  <Loader2 className="h-8 w-8 animate-spin text-indigo-500" strokeWidth={1.5} />
+                  <Loader2 className="h-8 w-8 animate-spin text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
                   <p className="text-xs font-medium">
                     正在生成第 {currentIndex + 1} / {total} 页…
                   </p>

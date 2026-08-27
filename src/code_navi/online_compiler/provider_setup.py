@@ -12,7 +12,13 @@ from code_navi.providers import (
 )
 from kernel.runtime import AgentRuntime
 
-from .ai_evaluation import AiEvaluator, AiTutor, KernelAiEvaluator
+from .ai_evaluation import (
+    AiEvaluator,
+    AiTutor,
+    KernelAiEvaluator,
+    PracticeSetPlanner,
+    ProblemOrganizer,
+)
 from .config import Settings
 
 
@@ -20,6 +26,8 @@ from .config import Settings
 class AiService:
     evaluator: AiEvaluator | None
     tutor: AiTutor | None
+    organizer: ProblemOrganizer | None
+    practice_set_planner: PracticeSetPlanner | None
     status: str
     message: str
 
@@ -31,7 +39,14 @@ def create_ai_service(
     settings: Settings, *, provider_factory: ProviderFactory = create_provider
 ) -> AiService:
     if settings.ai_provider == "mock" or settings.ai_model is None:
-        return AiService(None, None, "disabled", "未配置 AI 模型，规则识别与学习记录仍可使用。")
+        return AiService(
+            None,
+            None,
+            None,
+            None,
+            "disabled",
+            "未配置 AI 模型，规则识别与学习记录仍可使用。",
+        )
     provider_settings = ProviderSettings(
         name=settings.ai_provider,
         model=settings.ai_model,
@@ -41,7 +56,14 @@ def create_ai_service(
     try:
         provider = provider_factory(provider_settings)
     except ProviderConfigurationError as error:
-        return AiService(None, None, "disabled", str(error))
+        return AiService(None, None, None, None, "disabled", str(error))
     service = KernelAiEvaluator(AgentRuntime(provider))
     label = "DeepSeek" if settings.ai_provider == "deepseek" else "OpenAI"
-    return AiService(service, service, "ready", f"{label} AI 已启用（{settings.ai_model}）。")
+    return AiService(
+        service,
+        service,
+        service,
+        service,
+        "ready",
+        f"{label} AI 已启用（{settings.ai_model}）。",
+    )

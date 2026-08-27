@@ -11,28 +11,27 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .auth import models as auth_models  # noqa: F401  (register tables)
+from .auth.router import router as auth_router
+from .auth.settings import session_settings
 from .context_transfer import models as context_transfer_models  # noqa: F401
 from .context_transfer.router import router as context_transfer_router
 from .db import DATABASE_URL, Base, engine
 from .learning import models as learning_models  # noqa: F401  (register tables)
 from .learning.router import router as learning_router
+from .learning_profile import models as learning_profile_models  # noqa: F401  (register tables)
+from .learning_profile.router import router as learning_profile_router
+from .online_compiler import models as compiler_models  # noqa: F401  (register tables)
 from .online_compiler.router import router as compiler_router
 from .provider_config import load_local_provider_config
 from .research import models as research_models  # noqa: F401  (register tables)
 from .research.router import router as research_router
+from .workspaces import models as workspace_models  # noqa: F401  (register tables)
+from .workspaces.router import router as workspace_router
 
 logger = logging.getLogger(__name__)
 
-
-def _cors_origins() -> list[str]:
-    """Return configured browser origins, with loopback-only development defaults."""
-    configured = os.getenv("CODE_NAVI_CORS_ORIGINS")
-    if not configured:
-        return ["http://127.0.0.1:3000", "http://localhost:3000"]
-    return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
-
-
-CORS_ORIGINS = _cors_origins()
+CORS_ORIGINS = session_settings.cors_origins
 
 # ---------------------------------------------------------------------------
 # Lifespan - ensure database tables exist on startup
@@ -55,20 +54,28 @@ async def lifespan(_app: FastAPI):
     yield
 
 
+is_prod = session_settings.environment == "production"
+
 app = FastAPI(
     title="Code Navi Backend API",
     description="Learning, teaching, and research assistance API",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None if is_prod else "/docs",
+    redoc_url=None if is_prod else "/redoc",
+    openapi_url=None if is_prod else "/openapi.json",
 )
 
 # ---------------------------------------------------------------------------
 # Mount business-module routers
 # ---------------------------------------------------------------------------
+app.include_router(auth_router)
 app.include_router(learning_router)
+app.include_router(learning_profile_router)
 app.include_router(research_router)
 app.include_router(compiler_router)
 app.include_router(context_transfer_router)
+app.include_router(workspace_router)
 
 # ---------------------------------------------------------------------------
 # CORS - explicit origin allowlist.

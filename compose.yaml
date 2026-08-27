@@ -54,6 +54,27 @@ services:
         condition: service_healthy
     restart: "no"
 
+  cli-database-migrate:
+    build:
+      context: .
+    image: code-navi:local
+    user: "10001:10001"
+    read_only: true
+    working_dir: /opt/code-navi
+    environment:
+      CODE_NAVI_DATABASE_URL: sqlite:////data/code-navi.db
+    entrypoint: []
+    command: ["alembic", "upgrade", "head"]
+    volumes:
+      - type: volume
+        source: code_navi_runs
+        target: /data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
   code-navi:
     build:
       context: .
@@ -68,6 +89,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PISTON_BASE_URL: http://piston:2000
       PISTON_PYTHON_VERSION: ${PISTON_PYTHON_VERSION:-3.12.0}
+      CODE_NAVI_DATABASE_URL: sqlite:////data/code-navi.db
       COMPILER_DATABASE_PATH: /data/compiler-learning-records.sqlite3
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
@@ -87,6 +109,8 @@ services:
       - ALL
     depends_on:
       compiler-runtime-setup:
+        condition: service_completed_successfully
+      cli-database-migrate:
         condition: service_completed_successfully
 
 volumes:

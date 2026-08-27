@@ -24,11 +24,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -396,7 +396,9 @@ class PresentationGenerator:
         self,
         request: PresentationGenerateRequest,
         db: Session,
-    ) -> Iterator[dict]:
+        *,
+        owner_principal_id: str | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
         """Emit one dict per SSE event; persist the finished deck at the end.
 
         Event shape:
@@ -448,6 +450,7 @@ class PresentationGenerator:
                 slides,
                 generation_mode,
                 provider_name,
+                owner_principal_id=owner_principal_id,
             )
             # mode="json" renders datetime/Path etc. as JSON-safe primitives.
             yield {"type": "done", "presentation": presentation.model_dump(mode="json")}
@@ -478,6 +481,8 @@ class PresentationGenerator:
         slides: list[Slide],
         generation_mode: GenerationMode,
         provider_name: str,
+        *,
+        owner_principal_id: str | None = None,
     ) -> Presentation:
         """Persist the finished deck as a ``presentation`` notebook item."""
         presentation = Presentation(
@@ -491,7 +496,8 @@ class PresentationGenerator:
             created_at=datetime.now(UTC),
         )
         entry = NotebookItemModel(
-            user_id="poc-user",  # TODO: replace with real auth user id
+            user_id=owner_principal_id or "poc-user",
+            owner_principal_id=owner_principal_id,
             session_id=session_id,
             knowledge_id=knowledge_point,
             item_type="presentation",

@@ -1,20 +1,12 @@
 import { AlertTriangle, CalendarDays, CheckCircle2, FileText, Lightbulb } from "lucide-react";
 
 import type { ConversationResearchPlan, ResearchPlanEntry } from "@/lib/api/research";
+import { ClassificationBadge } from "./ClassificationBadge";
 
 function PlanEntry({ entry }: { entry: ResearchPlanEntry }) {
-  const pending = entry.classification === "to_verify";
   return (
     <li className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs leading-5 dark:border-zinc-800 dark:bg-zinc-950/40">
-      <span
-        className={
-          pending
-            ? "rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
-            : "rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800 dark:bg-sky-950/50 dark:text-sky-300"
-        }
-      >
-        {pending ? "待确认" : "建议"}
-      </span>
+      <ClassificationBadge classification={entry.classification} />
       <p className="mt-2 text-slate-800 dark:text-zinc-200">{entry.content}</p>
       <p className="mt-1 text-[10px] text-slate-500 dark:text-zinc-500">依据：{entry.basis}</p>
     </li>
@@ -36,13 +28,13 @@ function Section({ title, entries }: { title: string; entries: ResearchPlanEntry
 
 export function ResearchPlanPanel({ plan }: { plan: ConversationResearchPlan }) {
   return (
-    <section className="rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm dark:border-indigo-900/70 dark:bg-zinc-900/80">
+    <section className="app-card rounded-2xl p-4">
       <div className="flex items-start gap-3">
-        <span className="rounded-xl bg-indigo-100 p-2 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300">
+        <span className="rounded-xl bg-slate-100 p-2 text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
           <FileText className="h-4 w-4" />
         </span>
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">Research plan</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-zinc-400">Research plan</p>
           <h2 className="mt-1 text-sm font-bold text-slate-900 dark:text-zinc-100">规则研究计划</h2>
         </div>
       </div>
@@ -60,7 +52,7 @@ export function ResearchPlanPanel({ plan }: { plan: ConversationResearchPlan }) 
 
         <section>
           <h3 className="flex items-center gap-1.5 text-[11px] font-bold text-slate-800 dark:text-zinc-200">
-            <CalendarDays className="h-3.5 w-3.5 text-indigo-500" /> 主要风险与规避建议
+            <CalendarDays className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" /> 主要风险与规避建议
           </h3>
           <ul className="mt-2 space-y-2">
             {plan.risks_and_mitigations.map((item) => (
@@ -76,11 +68,11 @@ export function ResearchPlanPanel({ plan }: { plan: ConversationResearchPlan }) 
 
         <section>
           <h3 className="flex items-center gap-1.5 text-[11px] font-bold text-slate-800 dark:text-zinc-200">
-            <Lightbulb className="h-3.5 w-3.5 text-indigo-500" /> 建议检索关键词
+            <Lightbulb className="h-3.5 w-3.5 text-slate-500 dark:text-zinc-400" /> 建议检索关键词
           </h3>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {plan.suggested_search_keywords.map((keyword) => (
-              <span key={keyword} className="rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-medium text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200">
+              <span key={keyword} className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
                 {keyword}
               </span>
             ))}

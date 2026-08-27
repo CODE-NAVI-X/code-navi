@@ -19,6 +19,8 @@ Kernel 初始内容来自 `Dlalmlurn/code-navi-kernel` 提交 `77e7c9e1898f94c42
 
 `core/` 不导入供应商 SDK、`code_navi`、前端、CLI 或业务配置。产品提示、Workflow、数据库模型和页面状态留在应用层。
 
+`RuntimeRequest` 可携带显式 `conversation_history`；Kernel 不按 `session_id` 读取业务历史。Runtime 只负责将 system、Host 提供的历史和当前 user 交给执行循环，业务会话恢复、摘要边界与持久化压缩仍属于 Host。
+
 ## 3. 修改与验证
 
 只有公开接口已经复现出能力缺口时才修改 Kernel：

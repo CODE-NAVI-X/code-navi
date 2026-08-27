@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import uuid
-from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -246,7 +244,8 @@ class ResearchConversationSearchService:
             db.add(
                 NotebookItemModel(
                     id=note_id,
-                    user_id="poc-user",
+                    user_id=conversation.owner_principal_id or "poc-user",
+                    owner_principal_id=conversation.owner_principal_id,
                     session_id=request.learning_session_id,
                     knowledge_id=f"research:{conversation_id}"[:64],
                     item_type="research_note",
@@ -269,24 +268,15 @@ class ResearchConversationSearchService:
         sources: list[str],
         db: Session,
     ) -> ConversationEvidenceBundle | None:
-        ttl_seconds = max(0, int(os.getenv("CODE_NAVI_ACADEMIC_CACHE_TTL_SECONDS", "3600")))
-        if ttl_seconds == 0:
-            return None
-        cutoff = datetime.now(UTC) - timedelta(seconds=ttl_seconds)
-        records = (
+        expected_sources = list(dict.fromkeys(sources or ["cnki", "crossref", "semantic_scholar"]))
+        bundles = (
             db.query(ResearchEvidenceBundleModel)
             .filter(ResearchEvidenceBundleModel.conversation_id == conversation_id)
             .order_by(ResearchEvidenceBundleModel.created_at.desc())
             .all()
         )
-        expected_sources = list(dict.fromkeys(sources))
-        for record in records:
-            created_at = record.created_at
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=UTC)
-            if created_at < cutoff:
-                break
-            bundle = ConversationEvidenceBundle.model_validate(record.bundle_data)
+        for row in bundles:
+            bundle = ConversationEvidenceBundle.model_validate(row.bundle_data)
             if (
                 " ".join(bundle.query.split()).casefold() == " ".join(query.split()).casefold()
                 and bundle.requested_sources == expected_sources
@@ -295,12 +285,24 @@ class ResearchConversationSearchService:
         return None
 
     @staticmethod
-    def _profile(conversation_id: str, db: Session) -> ResearchProfile:
-        conversation = ResearchConversationSearchService._get_conversation(conversation_id, db)
+    def _profile(
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchProfile:
+        conversation = ResearchConversationSearchService._get_conversation(
+            conversation_id, db, owned_ids=owned_ids
+        )
         return ResearchProfile.model_validate(conversation.profile_data)
 
     @staticmethod
-    def _get_conversation(conversation_id: str, db: Session) -> ResearchConversationModel:
+    def _get_conversation(
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationModel:
         conversation = db.get(ResearchConversationModel, conversation_id)
         if conversation is None:
             raise ConversationNotFoundError(conversation_id)

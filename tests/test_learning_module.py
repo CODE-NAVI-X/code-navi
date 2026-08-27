@@ -200,6 +200,9 @@ class TestQueryOrchestrator:
         assert item is not None
         assert item.item_type == "summary"
         assert item.content == response.summary
+        # The response exposes the archived id so the client can open the
+        # learning → research context-transfer confirm flow for this record.
+        assert response.notebook_item_id == item.id
 
     def test_explain_without_citations(self, db: Session) -> None:
         orchestrator = QueryOrchestrator()
@@ -267,6 +270,23 @@ class TestExplainEndpoint:
         )
 
         assert resp.status_code == 422  # Pydantic validation error
+
+    def test_post_explain_accepts_bounded_source_material(self, client: TestClient) -> None:
+        material = "教材片段。" * 12
+
+        accepted = client.post("/api/v1/learning/explain", json={"knowledge_point": material})
+        rejected = client.post("/api/v1/learning/explain", json={"knowledge_point": "x" * 65})
+
+        assert accepted.status_code == 200
+        assert rejected.status_code == 422
+
+    def test_workspace_context_requires_a_local_profile(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/learning/explain",
+            json={"knowledge_point": "Monad", "workspace_id": "workspace-without-profile"},
+        )
+
+        assert resp.status_code == 422
 
     def test_health_endpoint(self, client: TestClient) -> None:
         resp = client.get("/health")

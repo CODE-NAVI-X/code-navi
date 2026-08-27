@@ -115,17 +115,26 @@ export async function confirmContextTransfer(
   );
 }
 
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf && init?.method && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method.toUpperCase())) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
       cache: "no-store",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
+      credentials: "include",
+      headers,
     });
   } catch (error) {
     throw new ContextTransferApiError(

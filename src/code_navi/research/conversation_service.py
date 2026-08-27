@@ -10,31 +10,90 @@ from typing import Literal, Protocol
 from sqlalchemy.orm import Session
 
 from code_navi.context_transfer.schemas import ConfirmedContextProvenance
+from code_navi.conversations import ContextAssembler, ConversationStateStore
+from kernel.core import ContentBlock, Message
 
 from .conversation_agent import (
     ConversationDecisionOutcome,
     RuntimeConversationDecisionGenerator,
+    build_research_conversation_input,
+    research_conversation_agent,
 )
+from .conversation_citation_quality import build_citation_quality_check
+from .conversation_citation_scaffold import build_citation_candidate, build_selected_citation
 from .conversation_code_draft import build_experiment_code_draft
+from .conversation_context import (
+    ContextAssembly,
+    ResearchContextAssembler,
+    ResearchContextInput,
+)
 from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
 from .conversation_mindmap import build_research_mindmap
+from .conversation_paper_blueprint import build_paper_blueprint
+from .conversation_paper_review import (
+    build_revision_from_suggestion,
+    build_revision_suggestion,
+    build_rules_paper_review,
+    parse_paper_sections,
+)
 from .conversation_plan import build_conversation_research_plan
+from .conversation_reference_draft import build_reference_draft_package
+from .conversation_reproduction import build_reproduction_pipeline
 from .conversation_schemas import (
+    ApplyRevisionSuggestionRequest,
+    CitationCandidate,
+    CitationQualityCheck,
     ConversationEvidenceBundle,
+    CreateExperimentEvidenceBundleRequest,
+    CreatePaperDraftRequest,
+    CreateReproductionPipelineRequest,
     CreateResearchConversationRequest,
+    CreateSelectedCitationRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
+    ExperimentEvidenceBundle,
+    ExperimentEvidenceItem,
+    PaperBlueprint,
+    PaperDraft,
+    PaperExportPackage,
+    PaperReview,
+    PaperRevision,
+    ReferenceDraftPackage,
+    ReferenceEntryDraft,
+    ReproductionPipeline,
+    ResearchContextSummary,
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
     ResearchProfile,
     ResearchProfilePatch,
     ResearchReadiness,
+    RevisionSuggestion,
+    SelectedCitation,
     SendResearchMessageRequest,
+    SubmissionProfile,
+    SubmissionProfileInput,
+    SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
+    UpdateRevisionTaskRequest,
+    UpdateSelectedCitationRequest,
 )
-from .models import ResearchConversationModel, ResearchEvidenceBundleModel
+from .conversation_submission import build_paper_export_package, build_submission_readiness
+from .models import (
+    ResearchCitationQualityCheckModel,
+    ResearchConversationModel,
+    ResearchEvidenceBundleModel,
+    ResearchExperimentEvidenceBundleModel,
+    ResearchPaperDraftModel,
+    ResearchPaperReviewModel,
+    ResearchPaperRevisionModel,
+    ResearchReproductionPipelineModel,
+    ResearchRevisionSuggestionModel,
+    ResearchSelectedCitationModel,
+    ResearchSubmissionProfileModel,
+    ResearchSubmissionReadinessModel,
+)
 from .research_artifact_llm import (
     ResearchArtifactGenerator,
     RuntimeResearchArtifactGenerator,
@@ -45,6 +104,18 @@ class ConversationNotFoundError(LookupError):
     """Raised when a requested research conversation does not exist."""
 
 
+class CitationSourceNotFoundError(LookupError):
+    """Raised when a citation request escapes the current conversation evidence."""
+
+
+class SelectedCitationNotFoundError(LookupError):
+    """Raised when a requested local citation selection does not exist."""
+
+
+class ReproductionPipelineNotFoundError(LookupError):
+    """Raised when a Pipeline or its explicitly selected saved source is absent."""
+
+
 class ConversationDecisionGenerator(Protocol):
     """Application boundary for an online or deterministic decision generator."""
 
@@ -52,11 +123,34 @@ class ConversationDecisionGenerator(Protocol):
         self,
         *,
         profile: ResearchProfile,
-        messages: list[ResearchConversationMessage],
+        conversation_history: tuple[Message, ...],
         user_message: str,
         conversation_id: str,
         confirmed_context: ConfirmedContextProvenance | None = None,
+        runtime_input: str | None = None,
     ) -> ConversationDecisionOutcome: ...
+
+
+class ResearchConversationStore:
+    """Load Research state by explicit business ID from the supplied DB session."""
+
+    def load(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationModel:
+        conversation = db.get(ResearchConversationModel, conversation_id)
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        if (
+            owned_ids is not None
+            and conversation.owner_principal_id
+            and conversation.owner_principal_id not in owned_ids
+        ):
+            raise ConversationNotFoundError(conversation_id)
+        return conversation
 
 
 class ResearchConversationService:
@@ -66,19 +160,27 @@ class ResearchConversationService:
         self,
         decision_generator: ConversationDecisionGenerator | None = None,
         artifact_generator: ResearchArtifactGenerator | None = None,
+        context_assembler: ContextAssembler[ResearchContextInput, ContextAssembly] | None = None,
+        conversation_store: ConversationStateStore[Session, ResearchConversationModel]
+        | None = None,
     ) -> None:
         self.decision_generator = decision_generator or RuntimeConversationDecisionGenerator()
         self.artifact_generator = artifact_generator or RuntimeResearchArtifactGenerator()
+        self.context_assembler = context_assembler or ResearchContextAssembler()
+        self.conversation_store = conversation_store or ResearchConversationStore()
 
     def create(
         self,
         request: CreateResearchConversationRequest,
         db: Session,
+        *,
+        owner_principal_id: str | None = None,
     ) -> ResearchConversationResponse:
         """Create a conversation and optionally process its first user message."""
         conversation = ResearchConversationModel(
             profile_data=ResearchProfile().model_dump(mode="json"),
             messages_data=[],
+            owner_principal_id=owner_principal_id,
         )
         db.add(conversation)
         db.flush()
@@ -116,6 +218,7 @@ class ResearchConversationService:
         provenance: ConfirmedContextProvenance,
         db: Session,
         *,
+        owner_principal_id: str | None = None,
         commit: bool = True,
     ) -> ResearchConversationResponse:
         """Create a rules-only conversation from one final confirmed snapshot."""
@@ -130,6 +233,7 @@ class ResearchConversationService:
             profile_data=profile.model_dump(mode="json"),
             messages_data=[],
             context_provenance=provenance.model_dump(mode="json"),
+            owner_principal_id=owner_principal_id,
         )
         db.add(conversation)
         db.flush()
@@ -172,15 +276,25 @@ class ResearchConversationService:
         conversation_id: str,
         request: SendResearchMessageRequest,
         db: Session,
+        *,
+        owned_ids: list[str] | None = None,
     ) -> ResearchConversationResponse:
         """Process one free-form user message and return the restorable state."""
-        conversation = self._get_model(conversation_id, db)
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
         self._process_message(conversation, request.message, db)
         return self._to_response(conversation, db)
 
-    def get(self, conversation_id: str, db: Session) -> ResearchConversationResponse:
+    def get(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationResponse:
         """Restore a conversation without invoking a model or external service."""
-        return self._to_response(self._get_model(conversation_id, db), db)
+        return self._to_response(
+            self._get_model(conversation_id, db, owned_ids=owned_ids), db
+        )
 
     def generate_topic_difficulty_analysis(
         self,
@@ -241,12 +355,703 @@ class ResearchConversationService:
             conversation_id=conversation.id,
         )
 
+    def create_experiment_evidence_bundle(
+        self,
+        conversation_id: str,
+        request: CreateExperimentEvidenceBundleRequest,
+        db: Session,
+    ) -> ExperimentEvidenceBundle:
+        """Persist explicit user text only; this operation has no model or network path."""
+        self._get_model(conversation_id, db)
+        submitted_at = datetime.now(UTC)
+        basis = f"用户于 {submitted_at.isoformat()} 显式提交；系统未复核其真实性。"
+        bundle = ExperimentEvidenceBundle(
+            bundle_id=str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            experiment_name=ExperimentEvidenceItem(
+                category="setup",
+                content=request.experiment_name,
+                classification="fact",
+                basis=basis,
+            ),
+            goal=ExperimentEvidenceItem(
+                category="setup",
+                content=request.goal,
+                classification="fact",
+                basis=basis,
+            ),
+            items=[
+                ExperimentEvidenceItem(
+                    **item.model_dump(),
+                    basis=(
+                        basis
+                        if item.classification == "fact"
+                        else (
+                            f"用户于 {submitted_at.isoformat()} 标记为"
+                            f"{_classification_label(item.classification)}；系统未补造或验证。"
+                        )
+                    ),
+                )
+                for item in request.items
+            ],
+            submitted_at=submitted_at,
+            provenance_note=(
+                "本证据包仅保存用户主动粘贴的文本、表格文本或图表说明；其中 fact "
+                "表示用户报告事实，未由系统读取原始数据、运行代码或独立复核。"
+            ),
+        )
+        db.add(
+            ResearchExperimentEvidenceBundleModel(
+                id=bundle.bundle_id,
+                conversation_id=conversation_id,
+                bundle_data=bundle.model_dump(mode="json"),
+                created_at=submitted_at,
+            )
+        )
+        db.commit()
+        return bundle
+
+    def list_experiment_evidence_bundles(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> list[ExperimentEvidenceBundle]:
+        self._get_model(conversation_id, db)
+        return self._experiment_evidence_bundles(conversation_id, db)
+
+    def create_reproduction_pipeline(
+        self,
+        conversation_id: str,
+        request: CreateReproductionPipelineRequest,
+        db: Session,
+    ) -> ReproductionPipeline:
+        """Persist a Pipeline only after proving the user-selected local paper belongs here."""
+        conversation = self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchEvidenceBundleModel)
+            .filter(
+                ResearchEvidenceBundleModel.id == request.evidence_bundle_id,
+                ResearchEvidenceBundleModel.conversation_id == conversation_id,
+            )
+            .first()
+        )
+        if record is None:
+            raise ReproductionPipelineNotFoundError(request.evidence_bundle_id)
+        bundle = ConversationEvidenceBundle.model_validate(record.bundle_data)
+        paper = next((item for item in bundle.papers if item.url == request.paper_url), None)
+        if paper is None:
+            raise ReproductionPipelineNotFoundError(request.paper_url)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        created_at = datetime.now(UTC)
+        pipeline_id = str(uuid.uuid4())
+        pipeline = build_reproduction_pipeline(
+            profile,
+            plan,
+            bundle,
+            paper,
+            self._experiment_evidence_bundles(conversation_id, db),
+            pipeline_id=pipeline_id,
+            created_at=created_at,
+        )
+        db.add(
+            ResearchReproductionPipelineModel(
+                id=pipeline_id,
+                conversation_id=conversation_id,
+                pipeline_data=pipeline.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+        return pipeline
+
+    def list_reproduction_pipelines(
+        self, conversation_id: str, db: Session
+    ) -> list[ReproductionPipeline]:
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchReproductionPipelineModel)
+            .filter(ResearchReproductionPipelineModel.conversation_id == conversation_id)
+            .order_by(ResearchReproductionPipelineModel.created_at.desc())
+            .all()
+        )
+        return [ReproductionPipeline.model_validate(record.pipeline_data) for record in records]
+
+    def get_reproduction_pipeline(self, pipeline_id: str, db: Session) -> ReproductionPipeline:
+        record = db.get(ResearchReproductionPipelineModel, pipeline_id)
+        if record is None:
+            raise ReproductionPipelineNotFoundError(pipeline_id)
+        return ReproductionPipeline.model_validate(record.pipeline_data)
+
+    def generate_paper_blueprint(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> PaperBlueprint:
+        """Build a rules-only, traceable outline after an explicit user action."""
+        conversation = self._get_model(conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        return build_paper_blueprint(
+            profile,
+            conversation_id=conversation.id,
+            plan=plan,
+            academic_evidence=self._evidence_bundles(conversation.id, db),
+            experiment_evidence=self._experiment_evidence_bundles(conversation.id, db),
+        )
+
+    def create_paper_draft(
+        self, conversation_id: str, request: CreatePaperDraftRequest, db: Session
+    ) -> PaperDraft:
+        """Persist only an explicitly pasted text draft; no local file is read."""
+        self._get_model(conversation_id, db)
+        previous = (
+            db.query(ResearchPaperDraftModel)
+            .filter(ResearchPaperDraftModel.conversation_id == conversation_id)
+            .count()
+        )
+        created_at = datetime.now(UTC)
+        draft = PaperDraft(
+            draft_id=str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            title=request.title,
+            content=request.content,
+            format=request.format,
+            version=previous + 1,
+            sections=parse_paper_sections(request.content, format=request.format),
+            created_at=created_at,
+        )
+        db.add(
+            ResearchPaperDraftModel(
+                id=draft.draft_id,
+                conversation_id=conversation_id,
+                draft_data=draft.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+        return draft
+
+    def list_paper_drafts(self, conversation_id: str, db: Session) -> list[PaperDraft]:
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchPaperDraftModel)
+            .filter(ResearchPaperDraftModel.conversation_id == conversation_id)
+            .order_by(ResearchPaperDraftModel.created_at.desc())
+            .all()
+        )
+        return [PaperDraft.model_validate(record.draft_data) for record in records]
+
+    def list_citation_candidates(
+        self, conversation_id: str, db: Session
+    ) -> list[CitationCandidate]:
+        """Derive candidate sources from saved local evidence without any search call."""
+        self._get_model(conversation_id, db)
+        candidates: list[CitationCandidate] = []
+        for bundle in self._evidence_bundles(conversation_id, db):
+            candidates.extend(
+                build_citation_candidate(conversation_id, bundle, paper) for paper in bundle.papers
+            )
+        return candidates
+
+    def create_selected_citation(
+        self,
+        conversation_id: str,
+        request: CreateSelectedCitationRequest,
+        db: Session,
+    ) -> SelectedCitation:
+        """Persist one user choice after proving the source belongs to this conversation."""
+        self._get_model(conversation_id, db)
+        bundle_record = (
+            db.query(ResearchEvidenceBundleModel)
+            .filter(
+                ResearchEvidenceBundleModel.id == request.evidence_bundle_id,
+                ResearchEvidenceBundleModel.conversation_id == conversation_id,
+            )
+            .first()
+        )
+        if bundle_record is None:
+            raise CitationSourceNotFoundError(request.evidence_bundle_id)
+        bundle = ConversationEvidenceBundle.model_validate(bundle_record.bundle_data)
+        paper = next((item for item in bundle.papers if item.url == request.paper_url), None)
+        if paper is None:
+            raise CitationSourceNotFoundError(request.paper_url)
+        created_at = datetime.now(UTC)
+        selection_id = str(uuid.uuid4())
+        selected = build_selected_citation(
+            build_citation_candidate(conversation_id, bundle, paper),
+            request,
+            selected_citation_id=selection_id,
+            created_at=created_at,
+        )
+        db.add(
+            ResearchSelectedCitationModel(
+                id=selection_id,
+                conversation_id=conversation_id,
+                selection_data=selected.model_dump(mode="json"),
+                created_at=created_at,
+            )
+        )
+        db.commit()
+        return selected
+
+    def list_selected_citations(self, conversation_id: str, db: Session) -> list[SelectedCitation]:
+        """Restore explicit user selections without reading paper text or the network."""
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchSelectedCitationModel)
+            .filter(ResearchSelectedCitationModel.conversation_id == conversation_id)
+            .order_by(ResearchSelectedCitationModel.created_at.desc())
+            .all()
+        )
+        return [SelectedCitation.model_validate(record.selection_data) for record in records]
+
+    def update_selected_citation(
+        self,
+        selected_citation_id: str,
+        request: UpdateSelectedCitationRequest,
+        db: Session,
+    ) -> SelectedCitation:
+        """Record an explicit insert/skip state; it never changes a paper document."""
+        record = db.get(ResearchSelectedCitationModel, selected_citation_id)
+        if record is None:
+            raise SelectedCitationNotFoundError(selected_citation_id)
+        selected = SelectedCitation.model_validate(record.selection_data)
+        updated = selected.model_copy(update={"status": request.status})
+        record.selection_data = updated.model_dump(mode="json")
+        db.commit()
+        return updated
+
+    def list_reference_entry_drafts(
+        self, conversation_id: str, db: Session
+    ) -> list[ReferenceEntryDraft]:
+        """Return only active user choices as a locally derived, reviewable draft."""
+        return [
+            selected.reference_entry
+            for selected in self.list_selected_citations(conversation_id, db)
+            if selected.status != "skipped"
+        ]
+
+    def get_reference_draft_package(
+        self, conversation_id: str, db: Session
+    ) -> ReferenceDraftPackage:
+        """Return deterministic copy text without search, full text, or draft mutation."""
+        self._get_model(conversation_id, db)
+        return build_reference_draft_package(
+            conversation_id,
+            self.list_selected_citations(conversation_id, db),
+        )
+
+    def create_citation_quality_check(
+        self, conversation_id: str, db: Session
+    ) -> CitationQualityCheck:
+        """Persist one explicit offline check over this conversation's saved selections."""
+        self._get_model(conversation_id, db)
+        checked_at = datetime.now(UTC)
+        check_id = str(uuid.uuid4())
+        check = build_citation_quality_check(
+            conversation_id,
+            self.list_selected_citations(conversation_id, db),
+            check_id=check_id,
+            checked_at=checked_at,
+        )
+        db.add(
+            ResearchCitationQualityCheckModel(
+                id=check_id,
+                conversation_id=conversation_id,
+                check_data=check.model_dump(mode="json"),
+                created_at=checked_at,
+            )
+        )
+        db.commit()
+        return check
+
+    def list_citation_quality_checks(
+        self, conversation_id: str, db: Session
+    ) -> list[CitationQualityCheck]:
+        """Restore checks for one conversation without running search or changing a draft."""
+        self._get_model(conversation_id, db)
+        records = (
+            db.query(ResearchCitationQualityCheckModel)
+            .filter(ResearchCitationQualityCheckModel.conversation_id == conversation_id)
+            .order_by(ResearchCitationQualityCheckModel.created_at.desc())
+            .all()
+        )
+        return [CitationQualityCheck.model_validate(record.check_data) for record in records]
+
+    def create_paper_review(self, draft_id: str, db: Session) -> PaperReview:
+        draft = self._get_paper_draft(draft_id, db)
+        conversation = self._get_model(draft.conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+        )
+        blueprint = build_paper_blueprint(
+            profile,
+            conversation_id=draft.conversation_id,
+            plan=plan,
+            academic_evidence=self._evidence_bundles(draft.conversation_id, db),
+            experiment_evidence=self._experiment_evidence_bundles(draft.conversation_id, db),
+        )
+        review = build_rules_paper_review(
+            draft,
+            profile=profile,
+            blueprint=blueprint,
+            academic_evidence=self._evidence_bundles(draft.conversation_id, db),
+            experiment_evidence=self._experiment_evidence_bundles(draft.conversation_id, db),
+            generator=self.artifact_generator,
+            conversation_id=draft.conversation_id,
+        )
+        db.add(
+            ResearchPaperReviewModel(
+                id=review.review_id,
+                draft_id=draft_id,
+                conversation_id=draft.conversation_id,
+                review_data=review.model_dump(mode="json"),
+                created_at=review.created_at,
+            )
+        )
+        db.commit()
+        return review
+
+    def list_paper_reviews(self, draft_id: str, db: Session) -> list[PaperReview]:
+        self._get_paper_draft(draft_id, db)
+        records = (
+            db.query(ResearchPaperReviewModel)
+            .filter(ResearchPaperReviewModel.draft_id == draft_id)
+            .order_by(ResearchPaperReviewModel.created_at.desc())
+            .all()
+        )
+        return [PaperReview.model_validate(record.review_data) for record in records]
+
+    def update_revision_task(
+        self, review_id: str, task_id: str, request: UpdateRevisionTaskRequest, db: Session
+    ) -> PaperReview:
+        record = self._get_paper_review_record(review_id, db)
+        review = PaperReview.model_validate(record.review_data)
+        found = False
+        now = datetime.now(UTC)
+        tasks = []
+        for task in review.revision_tasks:
+            if task.task_id == task_id:
+                found = True
+                tasks.append(task.model_copy(update={"status": request.status, "updated_at": now}))
+            else:
+                tasks.append(task)
+        if not found:
+            raise LookupError(task_id)
+        updated = review.model_copy(update={"revision_tasks": tasks})
+        record.review_data = updated.model_dump(mode="json")
+        db.commit()
+        return updated
+
+    def create_revision_suggestion(
+        self, review_id: str, task_id: str, db: Session
+    ) -> RevisionSuggestion:
+        record = self._get_paper_review_record(review_id, db)
+        review = PaperReview.model_validate(record.review_data)
+        draft = self._get_paper_draft(review.draft_id, db)
+        latest = self._latest_paper_revision(draft.draft_id, db)
+        suggestion_draft = (
+            draft
+            if latest is None
+            else draft.model_copy(
+                update={
+                    "content": latest.content,
+                    "sections": parse_paper_sections(latest.content, format=draft.format),
+                }
+            )
+        )
+        suggestion = build_revision_suggestion(
+            review,
+            suggestion_draft,
+            task_id,
+            generator=self.artifact_generator,
+            conversation_id=draft.conversation_id,
+        )
+        db.add(
+            ResearchRevisionSuggestionModel(
+                id=suggestion.suggestion_id,
+                draft_id=draft.draft_id,
+                review_id=review_id,
+                revision_task_id=task_id,
+                suggestion_data=suggestion.model_dump(mode="json"),
+                created_at=suggestion.created_at,
+            )
+        )
+        db.commit()
+        return suggestion
+
+    def list_revision_suggestions(
+        self, review_id: str, task_id: str, db: Session
+    ) -> list[RevisionSuggestion]:
+        self._get_paper_review_record(review_id, db)
+        records = (
+            db.query(ResearchRevisionSuggestionModel)
+            .filter(
+                ResearchRevisionSuggestionModel.review_id == review_id,
+                ResearchRevisionSuggestionModel.revision_task_id == task_id,
+            )
+            .order_by(ResearchRevisionSuggestionModel.created_at.desc())
+            .all()
+        )
+        return [RevisionSuggestion.model_validate(item.suggestion_data) for item in records]
+
+    def apply_revision_suggestion(
+        self, suggestion_id: str, request: ApplyRevisionSuggestionRequest, db: Session
+    ) -> PaperRevision | None:
+        record = db.get(ResearchRevisionSuggestionModel, suggestion_id)
+        if record is None:
+            raise LookupError(suggestion_id)
+        suggestion = RevisionSuggestion.model_validate(record.suggestion_data)
+        if request.action == "skipped":
+            review_record = self._get_paper_review_record(record.review_id, db)
+            review = PaperReview.model_validate(review_record.review_data)
+            now = datetime.now(UTC)
+            tasks = [
+                task.model_copy(update={"status": "skipped", "updated_at": now})
+                if task.task_id == suggestion.revision_task_id
+                else task
+                for task in review.revision_tasks
+            ]
+            review_record.review_data = review.model_copy(
+                update={"revision_tasks": tasks}
+            ).model_dump(mode="json")
+            db.commit()
+            return None
+        review_record = self._get_paper_review_record(record.review_id, db)
+        review = PaperReview.model_validate(review_record.review_data)
+        draft = self._get_paper_draft(suggestion.draft_id, db)
+        latest = self._latest_paper_revision(draft.draft_id, db)
+        existing = (
+            db.query(ResearchPaperRevisionModel)
+            .filter(ResearchPaperRevisionModel.parent_draft_id == draft.draft_id)
+            .count()
+        )
+        revision = build_revision_from_suggestion(
+            review,
+            draft,
+            suggestion,
+            version=draft.version + existing + 1,
+            parent_revision_id=latest.revision_id if latest else None,
+            base_content=latest.content if latest else draft.content,
+            candidate_text=request.candidate_text,
+        )
+        db.add(
+            ResearchPaperRevisionModel(
+                id=revision.revision_id,
+                parent_draft_id=draft.draft_id,
+                review_id=review.review_id,
+                revision_data=revision.model_dump(mode="json"),
+                created_at=revision.created_at,
+            )
+        )
+        now = datetime.now(UTC)
+        review_record.review_data = review.model_copy(
+            update={
+                "revision_tasks": [
+                    task.model_copy(update={"status": "completed", "updated_at": now})
+                    if task.task_id == suggestion.revision_task_id
+                    else task
+                    for task in review.revision_tasks
+                ]
+            }
+        ).model_dump(mode="json")
+        db.commit()
+        return revision
+
+    def list_paper_revisions(self, draft_id: str, db: Session) -> list[PaperRevision]:
+        self._get_paper_draft(draft_id, db)
+        records = (
+            db.query(ResearchPaperRevisionModel)
+            .filter(ResearchPaperRevisionModel.parent_draft_id == draft_id)
+            .order_by(ResearchPaperRevisionModel.created_at.desc())
+            .all()
+        )
+        return [PaperRevision.model_validate(record.revision_data) for record in records]
+
+    def save_submission_profile(
+        self,
+        conversation_id: str,
+        request: SubmissionProfileInput,
+        db: Session,
+    ) -> SubmissionProfile:
+        """Persist only user-supplied local constraints; no venue lookup is performed."""
+        self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchSubmissionProfileModel)
+            .filter(ResearchSubmissionProfileModel.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        now = datetime.now(UTC)
+        if record is None:
+            profile = SubmissionProfile(
+                profile_id=str(uuid.uuid4()),
+                conversation_id=conversation_id,
+                created_at=now,
+                updated_at=now,
+                **request.model_dump(),
+            )
+            db.add(
+                ResearchSubmissionProfileModel(
+                    id=profile.profile_id,
+                    conversation_id=conversation_id,
+                    profile_data=profile.model_dump(mode="json"),
+                    created_at=profile.created_at,
+                    updated_at=profile.updated_at,
+                )
+            )
+        else:
+            current = SubmissionProfile.model_validate(record.profile_data)
+            profile = SubmissionProfile(
+                profile_id=current.profile_id,
+                conversation_id=conversation_id,
+                created_at=current.created_at,
+                updated_at=now,
+                **request.model_dump(),
+            )
+            record.profile_data = profile.model_dump(mode="json")
+            record.updated_at = profile.updated_at
+        db.commit()
+        return profile
+
+    def get_submission_profile(self, conversation_id: str, db: Session) -> SubmissionProfile | None:
+        """Restore the user's local profile without invoking a provider or network tool."""
+        self._get_model(conversation_id, db)
+        record = (
+            db.query(ResearchSubmissionProfileModel)
+            .filter(ResearchSubmissionProfileModel.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        return SubmissionProfile.model_validate(record.profile_data) if record is not None else None
+
+    def create_submission_readiness(self, draft_id: str, db: Session) -> SubmissionReadinessCheck:
+        """Persist an explicit, rules-only checklist without evaluating acceptance."""
+        draft = self._get_paper_draft(draft_id, db)
+        review = self._latest_paper_review(draft_id, db)
+        revision = self._latest_paper_revision(draft_id, db)
+        submission_profile = self.get_submission_profile(draft.conversation_id, db)
+        check = build_submission_readiness(
+            draft,
+            review,
+            revision,
+            has_academic_evidence=bool(self._evidence_bundles(draft.conversation_id, db)),
+            has_experiment_evidence=bool(
+                self._experiment_evidence_bundles(draft.conversation_id, db)
+            ),
+            submission_profile=submission_profile,
+        )
+        db.add(
+            ResearchSubmissionReadinessModel(
+                id=check.check_id,
+                draft_id=draft_id,
+                conversation_id=draft.conversation_id,
+                check_data=check.model_dump(mode="json"),
+                created_at=check.created_at,
+            )
+        )
+        db.commit()
+        return check
+
+    def list_submission_readiness(
+        self, draft_id: str, db: Session
+    ) -> list[SubmissionReadinessCheck]:
+        self._get_paper_draft(draft_id, db)
+        records = (
+            db.query(ResearchSubmissionReadinessModel)
+            .filter(ResearchSubmissionReadinessModel.draft_id == draft_id)
+            .order_by(ResearchSubmissionReadinessModel.created_at.desc())
+            .all()
+        )
+        return [SubmissionReadinessCheck.model_validate(record.check_data) for record in records]
+
+    def create_paper_export_package(self, draft_id: str, db: Session) -> PaperExportPackage:
+        """Return sanitized text only after the user separately created all prerequisites."""
+        draft = self._get_paper_draft(draft_id, db)
+        review = self._latest_paper_review(draft_id, db)
+        revision = self._latest_paper_revision(draft_id, db)
+        checks = self.list_submission_readiness(draft_id, db)
+        if review is None or revision is None or not checks:
+            raise ValueError(
+                "Create a review, a revision preview, and an explicit submission checklist first."
+            )
+        readiness = checks[0]
+        if revision.review_id != review.review_id:
+            raise ValueError(
+                "The latest revision does not belong to the latest review; "
+                "apply a revision from the current review before exporting."
+            )
+        if readiness.revision_id != revision.revision_id:
+            raise ValueError(
+                "The submission checklist is stale; create a new checklist for the latest "
+                "revision before exporting."
+            )
+        conversation = self._get_model(draft.conversation_id, db)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        plan = build_conversation_research_plan(
+            profile,
+            ready_for_plan=assess_readiness(profile).stage == "ready_for_plan",
+        )
+        return build_paper_export_package(
+            draft,
+            review,
+            revision,
+            readiness,
+            research_profile=profile,
+            research_plan=plan,
+            revisions=self.list_paper_revisions(draft_id, db),
+            selected_citations=self.list_selected_citations(draft.conversation_id, db),
+        )
+
     @staticmethod
-    def _get_model(conversation_id: str, db: Session) -> ResearchConversationModel:
-        conversation = db.get(ResearchConversationModel, conversation_id)
-        if conversation is None:
-            raise ConversationNotFoundError(conversation_id)
-        return conversation
+    def _get_paper_draft(draft_id: str, db: Session) -> PaperDraft:
+        record = db.get(ResearchPaperDraftModel, draft_id)
+        if record is None:
+            raise LookupError(draft_id)
+        return PaperDraft.model_validate(record.draft_data)
+
+    @staticmethod
+    def _get_paper_review_record(review_id: str, db: Session) -> ResearchPaperReviewModel:
+        record = db.get(ResearchPaperReviewModel, review_id)
+        if record is None:
+            raise LookupError(review_id)
+        return record
+
+    @staticmethod
+    def _latest_paper_review(draft_id: str, db: Session) -> PaperReview | None:
+        record = (
+            db.query(ResearchPaperReviewModel)
+            .filter(ResearchPaperReviewModel.draft_id == draft_id)
+            .order_by(ResearchPaperReviewModel.created_at.desc())
+            .first()
+        )
+        return PaperReview.model_validate(record.review_data) if record is not None else None
+
+    @staticmethod
+    def _latest_paper_revision(draft_id: str, db: Session) -> PaperRevision | None:
+        record = (
+            db.query(ResearchPaperRevisionModel)
+            .filter(ResearchPaperRevisionModel.parent_draft_id == draft_id)
+            .order_by(ResearchPaperRevisionModel.created_at.desc())
+            .first()
+        )
+        return PaperRevision.model_validate(record.revision_data) if record is not None else None
+
+    def _get_model(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationModel:
+        return self.conversation_store.load(conversation_id, db, owned_ids=owned_ids)
 
     def _process_message(
         self,
@@ -257,13 +1062,39 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         existing_messages = _messages(conversation)
         confirmed_context = _confirmed_context(conversation)
+        persisted_summary = (
+            ResearchContextSummary.model_validate(conversation.context_summary_data)
+            if conversation.context_summary_data
+            else None
+        )
+        runtime_input = build_research_conversation_input(
+            profile,
+            user_message,
+            confirmed_context,
+        )
+        try:
+            context = self.context_assembler.assemble(
+                ResearchContextInput(
+                    existing_messages,
+                    research_conversation_agent.system_prompt,
+                    runtime_input,
+                    persisted_summary,
+                )
+            )
+        except Exception:
+            context = None
         self._append_user(conversation, user_message)
         outcome = self.decision_generator.generate(
             profile=profile,
-            messages=existing_messages,
+            conversation_history=(
+                context.conversation_history
+                if context is not None
+                else _kernel_conversation_history(existing_messages)
+            ),
             user_message=user_message,
             conversation_id=conversation.id,
             confirmed_context=confirmed_context,
+            runtime_input=runtime_input,
         )
         if outcome.status == "generated" and outcome.decision is not None:
             decision = _enforce_runtime_decision(
@@ -283,6 +1114,8 @@ class ResearchConversationService:
             mode = "rules_fallback" if outcome.status == "failed" else "rules"
         updated_profile = _apply_decision(profile, decision)
         conversation.profile_data = updated_profile.model_dump(mode="json")
+        if context is not None and context.pending_summary is not None:
+            conversation.context_summary_data = context.pending_summary.model_dump(mode="json")
         self._append_assistant(
             conversation,
             decision,
@@ -373,9 +1206,7 @@ class ResearchConversationService:
                 plan=plan,
                 evidence_bundles=bundles,
             ),
-            experiment_design=build_experiment_design(
-                profile, plan=plan
-            ),
+            experiment_design=build_experiment_design(profile, plan=plan),
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",
@@ -402,10 +1233,20 @@ class ResearchConversationService:
             .order_by(ResearchEvidenceBundleModel.created_at.desc())
             .all()
         )
-        return [
-            ConversationEvidenceBundle.model_validate(record.bundle_data)
-            for record in records
-        ]
+        return [ConversationEvidenceBundle.model_validate(record.bundle_data) for record in records]
+
+    @staticmethod
+    def _experiment_evidence_bundles(
+        conversation_id: str,
+        db: Session,
+    ) -> list[ExperimentEvidenceBundle]:
+        records = (
+            db.query(ResearchExperimentEvidenceBundleModel)
+            .filter(ResearchExperimentEvidenceBundleModel.conversation_id == conversation_id)
+            .order_by(ResearchExperimentEvidenceBundleModel.created_at.desc())
+            .all()
+        )
+        return [ExperimentEvidenceBundle.model_validate(record.bundle_data) for record in records]
 
 
 def _messages(conversation: ResearchConversationModel) -> list[ResearchConversationMessage]:
@@ -413,6 +1254,26 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         ResearchConversationMessage.model_validate(message)
         for message in conversation.messages_data
     ]
+
+
+def _kernel_conversation_history(
+    messages: list[ResearchConversationMessage],
+) -> tuple[Message, ...]:
+    return tuple(
+        Message(
+            message.role,
+            (ContentBlock("text", {"text": message.content}),),
+            {
+                "message_id": message.message_id,
+                "created_at": message.created_at.isoformat(),
+            },
+        )
+        for message in messages
+    )
+
+
+def _classification_label(classification: str) -> str:
+    return {"inference": "建议", "to_verify": "待验证"}.get(classification, "事实")
 
 
 def _confirmed_context(

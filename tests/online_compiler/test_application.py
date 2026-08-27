@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import base64
+import io
 from uuid import UUID
 
-import pytest
+from docx import Document
 
-from code_navi.online_compiler.ai_evaluation import AiEvaluationError, AiEvaluator
-from code_navi.online_compiler.application import CompilerApplication
+from code_navi.online_compiler.ai_evaluation import AiEvaluator, ProblemOrganizer
+from code_navi.online_compiler.application import (
+    MAX_UPLOADED_PROBLEM_TEXT_BYTES,
+    CompilerApplication,
+)
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
-from code_navi.online_compiler.piston import (
-    ExecutionLimits,
-    ExecutionResult,
-    PistonUnavailableError,
-    RuntimeInfo,
-)
+from code_navi.online_compiler.piston import ExecutionLimits, ExecutionResult, RuntimeInfo
+from code_navi.online_compiler.problem_imports import ImportedProblem
 
 
 class FakePistonGateway:
@@ -98,15 +98,90 @@ class FakeAiEvaluator(AiEvaluator):
         return AiFeedback("命名清晰。", ("增加边界用例",), QualityRubric(90, 80, 70))
 
 
-class UnavailableAiEvaluator(AiEvaluator):
-    def evaluate(
+class FakeProblemOrganizer(ProblemOrganizer):
+    def organize(
+        self, problems: list[ImportedProblem], learner_id: str | None = None
+    ) -> tuple[list[ImportedProblem], list[str]]:
+        assert learner_id == "learner-1"
+        return list(reversed(problems)), ["AI 仅调整了练习顺序。"]
+
+
+def _base64_bytes(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _docx_bytes(lines: list[str]) -> bytes:
+    document = Document()
+    for line in lines:
+        document.add_paragraph(line)
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _minimal_pdf_bytes(text_lines: list[str]) -> bytes:
+    escaped = [
+        line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        for line in text_lines
+    ]
+    stream = (
+        "BT /F1 12 Tf 72 720 Td "
+        + " Tj T* ".join(f"({line})" for line in escaped)
+        + " Tj ET"
+    ).encode("ascii")
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            b"5 0 obj\n<< /Length "
+            + str(len(stream)).encode("ascii")
+            + b" >>\nstream\n"
+            + stream
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(pdf))
+        pdf.extend(obj)
+    xref_at = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    trailer = (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_at}\n%%EOF\n"
+    )
+    pdf.extend(trailer.encode("ascii"))
+    return bytes(pdf)
+
+
+class FakePracticeSetPlanner:
+    def plan_practice_set(
         self,
-        source: str,
-        result: ExecutionResult,
-        assessment: RuleAssessment,
-        learner_id: str | None,
-    ) -> AiFeedback:
-        raise AiEvaluationError("AI unavailable")
+        request: dict[str, object],
+        candidates: list[dict[str, object]],
+        learner_id: str | None = None,
+    ) -> dict[str, object]:
+        assert request["prompt"]
+        assert learner_id == "learner-1"
+        return {
+            "orderedProblems": [
+                {
+                    "id": candidates[-1]["id"],
+                    "generationReason": "AI 建议先做这道题来承接学习目标。",
+                }
+            ],
+            "rationale": "AI 按目标重新排列了练习顺序。",
+            "coverage": ["AI 覆盖"],
+            "warnings": ["AI 未生成隐藏测试。"],
+        }
 
 
 def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
@@ -370,22 +445,268 @@ def test_execute_can_disable_ai_for_one_run() -> None:
     assert evaluator.calls == 0
 
 
-def test_ai_unavailable_does_not_change_execution_or_rule_facts() -> None:
+def test_problem_import_analyzes_and_orders_uploaded_text() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import(
+        {
+            "text": """
+题目一：括号序列校验
+描述：判断只包含圆括号、方括号和花括号的字符串是否正确闭合。
+输入：一行括号字符串
+输出：VALID 或 INVALID
+样例：{[()]}
+
+题目二：整数列表求和
+描述：读取一行以空格分隔的整数，输出所有整数之和。
+输入：空格分隔的整数
+输出：一个整数
+样例：12 8 -3 5
+"""
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "deterministic_rule"
+    titles = [item["title"] for item in response.body["problems"]]
+    assert titles == ["整数列表求和", "括号序列校验"]
+    first = response.body["problems"][0]
+    assert first["difficulty"] == "easy"
+    assert "列表" in first["tags"]
+    assert first["starterCode"]
+
+
+def test_problem_import_rejects_invalid_payload_before_gateway_call() -> None:
+    gateway = FakePistonGateway()
+    app = CompilerApplication(gateway, Settings())
+
+    response = app.analyze_problem_import({"text": ""})
+
+    assert response.status_code == 400
+    assert "text" in response.body["error"]
+    assert gateway.calls == []
+
+
+def test_problem_import_does_not_fabricate_problem_from_plain_notes() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import({"text": "今天下午讨论项目进度，记得带电脑。"})
+
+    assert response.status_code == 200
+    assert response.body["problems"] == []
+    assert "未能" in response.body["warnings"][0]
+
+
+def test_problem_import_does_not_fabricate_problem_from_empty_json() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import({"filename": "problems.json", "text": "[]"})
+
+    assert response.status_code == 200
+    assert response.body["problems"] == []
+    assert "未能" in response.body["warnings"][0]
+
+
+def test_problem_import_accepts_json_file_and_extracts_sample_tests() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import(
+        {
+            "filename": "题库.json",
+            "text": (
+                '[{"title":"回文","description":"判断字符串是否回文",'
+                '"input":"一行字符串","output":"YES 或 NO",'
+                '"sampleTests":[{"stdin":"level","expectedOutput":"YES"}]}]'
+            ),
+        }
+    )
+
+    assert response.status_code == 200
+    problem = response.body["problems"][0]
+    assert problem["title"] == "回文"
+    assert problem["sampleTests"] == [{"stdin": "level", "expectedOutput": "YES"}]
+
+
+def test_problem_import_accepts_csv_file() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.analyze_problem_import(
+        {
+            "filename": "题库.csv",
+            "text": "title,description,input,output\n求和,输出两个数之和,两个整数,一个整数\n",
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["problems"][0]["title"] == "求和"
+
+
+def test_problem_import_accepts_docx_file() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+    raw = _docx_bytes(
+        [
+            "题目：矩阵行和",
+            "描述：读取一个矩阵，输出每一行的和。",
+            "输入：第一行包含 n 和 m，后续 n 行包含整数。",
+            "输出：每行一个整数。",
+        ]
+    )
+
+    response = app.analyze_problem_import(
+        {"filename": "题库.docx", "text": "", "contentBase64": _base64_bytes(raw)}
+    )
+
+    assert response.status_code == 200
+    problem = response.body["problems"][0]
+    assert problem["title"] == "矩阵行和"
+    assert problem["inputHint"] == "第一行包含 n 和 m，后续 n 行包含整数。"
+
+
+def test_problem_import_accepts_pdf_file() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+    raw = _minimal_pdf_bytes(
+        [
+            "Problem: Sum Two Numbers",
+            "Description: Add two integers.",
+            "Input: two integers",
+            "Output: one integer",
+        ]
+    )
+
+    response = app.analyze_problem_import(
+        {"filename": "problems.pdf", "text": "", "contentBase64": _base64_bytes(raw)}
+    )
+
+    assert response.status_code == 200
+    problem = response.body["problems"][0]
+    assert problem["title"] == "Sum Two Numbers"
+    assert problem["outputHint"] == "one integer"
+
+
+def test_problem_import_reports_ai_organization_source_when_changed() -> None:
     app = CompilerApplication(
         FakePistonGateway(),
         Settings(),
-        evaluator=UnavailableAiEvaluator(),
-        ai_status="ready",
+        organizer=FakeProblemOrganizer(),
     )
 
-    response = app.execute({"language": "python", "source": "print('hello')"})
+    response = app.analyze_problem_import(
+        {
+            "learnerId": "learner-1",
+            "text": """
+题目一：整数列表求和
+描述：读取一行以空格分隔的整数，输出所有整数之和。
+输入：空格分隔的整数
+输出：一个整数
+
+题目二：字符串回文判断
+描述：判断字符串是否为回文。
+输入：一行字符串
+输出：YES 或 NO
+""",
+        }
+    )
 
     assert response.status_code == 200
-    assert response.body["outcome"] == "success"
-    assert response.body["assessment"]["category"] == "success"
-    assert response.body["ai"]["status"] == "pending"
+    assert response.body["source"] == "rules_with_ai_organization"
+    assert response.body["warnings"] == ["AI 仅调整了练习顺序。"]
 
-    evaluated = app.evaluate({"evaluationId": response.body["ai"]["evaluationId"]})
 
-    assert evaluated.status_code == 200
-    assert evaluated.body["ai"]["status"] == "unavailable"
+def test_problem_set_generation_uses_built_in_judgeable_problems() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "我想练习循环和列表",
+            "targetCount": 3,
+            "difficultyRange": ["easy", "hard"],
+            "knowledgeTags": ["循环", "列表"],
+        }
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "deterministic_rule"
+    problems = response.body["orderedProblems"]
+    assert len(problems) == 3
+    assert problems[0]["source"] == "built_in"
+    assert problems[0]["judgeable"] is True
+    assert "problemId" in problems[0]
+    assert response.body["coverage"]
+
+
+def test_problem_set_generation_can_include_uploaded_session_problems() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "练习栈",
+            "targetCount": 2,
+            "includeUploadedProblems": True,
+            "uploadedProblems": [
+                {
+                    "id": "uploaded-brackets",
+                    "title": "自定义括号题",
+                    "description": "判断括号是否匹配。",
+                    "difficulty": "hard",
+                    "tags": ["栈"],
+                    "source": "text = input().strip()\n",
+                    "inputHint": "一行括号",
+                    "outputHint": "VALID 或 INVALID",
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 200
+    problems = response.body["orderedProblems"]
+    assert any(problem["source"] == "uploaded" for problem in problems)
+    uploaded = next(problem for problem in problems if problem["source"] == "uploaded")
+    assert uploaded["judgeable"] is False
+    assert uploaded["limitations"] == ["未进入服务端题库，不支持隐藏测试判题。"]
+
+
+def test_problem_set_generation_rejects_oversized_uploaded_problem_fields() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set(
+        {
+            "prompt": "练习数组",
+            "uploadedProblems": [
+                {
+                    "id": "oversized",
+                    "title": "超长题面",
+                    "description": "x" * (MAX_UPLOADED_PROBLEM_TEXT_BYTES + 1),
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 400
+    assert "uploadedProblems[0].description" in response.body["error"]
+
+
+def test_problem_set_generation_reports_ai_planning_source_when_available() -> None:
+    app = CompilerApplication(
+        FakePistonGateway(),
+        Settings(),
+        practice_set_planner=FakePracticeSetPlanner(),
+    )
+
+    response = app.generate_problem_set(
+        {"prompt": "练习输入输出", "targetCount": 2, "learnerId": "learner-1"}
+    )
+
+    assert response.status_code == 200
+    assert response.body["source"] == "rules_with_ai_planning"
+    assert response.body["rationale"] == "AI 按目标重新排列了练习顺序。"
+    assert "AI 未生成隐藏测试。" in response.body["warnings"]
+    assert response.body["orderedProblems"][0]["generationReason"].startswith("AI 建议")
+
+
+def test_problem_set_generation_rejects_invalid_payload() -> None:
+    app = CompilerApplication(FakePistonGateway(), Settings())
+
+    response = app.generate_problem_set({"prompt": ""})
+
+    assert response.status_code == 400
+    assert "prompt" in response.body["error"]

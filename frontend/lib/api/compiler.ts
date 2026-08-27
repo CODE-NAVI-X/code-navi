@@ -64,6 +64,39 @@ export interface CompilerRecord {
   wallTimeMs: number | null;
 }
 
+export interface CompilerPracticeFocus {
+  type?: string;
+  id?: string;
+  label?: string;
+}
+
+export interface CompilerPracticeLaunch {
+  launchId: string;
+  localProfileId: string;
+  learnerId: string;
+  workspaceId: string;
+  taskId: string | null;
+  sourceActivityId: string | null;
+  capability: "practice";
+  mode: "free_run" | "problem_submit";
+  focus: CompilerPracticeFocus | null;
+  expiresAt: string;
+}
+
+export interface CompilerPracticeOutcome {
+  outcomeId: string;
+  launchId: string;
+  workspaceId: string;
+  taskId: string | null;
+  mode: "execute" | "submit";
+  verdict: string;
+  category: string;
+  severity: string;
+  summary: string;
+  knowledgeGapKind: string | null;
+  createdAt: string;
+}
+
 export interface CompilerExecutionResult {
   outcome: string;
   stdout: string;
@@ -83,6 +116,7 @@ export interface CompilerExecutionResult {
   assessment: CompilerAssessment;
   ai: CompilerAiFeedback;
   record: CompilerRecord | { status: "unavailable" } | null;
+  practiceOutcome?: CompilerPracticeOutcome;
   serviceTiming: Record<string, number>;
 }
 
@@ -108,12 +142,46 @@ export interface CompilerJudgeResult {
   passedPoints: number;
   totalPoints: number;
   testResults: CompilerTestResult[];
+  practiceOutcome?: CompilerPracticeOutcome;
 }
 
 export interface CompilerGuidance {
   reply: string;
   strategy: "question" | "hint" | "explanation";
   blocked: boolean;
+}
+
+export interface ImportedCompilerProblem {
+  importId: string;
+  title: string;
+  description: string;
+  difficulty: "easy" | "medium" | "hard";
+  tags: string[];
+  inputHint: string;
+  outputHint: string;
+  starterCode: string;
+  sampleTests: Array<{ stdin: string; expectedOutput: string }>;
+  confidence: number;
+  warnings: string[];
+  orderReason: string;
+}
+
+export interface GeneratedPracticeProblem {
+  id: string;
+  source: "built_in" | "uploaded" | "generated";
+  title: string;
+  description: string;
+  difficulty: "easy" | "medium" | "hard";
+  tags: string[];
+  starterCode: string;
+  inputHint: string;
+  outputHint: string;
+  sampleTests: Array<{ stdin: string; expectedOutput: string }>;
+  judgeable: boolean;
+  generationReason: string;
+  limitations: string[];
+  problemId?: string;
+  problemVersion?: number;
 }
 
 export class CompilerApiError extends Error {
@@ -130,11 +198,28 @@ export async function fetchCompilerRuntime(): Promise<CompilerRuntimeStatus> {
   return request<CompilerRuntimeStatus>("/api/v1/compiler/runtime");
 }
 
+export async function createPracticeLaunch(payload: {
+  localProfileId: string;
+  learnerId: string;
+  workspaceId?: string;
+  taskId?: string;
+  sourceActivityId?: string;
+  mode?: "free_run" | "problem_submit";
+  focus?: CompilerPracticeFocus;
+}): Promise<CompilerPracticeLaunch> {
+  return request<CompilerPracticeLaunch>("/api/v1/compiler/launches", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function executePython(payload: {
   source: string;
   stdin: string;
   learnerId: string;
   enableAi: boolean;
+  launchId?: string;
+  attemptId?: string;
 }): Promise<CompilerExecutionResult> {
   return request<CompilerExecutionResult>("/api/v1/compiler/execute", {
     method: "POST",
@@ -144,6 +229,8 @@ export async function executePython(payload: {
       stdin: payload.stdin,
       learnerId: payload.learnerId,
       enableAi: payload.enableAi,
+      launchId: payload.launchId,
+      attemptId: payload.attemptId,
     }),
   });
 }
@@ -166,6 +253,8 @@ export async function submitPython(payload: {
   problemVersion?: number;
   source: string;
   learnerId: string;
+  launchId?: string;
+  attemptId?: string;
 }): Promise<CompilerJudgeResult> {
   return request<CompilerJudgeResult>("/api/v1/compiler/submit", {
     method: "POST",
@@ -185,6 +274,53 @@ export async function requestCompilerGuidance(payload: {
   });
 }
 
+export async function analyzeProblemImport(payload: {
+  text: string;
+  filename?: string;
+  contentBase64?: string;
+  learnerId?: string;
+}): Promise<{
+  source: "deterministic_rule" | "rules_with_ai_organization";
+  problems: ImportedCompilerProblem[];
+  warnings: string[];
+}> {
+  return request("/api/v1/compiler/problem-imports/analyze", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function generateProblemSet(payload: {
+  prompt: string;
+  learnerId: string;
+  targetCount: number;
+  difficultyRange: ["easy" | "medium" | "hard", "easy" | "medium" | "hard"];
+  knowledgeTags: string[];
+  includeUploadedProblems: boolean;
+  uploadedProblems: Array<{
+    id: string;
+    title: string;
+    description: string;
+    difficulty: "easy" | "medium" | "hard";
+    tags: string[];
+    source: string;
+    inputHint: string;
+    outputHint: string;
+    sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
+  }>;
+}): Promise<{
+  source: "deterministic_rule" | "rules_with_ai_planning";
+  orderedProblems: GeneratedPracticeProblem[];
+  rationale: string;
+  coverage: string[];
+  warnings: string[];
+}> {
+  return request("/api/v1/compiler/problem-sets/generate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchCompilerRecords(
   learnerId: string,
 ): Promise<CompilerRecord[]> {
@@ -194,17 +330,26 @@ export async function fetchCompilerRecords(
   return response.records;
 }
 
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf && init?.method && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method.toUpperCase())) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
       ...init,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
+      credentials: "include",
+      headers,
     });
   } catch (error) {
     throw new CompilerApiError(0, `无法连接在线编译服务：${String(error)}`);
@@ -233,4 +378,3 @@ async function errorDetail(response: Response): Promise<string | null> {
   }
   return response.statusText || null;
 }
-
