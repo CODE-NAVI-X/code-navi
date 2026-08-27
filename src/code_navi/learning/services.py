@@ -227,6 +227,7 @@ class QueryOrchestrator:
         request: ExplainRequest,
         db: Session,
         *,
+        owner_principal_id: str | None = None,
         on_notebook_persisted: Callable[[NotebookItemModel], None] | None = None,
     ) -> ExplainResponse:
         """Run the full explain pipeline and persist the result."""
@@ -264,7 +265,8 @@ class QueryOrchestrator:
 
         # 5. Archive to notebook
         notebook_entry = NotebookItemModel(
-            user_id="poc-user",  # TODO: replace with real auth user id
+            user_id=owner_principal_id or "poc-user",
+            owner_principal_id=owner_principal_id,
             session_id=session_id,
             knowledge_id=request.knowledge_point,
             item_type="summary",

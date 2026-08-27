@@ -47,3 +47,6 @@ class NotebookItemModel(Base):
         DateTime,
         default=lambda: datetime.now(UTC),
     )
+    # Auth: principal-based ownership (nullable during compat period)
+    owner_principal_id = Column(String(36), nullable=True, index=True)
+

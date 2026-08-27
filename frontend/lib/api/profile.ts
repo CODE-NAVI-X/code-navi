@@ -145,16 +145,22 @@ export class ProfileApiError extends Error {
  * ``(session_id, source_type, source_ref)``. Returns the effective state after
  * the toggle. Throws ``ProfileApiError`` on non-OK / network failure.
  */
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 export async function setConfusionMark(
   request: MarkRequest,
 ): Promise<MarkResponse> {
   const url = `${API_BASE}/api/v1/learning/marks`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         session_id: request.session_id ?? getLearningSessionId(),
         profile_id: request.profile_id ?? null,
@@ -197,7 +203,10 @@ export async function fetchProfile(
 
   let response: Response;
   try {
-    response = await fetch(url, { headers: { Accept: "application/json" } });
+    response = await fetch(url, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
   } catch (networkError) {
     throw new ProfileApiError(
       0,
@@ -234,7 +243,10 @@ export async function fetchKnowledgeGaps(
 
   let response: Response;
   try {
-    response = await fetch(url, { headers: { Accept: "application/json" } });
+    response = await fetch(url, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
   } catch (networkError) {
     throw new ProfileApiError(
       0,

@@ -28,6 +28,9 @@ services:
       CODE_NAVI_DATABASE_URL: sqlite:////data/code-navi.db
       CODE_NAVI_DATA_DIR: /data
       CODE_NAVI_EVENTS_DIR: /data/runs
+      CODE_NAVI_CORS_ORIGINS: "https://91666.icu:25000,https://192.168.0.2:25000,http://192.168.0.2:25000,https://localhost:25000,http://localhost:25000,https://127.0.0.1:25000,http://127.0.0.1:25000"
+      CODE_NAVI_COOKIE_SECURE: "1"
+      CODE_NAVI_ENV: "production"
     volumes:
       - code_navi_data:/data
     expose:
@@ -54,12 +57,7 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
-      - "25000:25000"   # HTTPS entry — https://91666.icu:25000 (TLS in Caddy)
-    environment:
-      # HTTP Basic Auth gate (anti-abuse). Injected from deployment .env
-      # (BASIC_AUTH_USER / BASIC_AUTH_HASH, bcrypt hash) — never committed.
-      BASIC_AUTH_USER: ${BASIC_AUTH_USER}
-      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH}
+      - "25000:25000"   # HTTPS entry — https://91666.icu:25000 / https://192.168.0.2:25000
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Existing TLS certificate on the NAS host (read-only).

@@ -9,6 +9,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from code_navi.auth.dependencies import (
+    CurrentPrincipal,
+    get_optional_principal,
+    get_owned_principal_ids,
+)
 from code_navi.db import get_db
 from code_navi.workspaces.service import WorkspaceConflictError, WorkspaceNotFoundError
 
@@ -64,6 +69,7 @@ def get_compiler_application() -> CompilerApplication:
 
 _compiler_dependency = Depends(get_compiler_application)
 _db_dependency = Depends(get_db)
+_opt_principal_dep = Depends(get_optional_principal)
 _json_body = Body(...)
 _practice_integration = PracticeIntegrationService()
 
@@ -154,12 +160,20 @@ def submit(
 @router.post("/launches", status_code=201)
 def create_launch(
     payload: Any = _json_body,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> JSONResponse:
     """Issue a server-owned Practice launch for a Workspace context."""
+    principal_id = principal.principal_id if principal else None
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
 
     try:
-        launch = _practice_integration.create_launch(payload, db)
+        launch = _practice_integration.create_launch(
+            payload,
+            db,
+            principal_id=principal_id,
+            owned_ids=owned_ids,
+        )
     except (
         PracticeLaunchValidationError,
         WorkspaceConflictError,
@@ -175,15 +189,18 @@ def create_launch(
 @router.get("/outcomes/{outcome_id}", status_code=200)
 def get_outcome(
     outcome_id: str,
-    localProfileId: str,
+    localProfileId: str | None = None,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> JSONResponse:
     """Return an owner-scoped safe PracticeOutcome summary."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
 
     try:
         outcome = _practice_integration.get_outcome(
             outcome_id=outcome_id,
             local_profile_id=localProfileId,
+            owned_ids=owned_ids,
             db=db,
         )
     except (PracticeLaunchValidationError, PracticeLaunchNotFoundError) as error:

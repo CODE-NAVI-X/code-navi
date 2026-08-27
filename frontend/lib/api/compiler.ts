@@ -330,17 +330,26 @@ export async function fetchCompilerRecords(
   return response.records;
 }
 
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf && init?.method && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method.toUpperCase())) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
       ...init,
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
+      credentials: "include",
+      headers,
     });
   } catch (error) {
     throw new CompilerApiError(0, `无法连接在线编译服务：${String(error)}`);

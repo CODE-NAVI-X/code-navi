@@ -494,7 +494,13 @@ class QuizGenerator:
 
     # -- pipeline -----------------------------------------------------------
 
-    def generate(self, request: QuizGenerateRequest, db: Session) -> QuizGenerateResponse:
+    def generate(
+        self,
+        request: QuizGenerateRequest,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+    ) -> QuizGenerateResponse:
         """Run generate → audit → (revise) and persist the quiz."""
         session_id = request.session_id or f"sess-{uuid4().hex[:16]}"
         types = request.question_types or list(_ALL_TYPES)
@@ -579,6 +585,7 @@ class QuizGenerator:
             audit,
             run_id=result.run_id,
             event_log_path=str(result.event_log_path) if result.event_log_path else None,
+            owner_principal_id=owner_principal_id,
         )
         return QuizGenerateResponse(
             knowledge_point=request.knowledge_point,
@@ -593,7 +600,14 @@ class QuizGenerator:
             audit=audit,
         )
 
-    def grade_quiz(self, request: GradeRequest, db: Session) -> GradeResponse:
+    def grade_quiz(
+        self,
+        request: GradeRequest,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> GradeResponse:
         """Grade a quiz server-side and persist every scored answer.
 
         The scoring rubric is loaded server-side from the archived quiz — the
@@ -613,7 +627,7 @@ class QuizGenerator:
         retry cannot double-insert.
         """
         knowledge_point, questions = self.load_quiz(
-            db, request.session_id, request.quiz_id
+            db, request.session_id, request.quiz_id, owned_ids=owned_ids
         )
         single_qs = [q for q in questions if q.type == "single"]
         llm_qs = [q for q in questions if q.type in ("fill_blank", "short_answer")]
@@ -673,7 +687,9 @@ class QuizGenerator:
                 generation_mode = "rules" if provider_name == "mock" else "model"
 
         results = single_results + llm_results
-        self._persist_attempts(db, request, knowledge_point, results)
+        self._persist_attempts(
+            db, request, knowledge_point, results, owner_principal_id=owner_principal_id
+        )
 
         return GradeResponse(
             session_id=request.session_id,
@@ -691,6 +707,8 @@ class QuizGenerator:
         request: GradeRequest,
         knowledge_point: str,
         results: list[QuestionGradeResult],
+        *,
+        owner_principal_id: str | None = None,
     ) -> None:
         """Persist graded answers as ``quiz_attempts`` rows.
 
@@ -713,7 +731,8 @@ class QuizGenerator:
                     session_id=request.session_id,
                     knowledge_point=knowledge_point,
                     profile_id=request.profile_id,
-                    user_id=None,
+                    user_id=owner_principal_id or "poc-user",
+                    owner_principal_id=owner_principal_id,
                     question_id=r.question_id,
                     question_type=r.type,
                     points=r.max_score,
@@ -837,10 +856,12 @@ class QuizGenerator:
         *,
         run_id: str | None = None,
         event_log_path: str | None = None,
+        owner_principal_id: str | None = None,
     ) -> None:
         """Persist the generated quiz as a ``quiz`` notebook item."""
         entry = NotebookItemModel(
-            user_id="poc-user",  # TODO: replace with real auth user id
+            user_id=owner_principal_id or "poc-user",
+            owner_principal_id=owner_principal_id,
             session_id=session_id,
             knowledge_id=knowledge_point,
             item_type="quiz",
@@ -860,17 +881,28 @@ class QuizGenerator:
         db.commit()
 
     @staticmethod
-    def load_quiz(db: Session, session_id: str, quiz_id: str) -> tuple[str, list[QuizQuestion]]:
-        """Read a quiz back, strictly scoped to the requesting session."""
-        items = (
-            db.query(NotebookItemModel)
-            .filter(
-                NotebookItemModel.user_id == "poc-user",
-                NotebookItemModel.session_id == session_id,
-                NotebookItemModel.item_type == "quiz",
-            )
-            .all()
+    def load_quiz(
+        db: Session,
+        session_id: str,
+        quiz_id: str,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> tuple[str, list[QuizQuestion]]:
+        """Read a quiz back, strictly scoped to the requesting session and principal."""
+        query = db.query(NotebookItemModel).filter(
+            NotebookItemModel.item_type == "quiz",
         )
+        if owned_ids:
+            query = query.filter(
+                (NotebookItemModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (NotebookItemModel.owner_principal_id.is_(None))
+                    & (NotebookItemModel.session_id == session_id)
+                )
+            )
+        else:
+            query = query.filter(NotebookItemModel.session_id == session_id)
+        items = query.all()
         item = next(
             (i for i in items if (i.extra_data or {}).get("quiz_id") == quiz_id),
             None,

@@ -53,12 +53,21 @@ class PracticeIntegrationService:
     def __init__(self, workspace_service: WorkspaceService | None = None) -> None:
         self._workspace_service = workspace_service or WorkspaceService()
 
-    def create_launch(self, payload: Any, db: Session) -> PracticeLaunchModel:
+    def create_launch(
+        self,
+        payload: Any,
+        db: Session,
+        *,
+        principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> PracticeLaunchModel:
         request = self._validate_launch_request(payload)
         context = self._workspace_service.resolve_learning_context(
             local_profile_id=request["local_profile_id"],
             workspace_id=request["workspace_id"],
             task_id=request["task_id"],
+            principal_id=principal_id,
+            owned_ids=owned_ids,
             db=db,
         )
         source_activity_id = request["source_activity_id"]
@@ -75,6 +84,7 @@ class PracticeIntegrationService:
 
         launch = PracticeLaunchModel(
             local_profile_id=request["local_profile_id"],
+            owner_principal_id=principal_id,
             learner_id=request["learner_id"],
             workspace_id=context.workspace.id,
             task_id=context.task.id if context.task else None,
@@ -169,6 +179,7 @@ class PracticeIntegrationService:
         }
         outcome = PracticeOutcomeModel(
             launch_id=launch.id,
+            owner_principal_id=launch.owner_principal_id,
             local_profile_id=launch.local_profile_id,
             learner_id=launch.learner_id,
             workspace_id=launch.workspace_id,
@@ -239,6 +250,7 @@ class PracticeIntegrationService:
         summary = self._submit_summary(safe_data)
         outcome = PracticeOutcomeModel(
             launch_id=launch.id,
+            owner_principal_id=launch.owner_principal_id,
             local_profile_id=launch.local_profile_id,
             learner_id=launch.learner_id,
             workspace_id=launch.workspace_id,
@@ -268,19 +280,25 @@ class PracticeIntegrationService:
         self,
         *,
         outcome_id: str,
-        local_profile_id: str,
+        local_profile_id: str | None = None,
+        owned_ids: list[str] | None = None,
         db: Session,
     ) -> PracticeOutcomeModel:
         parsed_outcome_id = self._uuid(outcome_id, "outcomeId")
-        owner = self._bounded_required_text(local_profile_id, "localProfileId", 64)
-        outcome = (
-            db.query(PracticeOutcomeModel)
-            .filter(
-                PracticeOutcomeModel.id == parsed_outcome_id,
-                PracticeOutcomeModel.local_profile_id == owner,
-            )
-            .first()
+        query = db.query(PracticeOutcomeModel).filter(
+            PracticeOutcomeModel.id == parsed_outcome_id
         )
+        if owned_ids:
+            query = query.filter(
+                (PracticeOutcomeModel.owner_principal_id.in_(owned_ids))
+                | (
+                    (PracticeOutcomeModel.owner_principal_id.is_(None))
+                    & (PracticeOutcomeModel.local_profile_id == local_profile_id)
+                )
+            )
+        elif local_profile_id:
+            query = query.filter(PracticeOutcomeModel.local_profile_id == local_profile_id)
+        outcome = query.first()
         if outcome is None:
             raise PracticeLaunchNotFoundError("Practice outcome not found.")
         return outcome
@@ -328,7 +346,7 @@ class PracticeIntegrationService:
         body = PracticeIntegrationService.outcome_response(outcome)
         try:
             safe_result = json.loads(outcome.safe_result_data)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             safe_result = {"kind": "unknown", "summary": outcome.summary}
         body["safeResult"] = safe_result
         return body

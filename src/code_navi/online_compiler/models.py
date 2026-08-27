@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 
 from code_navi.db import Base
 
@@ -52,6 +52,8 @@ class PracticeLaunchModel(Base):
     focus_label = Column(String(512), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_now)
     expires_at = Column(DateTime, nullable=False)
+    # Auth: principal-based ownership (nullable during compat period)
+    owner_principal_id = Column(String(36), nullable=True, index=True)
 
 
 class PracticeOutcomeModel(Base):
@@ -105,4 +107,35 @@ class PracticeOutcomeModel(Base):
     safe_result_data = Column(Text, nullable=False)
     knowledge_gap_kind = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_now)
+    # Auth: principal-based ownership (nullable during compat period)
+    owner_principal_id = Column(String(36), nullable=True, index=True)
+
+
+class LearningRecordModel(Base):
+    """Privacy-minimized execution summary in shared database."""
+
+    __tablename__ = "learning_records"
+    __table_args__ = (
+        Index("ix_learning_records_owner_created_at", "owner_principal_id", "created_at"),
+        Index("ix_learning_records_learner_created_at", "learner_id", "created_at"),
+    )
+
+    record_id = Column(String(36), primary_key=True, default=_uuid)
+    owner_principal_id = Column(String(36), nullable=True)
+    learner_id = Column(String(36), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_now)
+    category = Column(String(64), nullable=False)
+    title = Column(String(255), nullable=False)
+    summary = Column(Text, nullable=False)
+    error_type = Column(String(64), nullable=True)
+    error_line = Column(Integer, nullable=True)
+    ai_status = Column(String(32), nullable=False)
+    ai_explanation = Column(Text, nullable=True)
+    suggestions_json = Column(Text, nullable=False, default="[]")
+    reference_score = Column(Integer, nullable=True)
+    source_hash = Column(String(64), nullable=False)
+    source_bytes = Column(Integer, nullable=False)
+    wall_time_ms = Column(Integer, nullable=True)
+
+
 

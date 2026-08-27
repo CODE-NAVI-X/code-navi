@@ -9,6 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
+from code_navi.auth.dependencies import (
+    CurrentPrincipal,
+    get_optional_principal,
+    get_owned_principal_ids,
+)
 from code_navi.db import get_db
 from code_navi.workspaces.models import WorkspaceActivityModel, WorkspaceModel
 from code_navi.workspaces.service import (
@@ -48,6 +53,7 @@ _quiz_generator = QuizGenerator()
 _workspace_service = WorkspaceService()
 _profile_service = ProfileService()
 _db_dependency = Depends(get_db)
+_opt_principal_dep = Depends(get_optional_principal)
 
 _DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -57,6 +63,7 @@ _DOCX_MEDIA_TYPE = (
 @router.post("/explain", response_model=ExplainResponse, status_code=200)
 async def explain_knowledge_point(
     request: ExplainRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> ExplainResponse:
     """Explain a knowledge point with optional citations.
@@ -64,19 +71,24 @@ async def explain_knowledge_point(
     The pipeline runs decontamination → explanation generation → notebook
     archival, all delegated to ``QueryOrchestrator``.
     """
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    principal_id = principal.principal_id if principal else None
     try:
-        if request.local_profile_id is None:
-            return _orchestrator.explain(request, db)
+        if request.local_profile_id is None and not principal_id:
+            return _orchestrator.explain(request, db, owner_principal_id=principal_id)
 
         context = _workspace_service.resolve_learning_context(
             local_profile_id=request.local_profile_id,
             workspace_id=request.workspace_id,
             task_id=request.task_id,
             db=db,
+            principal_id=principal_id,
+            owned_ids=owned_ids,
         )
         return _orchestrator.explain(
             request,
             db,
+            owner_principal_id=principal_id,
             on_notebook_persisted=lambda notebook_item: _workspace_service.record_learning_activity(
                 context=context,
                 notebook_item=notebook_item,
@@ -93,17 +105,14 @@ async def explain_knowledge_point(
 
 @router.get("/recent", response_model=RecentLearningListResponse)
 async def list_recent_learning(
-    local_profile_id: str = Query(..., min_length=1, max_length=64),
+    local_profile_id: str | None = Query(None, min_length=1, max_length=64),
     limit: int = Query(4, ge=1, le=12),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> RecentLearningListResponse:
-    """Return a small, recoverable Learning history for the current local profile.
-
-    Activities are only an index.  The response carries the persisted notebook
-    source required to restore the explanation, and explicitly labels stale
-    indices when that source is no longer available.
-    """
-    rows = (
+    """Return a small, recoverable Learning history for the current local profile or principal."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    query = (
         db.query(WorkspaceActivityModel, NotebookItemModel)
         .join(WorkspaceModel, WorkspaceActivityModel.workspace_id == WorkspaceModel.id)
         .outerjoin(
@@ -111,12 +120,26 @@ async def list_recent_learning(
             NotebookItemModel.id == WorkspaceActivityModel.source_object_id,
         )
         .filter(
-            WorkspaceModel.owner_scope_id == local_profile_id,
             WorkspaceActivityModel.capability == "learning",
             WorkspaceActivityModel.action_type == "knowledge_explained",
             WorkspaceActivityModel.source_object_type == "notebook_item",
         )
-        .order_by(WorkspaceActivityModel.created_at.desc(), WorkspaceActivityModel.id.desc())
+    )
+    if owned_ids:
+        query = query.filter(
+            (WorkspaceModel.owner_principal_id.in_(owned_ids))
+            | (
+                (WorkspaceModel.owner_principal_id.is_(None))
+                & (WorkspaceModel.owner_scope_id.in_(owned_ids))
+            )
+        )
+    elif local_profile_id:
+        query = query.filter(WorkspaceModel.owner_scope_id == local_profile_id)
+    else:
+        return RecentLearningListResponse(items=[])
+
+    rows = (
+        query.order_by(WorkspaceActivityModel.created_at.desc(), WorkspaceActivityModel.id.desc())
         .limit(limit)
         .all()
     )
@@ -128,11 +151,13 @@ async def list_recent_learning(
 @router.get("/recent/{activity_id}", response_model=RecentLearningItem)
 async def get_recent_learning(
     activity_id: str,
-    local_profile_id: str = Query(..., min_length=1, max_length=64),
+    local_profile_id: str | None = Query(None, min_length=1, max_length=64),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> RecentLearningItem:
     """Load one persisted Learning source after a user chooses to restore it."""
-    row = (
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    query = (
         db.query(WorkspaceActivityModel, NotebookItemModel)
         .join(WorkspaceModel, WorkspaceActivityModel.workspace_id == WorkspaceModel.id)
         .outerjoin(
@@ -141,13 +166,23 @@ async def get_recent_learning(
         )
         .filter(
             WorkspaceActivityModel.id == activity_id,
-            WorkspaceModel.owner_scope_id == local_profile_id,
             WorkspaceActivityModel.capability == "learning",
             WorkspaceActivityModel.action_type == "knowledge_explained",
             WorkspaceActivityModel.source_object_type == "notebook_item",
         )
-        .first()
     )
+    if owned_ids:
+        query = query.filter(
+            (WorkspaceModel.owner_principal_id.in_(owned_ids))
+            | (
+                (WorkspaceModel.owner_principal_id.is_(None))
+                & (WorkspaceModel.owner_scope_id.in_(owned_ids))
+            )
+        )
+    elif local_profile_id:
+        query = query.filter(WorkspaceModel.owner_scope_id == local_profile_id)
+
+    row = query.first()
     if row is None:
         raise HTTPException(status_code=404, detail="Recent Learning item not found.")
     return _recent_learning_item(*row, include_content=True)
@@ -155,15 +190,16 @@ async def get_recent_learning(
 
 @router.get("/knowledge-gaps", response_model=KnowledgeGapResponse)
 async def list_knowledge_gaps(
-    local_profile_id: str = Query(..., min_length=1, max_length=64),
     profile_id: str = Query(
         ...,
         pattern=UUID_V4_PATTERN,
         min_length=36,
         max_length=36,
-        description="Unified anonymous learner/profile UUID used by Learning and Practice.",
+        description="Unified profile key (UUID v4, == the practice learner_id).",
     ),
+    local_profile_id: str | None = Query(None, min_length=1, max_length=64),
     limit: int = Query(50, ge=1, le=100),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> KnowledgeGapResponse:
     """Return traceable review items for the current local Learning portrait.
@@ -224,23 +260,24 @@ def _recent_learning_item(
 @router.get("/notebook", status_code=200)
 async def list_notebook_items(
     session_id: str = Query(..., min_length=1, max_length=64),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ):
-    """Return notebook entries for one session (newest first).
-
-    ``session_id`` is required and actually scopes the query — without it a
-    client would read every session's entries.
-    """
-    items = (
-        db.query(NotebookItemModel)
-        .filter(
-            NotebookItemModel.user_id == "poc-user",
-            NotebookItemModel.session_id == session_id,
+    """Return notebook entries for one session or owned principals (newest first)."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    query = db.query(NotebookItemModel)
+    if owned_ids:
+        query = query.filter(
+            (NotebookItemModel.owner_principal_id.in_(owned_ids))
+            | (
+                (NotebookItemModel.owner_principal_id.is_(None))
+                & (NotebookItemModel.session_id == session_id)
+            )
         )
-        .order_by(NotebookItemModel.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    else:
+        query = query.filter(NotebookItemModel.session_id == session_id)
+
+    items = query.order_by(NotebookItemModel.created_at.desc()).limit(50).all()
     return [
         {
             "id": item.id,
@@ -256,8 +293,6 @@ async def list_notebook_items(
             "research_note": (
                 item.extra_data if item.item_type == "research_note" else None
             ),
-            # Presentation items carry their deck id so the client can re-fetch
-            # the full slides for review without pulling every deck in the list.
             "presentation_id": (
                 (item.extra_data or {}).get("presentation_id")
                 if item.item_type == "presentation"
@@ -272,25 +307,26 @@ async def list_notebook_items(
 async def get_presentation(
     presentation_id: str,
     session_id: str = Query(..., min_length=1, max_length=64),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> dict:
-    """Return a previously archived presentation (slides + outlines) for review.
-
-    ``session_id`` is required and scopes the lookup to the requesting
-    session, matching the notebook list endpoint — without it a client would
-    read any session's deck by id.
-    """
-    from fastapi import HTTPException
-
-    items = (
-        db.query(NotebookItemModel)
-        .filter(
-            NotebookItemModel.user_id == "poc-user",
-            NotebookItemModel.session_id == session_id,
-            NotebookItemModel.item_type == "presentation",
-        )
-        .all()
+    """Return a previously archived presentation (slides + outlines) for review."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    query = db.query(NotebookItemModel).filter(
+        NotebookItemModel.item_type == "presentation",
     )
+    if owned_ids:
+        query = query.filter(
+            (NotebookItemModel.owner_principal_id.in_(owned_ids))
+            | (
+                (NotebookItemModel.owner_principal_id.is_(None))
+                & (NotebookItemModel.session_id == session_id)
+            )
+        )
+    else:
+        query = query.filter(NotebookItemModel.session_id == session_id)
+
+    items = query.all()
     item = next(
         (
             i
@@ -319,18 +355,16 @@ async def get_presentation(
 @router.post("/presentations/generate")
 async def generate_presentation(
     request: PresentationGenerateRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> StreamingResponse:
-    """Backend-driven, page-level SSE stream for knowledge-PPT generation.
-
-    Emits events as pages finish (``outlines`` → ``slide`` × N → ``done``), so
-    the client can render page N while page N+1 is still being generated.  The
-    generator is synchronous and runs in FastAPI's thread pool; each page costs
-    one audited kernel run, matching the learning module's Event/audit contract.
-    """
+    """Backend-driven, page-level SSE stream for knowledge-PPT generation."""
+    principal_id = principal.principal_id if principal else None
 
     def event_source():
-        for event in _presentation_generator.stream_presentation(request, db):
+        for event in _presentation_generator.stream_presentation(
+            request, db, owner_principal_id=principal_id
+        ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -347,35 +381,27 @@ async def generate_presentation(
 @router.post("/quiz/generate", response_model=QuizGenerateResponse, status_code=200)
 async def generate_quiz(
     request: QuizGenerateRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ):
-    """Generate one exercise set for a knowledge point.
-
-    Runs one audited kernel call (no tools granted), normalizes the LLM JSON
-    array into the shared question model, and archives the quiz to the student
-    notebook under the effective ``session_id``.
-    """
-    return _quiz_generator.generate(request, db)
+    """Generate one exercise set for a knowledge point."""
+    principal_id = principal.principal_id if principal else None
+    return _quiz_generator.generate(request, db, owner_principal_id=principal_id)
 
 
 @router.post("/quiz/grade", response_model=GradeResponse, status_code=200)
 async def grade_quiz(
     request: GradeRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> GradeResponse:
-    """Grade a quiz server-side and persist every scored answer.
-
-    The scoring rubric is loaded from the archived quiz strictly within the
-    requesting ``session_id`` — the client submits only the quiz id and the
-    student's answers, so it cannot alter the correct answers or points.
-    ``single`` is graded deterministically server-side (``graded_by=rules``);
-    ``fill_blank`` / ``short_answer`` go through the LLM when an online
-    provider is configured.  Offline degrades honestly (exact match for fill
-    blanks, ``graded=false`` + self-check hint for short answers) and never
-    fakes an LLM verdict.  All results are persisted as ``quiz_attempts``.
-    """
+    """Grade a quiz server-side and persist every scored answer."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    principal_id = principal.principal_id if principal else None
     try:
-        return _quiz_generator.grade_quiz(request, db)
+        return _quiz_generator.grade_quiz(
+            request, db, owner_principal_id=principal_id, owned_ids=owned_ids
+        )
     except QuizNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -383,15 +409,12 @@ async def grade_quiz(
 @router.post("/marks", response_model=MarkResponse, status_code=200)
 async def set_confusion_mark(
     request: MarkRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> MarkResponse:
-    """Toggle a 不懂/懂了 mark on a learning surface (PPT page / explain / quiz).
-
-    Writes are scoped to ``session_id``; the optional ``profile_id`` lets the
-    mark aggregate into the cross-session portrait.  The toggle is idempotent
-    on ``(session_id, source_type, source_ref)``.
-    """
-    return _profile_service.set_mark(request, db)
+    """Toggle a 不懂/懂了 mark on a learning surface (PPT page / explain / quiz)."""
+    principal_id = principal.principal_id if principal else None
+    return _profile_service.set_mark(request, db, owner_principal_id=principal_id)
 
 
 @router.get("/quiz/export-docx")
@@ -399,17 +422,15 @@ async def export_quiz_docx_endpoint(
     quiz_id: str = Query(..., min_length=1, max_length=64),
     session_id: str = Query(..., min_length=1, max_length=64),
     with_answer: bool = Query(default=False),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> Response:
-    """Export a previously generated quiz as a standard Word exam paper.
-
-    The quiz is looked up strictly within the requesting ``session_id`` — a
-    quiz id that belongs to another session yields 404, matching the notebook
-    list / presentation read-back behavior.  ``with_answer`` appends a
-    参考答案 section at the end of the same document.
-    """
+    """Export a previously generated quiz as a standard Word exam paper."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
     try:
-        knowledge_point, questions = QuizGenerator.load_quiz(db, session_id, quiz_id)
+        knowledge_point, questions = QuizGenerator.load_quiz(
+            db, session_id, quiz_id, owned_ids=owned_ids
+        )
     except QuizNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -420,8 +441,6 @@ async def export_quiz_docx_endpoint(
     )
 
     suffix = "（含答案）" if with_answer else ""
-    # ``filename`` must stay ASCII (RFC 5987); the readable Chinese name goes
-    # into ``filename*`` only.
     fallback = f"quiz_{quiz_id[:8]}{'-answer' if with_answer else ''}.docx"
     filename = f"《{knowledge_point}》练习题{suffix}.docx"
     quoted = urllib.parse.quote(filename)
@@ -434,3 +453,4 @@ async def export_quiz_docx_endpoint(
             )
         },
     )
+

@@ -5,6 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from code_navi.auth.dependencies import (
+    CurrentPrincipal,
+    get_optional_principal,
+    get_owned_principal_ids,
+)
 from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
@@ -102,6 +107,7 @@ _conversation_service = ResearchConversationService()
 _conversation_search_service = ResearchConversationSearchService()
 _reproduction_evaluation_service = ReproductionEvaluationService()
 _db_dependency = Depends(get_db)
+_opt_principal_dep = Depends(get_optional_principal)
 
 
 @router.get("/provider/status", response_model=ProviderStatusResponse)
@@ -165,10 +171,12 @@ def _require_loopback_browser_client(request: Request) -> None:
 )
 def create_conversation(
     request: CreateResearchConversationRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> ResearchConversationResponse:
     """Start a dynamic research conversation without a fixed questionnaire."""
-    return _conversation_service.create(request, db)
+    principal_id = principal.principal_id if principal else None
+    return _conversation_service.create(request, db, owner_principal_id=principal_id)
 
 
 @router.post(
@@ -178,11 +186,15 @@ def create_conversation(
 def send_conversation_message(
     conversation_id: str,
     request: SendResearchMessageRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> ResearchConversationResponse:
     """Process one free-form message through the conversational workflow."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
     try:
-        return _conversation_service.send_message(conversation_id, request, db)
+        return _conversation_service.send_message(
+            conversation_id, request, db, owned_ids=owned_ids
+        )
     except ConversationNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -196,11 +208,13 @@ def send_conversation_message(
 )
 def get_conversation(
     conversation_id: str,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
     db: Session = _db_dependency,
 ) -> ResearchConversationResponse:
     """Restore a conversation without performing another Agent run."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
     try:
-        return _conversation_service.get(conversation_id, db)
+        return _conversation_service.get(conversation_id, db, owned_ids=owned_ids)
     except ConversationNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

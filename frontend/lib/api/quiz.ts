@@ -141,16 +141,22 @@ export interface GenerateQuizRequest {
  * ``QuizGenerateResponse`` or throws ``QuizApiError`` on non-OK / network
  * failure.
  */
+import { getStoredCsrfToken } from "@/lib/api/auth";
+
 export async function generateQuiz(
   request: GenerateQuizRequest,
 ): Promise<QuizGenerateResponse> {
   const url = `${API_BASE}/api/v1/learning/quiz/generate`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const csrf = getStoredCsrfToken();
+  if (csrf) headers["X-CSRF-Token"] = csrf;
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers,
       body: JSON.stringify({
         knowledge_point: request.knowledge_point,
         session_id: request.session_id ?? getLearningSessionId(),
@@ -208,6 +214,7 @@ export async function exportQuizDocx(
   let response: Response;
   try {
     response = await fetch(url, {
+      credentials: "include",
       headers: { Accept: "application/octet-stream" },
     });
   } catch (networkError) {

@@ -15,6 +15,7 @@ from alembic.config import Config  # noqa: E402
 from alembic.migration import MigrationContext  # noqa: E402
 
 from code_navi import cli_conversation as cli_conversation_models  # noqa: E402,F401
+from code_navi.auth import models as auth_models  # noqa: E402,F401
 from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
@@ -505,3 +506,61 @@ def test_practice_outcome_migration_adds_launches_and_outcomes_after_workspace_f
 
     assert {"practice_launches", "practice_outcomes"} <= tables
     assert preserved == "个人工作区"
+
+
+def test_auth_csrf_and_learning_records_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'auth-csrf-learning-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "auth_identity_system_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO principals (id, user_id, origin, created_at) "
+                "VALUES ('p-csrf-1', NULL, 'guest', CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO auth_sessions ("
+                "id, principal_id, token_hash, csrf_token_hash, "
+                "remembered, created_at, last_seen_at, expires_at"
+                ") VALUES ("
+                "'s-csrf-1', 'p-csrf-1', 'thash1', 'chash1', 0, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(auth_sessions)")
+                )
+            }
+            session_row = connection.execute(
+                text("SELECT id, csrf_token FROM auth_sessions WHERE id = 's-csrf-1'")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert "learning_records" in tables
+    assert "csrf_token" in columns
+    assert "csrf_token_hash" not in columns
+    assert session_row[0] == "s-csrf-1"
+

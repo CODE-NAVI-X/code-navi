@@ -16,7 +16,7 @@ class CreateWorkspaceRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    local_profile_id: str = Field(min_length=1, max_length=64)
+    local_profile_id: str | None = Field(default=None, max_length=64)
     title: str = Field(min_length=1, max_length=200)
     kind: Literal["course", "project", "research", "general"] = "general"
     description: str | None = Field(default=None, max_length=2000)
@@ -27,7 +27,7 @@ class CreateTaskRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    local_profile_id: str = Field(min_length=1, max_length=64)
+    local_profile_id: str | None = Field(default=None, max_length=64)
     goal: str = Field(min_length=1, max_length=2000)
     title: str | None = Field(default=None, min_length=1, max_length=200)
     success_criteria: list[str] = Field(default_factory=list, max_length=12)
