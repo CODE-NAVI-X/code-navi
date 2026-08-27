@@ -93,27 +93,29 @@ def _add_attempt(
     graded: bool = True,
     profile_id: str = PROFILE_A,
     session_id: str = "sess-a",
+    created_at: datetime | None = None,
 ) -> None:
-    db.add(
-        QuizAttemptModel(
-            attempt_id=str(uuid.uuid4()),
-            quiz_id="quiz-x",
-            session_id=session_id,
-            knowledge_point=knowledge_point,
-            profile_id=profile_id,
-            user_id=None,
-            question_id="q1",
-            question_type="single",
-            points=max_score,
-            score=score,
-            max_score=max_score,
-            correct=score >= max_score,
-            graded=graded,
-            graded_by="rules",
-            is_mock=False,
-            comment=None,
-        )
+    attempt = QuizAttemptModel(
+        attempt_id=str(uuid.uuid4()),
+        quiz_id="quiz-x",
+        session_id=session_id,
+        knowledge_point=knowledge_point,
+        profile_id=profile_id,
+        user_id=None,
+        question_id="q1",
+        question_type="single",
+        points=max_score,
+        score=score,
+        max_score=max_score,
+        correct=score >= max_score,
+        graded=graded,
+        graded_by="rules",
+        is_mock=False,
+        comment=None,
     )
+    if created_at is not None:
+        attempt.created_at = created_at
+    db.add(attempt)
     db.commit()
 
 
@@ -126,18 +128,20 @@ def _add_mark(
     status: str = "confused",
     profile_id: str = PROFILE_A,
     session_id: str = "sess-a",
+    created_at: datetime | None = None,
 ) -> None:
-    db.add(
-        ConfusionMarkModel(
-            session_id=session_id,
-            profile_id=profile_id,
-            user_id=None,
-            knowledge_point=knowledge_point,
-            source_type=source_type,
-            source_ref=source_ref,
-            status=status,
-        )
+    mark = ConfusionMarkModel(
+        session_id=session_id,
+        profile_id=profile_id,
+        user_id=None,
+        knowledge_point=knowledge_point,
+        source_type=source_type,
+        source_ref=source_ref,
+        status=status,
     )
+    if created_at is not None:
+        mark.created_at = created_at
+    db.add(mark)
     db.commit()
 
 
@@ -717,9 +721,22 @@ class TestNormalizedGrouping:
     def test_mastery_normalizes_case_and_keeps_first_seen_spelling(
         self, db: Session
     ) -> None:
-        _add_attempt(db, knowledge_point="UDP", score=10, max_score=10)
-        _add_attempt(db, knowledge_point="udp", score=6, max_score=10)
-        _add_attempt(db, knowledge_point="UDP", score=8, max_score=10)
+        t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
+        _add_attempt(db, knowledge_point="UDP", score=10, max_score=10, created_at=t0)
+        _add_attempt(
+            db,
+            knowledge_point="udp",
+            score=6,
+            max_score=10,
+            created_at=t0 + timedelta(seconds=1),
+        )
+        _add_attempt(
+            db,
+            knowledge_point="UDP",
+            score=8,
+            max_score=10,
+            created_at=t0 + timedelta(seconds=2),
+        )
 
         profile = ProfileService().get_profile(PROFILE_A, db)
         assert len(profile.mastery) == 1
@@ -734,8 +751,15 @@ class TestNormalizedGrouping:
     def test_mastery_first_seen_spelling_depends_on_insert_order(
         self, db: Session
     ) -> None:
-        _add_attempt(db, knowledge_point="udp", score=10, max_score=10)
-        _add_attempt(db, knowledge_point="UDP", score=10, max_score=10)
+        t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
+        _add_attempt(db, knowledge_point="udp", score=10, max_score=10, created_at=t0)
+        _add_attempt(
+            db,
+            knowledge_point="UDP",
+            score=10,
+            max_score=10,
+            created_at=t0 + timedelta(seconds=1),
+        )
 
         profile = ProfileService().get_profile(PROFILE_A, db)
         assert len(profile.mastery) == 1
@@ -744,7 +768,14 @@ class TestNormalizedGrouping:
     def test_confusion_normalizes_case_and_dedupes_by_surface(
         self, db: Session
     ) -> None:
-        _add_mark(db, knowledge_point="UDP", source_ref="explain:UDP", source_type="explain")
+        t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
+        _add_mark(
+            db,
+            knowledge_point="UDP",
+            source_ref="explain:UDP",
+            source_type="explain",
+            created_at=t0,
+        )
         # Same surface in another session must collapse into one 待复习 entry.
         _add_mark(
             db,
@@ -752,6 +783,7 @@ class TestNormalizedGrouping:
             source_ref="explain:UDP",
             source_type="explain",
             session_id="sess-b",
+            created_at=t0 + timedelta(seconds=1),
         )
         _add_mark(
             db,
@@ -759,6 +791,7 @@ class TestNormalizedGrouping:
             source_ref="quiz_question:udp:q1",
             source_type="quiz_question",
             session_id="sess-c",
+            created_at=t0 + timedelta(seconds=2),
         )
 
         profile = ProfileService().get_profile(PROFILE_A, db)
