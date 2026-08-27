@@ -1,11 +1,14 @@
 import { API_BASE } from "@/lib/api/learning";
 
+export type UserRole = "student" | "teacher";
+
 export interface AuthUser {
   id: string;
   displayName: string;
   email: string;
   emailVerified: boolean;
   status: string;
+  role: UserRole;
 }
 
 export interface SessionInfo {
@@ -164,6 +167,7 @@ export const authApi = {
     password: string;
     displayName: string;
     claimGuestData?: boolean;
+    role?: UserRole;
   }): Promise<SessionResponse> {
     return request<SessionResponse>("/api/v1/auth/register", {
       method: "POST",
@@ -253,6 +257,13 @@ export const authApi = {
     return request<AuthUser>("/api/v1/users/me", {
       method: "PATCH",
       body: JSON.stringify({ displayName }),
+    });
+  },
+
+  changeRole(role: UserRole): Promise<AuthUser> {
+    return request<AuthUser>("/api/v1/users/me/role", {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
     });
   },
 

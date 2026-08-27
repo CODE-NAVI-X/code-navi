@@ -59,12 +59,14 @@ def test_user_registration_and_login(client: TestClient):
     assert reg_data["mode"] == "authenticated"
     assert reg_data["user"]["email"] == email
     assert reg_data["user"]["displayName"] == "测试用户"
+    assert reg_data["user"]["role"] == "student"
     csrf_token = reg_data["csrfToken"]
 
     # 2. Get current profile /users/me
     me_res = client.get("/api/v1/users/me")
     assert me_res.status_code == 200
     assert me_res.json()["email"] == email
+    assert me_res.json()["role"] == "student"
 
     # 3. Update profile
     patch_res = client.patch(
@@ -333,6 +335,189 @@ def test_production_env_hides_docs(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("CODE_NAVI_ENV", "production")
     assert SessionSettings().environment == "production"
+
+
+def test_user_role_registration_teacher(client: TestClient) -> None:
+    """1. Register role='teacher' -> session and /users/me return 'teacher'."""
+    uid = uuid.uuid4().hex[:8]
+    email = f"teacher_{uid}@example.com"
+    pwd = "SecurePassword123!"
+
+    reg_res = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": pwd,
+            "displayName": "张老师",
+            "claimGuestData": True,
+            "role": "teacher",
+        },
+    )
+    assert reg_res.status_code == 201
+    reg_data = reg_res.json()
+    assert reg_data["user"]["role"] == "teacher"
+
+    me_res = client.get("/api/v1/users/me")
+    assert me_res.status_code == 200
+    assert me_res.json()["role"] == "teacher"
+
+
+def test_user_role_registration_default(client: TestClient) -> None:
+    """2. Register without role -> defaults to 'student'."""
+    uid = uuid.uuid4().hex[:8]
+    email = f"student_{uid}@example.com"
+    pwd = "SecurePassword123!"
+
+    reg_res = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": pwd,
+            "displayName": "李同学",
+            "claimGuestData": True,
+        },
+    )
+    assert reg_res.status_code == 201
+    assert reg_res.json()["user"]["role"] == "student"
+
+    me_res = client.get("/api/v1/users/me")
+    assert me_res.status_code == 200
+    assert me_res.json()["role"] == "student"
+
+
+def test_user_role_registration_invalid(client: TestClient) -> None:
+    """3. Register role='admin' (invalid) -> 422."""
+    uid = uuid.uuid4().hex[:8]
+    email = f"admin_{uid}@example.com"
+    pwd = "SecurePassword123!"
+
+    reg_res = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": pwd,
+            "displayName": "非法用户",
+            "claimGuestData": True,
+            "role": "admin",
+        },
+    )
+    assert reg_res.status_code == 422
+
+
+def test_patch_user_role_requires_auth_and_csrf(client: TestClient) -> None:
+    """4 & 6. PATCH /users/me/role without auth -> 401; without CSRF -> 403; invalid role -> 422."""
+    # 6b. unauthenticated -> 401
+    unauth_res = client.patch(
+        "/api/v1/users/me/role",
+        json={"role": "teacher"},
+    )
+    assert unauth_res.status_code == 401
+
+    # Login / Register a student
+    uid = uuid.uuid4().hex[:8]
+    email = f"user_{uid}@example.com"
+    pwd = "SecurePassword123!"
+    reg_res = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": pwd,
+            "displayName": "测试用户",
+            "claimGuestData": True,
+            "role": "student",
+        },
+    )
+    assert reg_res.status_code == 201
+    csrf_token = reg_res.json()["csrfToken"]
+
+    # 4. Authenticated but no CSRF -> 403
+    no_csrf_res = client.patch(
+        "/api/v1/users/me/role",
+        json={"role": "teacher"},
+    )
+    assert no_csrf_res.status_code == 403
+
+    # 6a. Authenticated with CSRF but invalid role -> 422
+    invalid_res = client.patch(
+        "/api/v1/users/me/role",
+        json={"role": "superadmin"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert invalid_res.status_code == 422
+
+
+def test_patch_user_role_success_and_idempotent_and_session_preserved(client: TestClient) -> None:
+    """5, 7, 8. PATCH role='teacher' -> 200, audit event, idempotent, session preserved."""
+    from code_navi.auth.models import AuthEvent, AuthSession, Principal
+    from code_navi.db import get_db
+
+    uid = uuid.uuid4().hex[:8]
+    email = f"user_{uid}@example.com"
+    pwd = "SecurePassword123!"
+    reg_res = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": pwd,
+            "displayName": "测试用户",
+            "claimGuestData": True,
+            "role": "student",
+        },
+    )
+    assert reg_res.status_code == 201
+    csrf_token = reg_res.json()["csrfToken"]
+    cookie_before = client.cookies.get("code_navi_session")
+
+    db = next(get_db())
+    principal_count_before = db.query(Principal).count()
+    session_count_before = db.query(AuthSession).count()
+    db.close()
+
+    # 5. Switch role to teacher
+    patch_res = client.patch(
+        "/api/v1/users/me/role",
+        json={"role": "teacher"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["role"] == "teacher"
+
+    # Verify GET /users/me returns teacher
+    me_res = client.get("/api/v1/users/me")
+    assert me_res.status_code == 200
+    assert me_res.json()["role"] == "teacher"
+
+    # Verify session user.role updated
+    session_res = client.get("/api/v1/auth/session")
+    assert session_res.status_code == 200
+    assert session_res.json()["user"]["role"] == "teacher"
+
+    # Verify auth_events has role_changed with metadata_={"from": "student", "to": "teacher"}
+    db = next(get_db())
+    events = (
+        db.query(AuthEvent)
+        .filter(AuthEvent.event_type == "role_changed")
+        .all()
+    )
+    assert len(events) == 1
+    assert events[0].metadata_ == {"from": "student", "to": "teacher"}
+
+    # 7. Repeat switch to teacher -> 200 idempotent
+    repeat_res = client.patch(
+        "/api/v1/users/me/role",
+        json={"role": "teacher"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert repeat_res.status_code == 200
+    assert repeat_res.json()["role"] == "teacher"
+
+    # 8. Session still valid and principals/auth_sessions count unchanged
+    cookie_after = client.cookies.get("code_navi_session")
+    assert cookie_after == cookie_before  # cookie not rotated
+    assert db.query(Principal).count() == principal_count_before
+    assert db.query(AuthSession).count() == session_count_before
+    db.close()
+
 
 
 

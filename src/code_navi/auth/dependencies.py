@@ -27,6 +27,7 @@ class CurrentPrincipal:
     mode: str  # "guest" | "authenticated"
     email_verified: bool
     session_id: str
+    role: str | None = None
 
 
 def _resolve_session(
@@ -105,12 +106,14 @@ def get_optional_principal(
     if user and user.email_verified_at is not None:
         email_verified = True
     mode = "authenticated" if principal.user_id else "guest"
+    role = user.role if user else None
     return CurrentPrincipal(
         principal_id=principal.id,
         user_id=principal.user_id,
         mode=mode,
         email_verified=email_verified,
         session_id=session.id,
+        role=role,
     )
 
 

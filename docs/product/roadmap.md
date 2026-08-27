@@ -20,6 +20,7 @@
 | 持久工作区编排 | Learning 与 Practice 本地验证完成 | Workspace、Task、Learning Activity、PracticeOutcome、Practice Activity、基础页面和刷新恢复已接通；Research、推荐与统一 Artifact 尚未接入 |
 | 学习入口页改版 | 已实现，本地验证完成 | 首屏为发起学习、继续最近学习和探索计算机方向；六大领域作为稳定导航，多对多归属的方向胶囊支持多选，已选方向在搜索框下方显示并可逐项取消 |
 | Practice 集成进 Learning | 已实现，本地验证完成 | 已落地 Learning 内“动手实践”、规范路由与兼容 redirect、独立 Practice Capability、PracticeOutcome、分 mode launch、Activity 和三来源知识缺口投影 |
+| 身份角色字段（学生/教师） | 本地验证完成 | 注册可选身份、账户设置可切换身份；教师端功能尚未接入 |
 
 ## 2. 当前优先事项
 
