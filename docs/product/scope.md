@@ -10,7 +10,7 @@ Code Navi（智教码航）面向学生自主学习、代码练习和项目科�
 2. 学习；
 3. 科研。
 
-“用户”保留给真实账号或明确的本地个人资料能力，不用学习画像冒充用户中心。
+“用户”保留给真实账号或明确的本地个人资料能力，不用学习画像冒充用户中心。账号可选学生/教师两种身份。
 
 系统继续维护 Learning、Practice、Research 三个独立 Capability。Practice 在产品信息架构中进入 Learning 的“动手实践”，但代码执行、隐藏测试、判题、资源限制和原始结果仍由 Practice 维护。产品入口不等同于后端 Capability、路由目录或代码目录；具体决策见 [Practice 集成进 Learning](../decisions/practice-in-learning-experience.md)。
 

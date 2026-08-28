@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { authApi, SessionResponse, AuthUser, AuthApiError } from "@/lib/api/auth";
+import { authApi, SessionResponse, AuthUser, AuthApiError, UserRole } from "@/lib/api/auth";
 
 interface AuthContextType {
   mode: "guest" | "authenticated";
@@ -11,7 +11,14 @@ interface AuthContextType {
   claimResult: SessionResponse["claimResult"];
   refreshSession: () => Promise<void>;
   login: (email: string, password: string, rememberMe?: boolean, claimGuestData?: boolean) => Promise<void>;
-  register: (email: string, password: string, displayName: string, claimGuestData?: boolean) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    displayName: string,
+    claimGuestData?: boolean,
+    role?: UserRole
+  ) => Promise<void>;
+  changeRole: (role: UserRole) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -101,7 +108,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string,
     displayName: string,
-    claimGuestData = true
+    claimGuestData = true,
+    role: UserRole = "student"
   ) => {
     setError(null);
     try {
@@ -110,6 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         password,
         displayName,
         claimGuestData,
+        role,
       });
       setMode(res.mode);
       setUser(res.user);
@@ -120,6 +129,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw err;
       }
       setError("注册失败");
+      throw err;
+    }
+  };
+
+  const changeRole = async (role: UserRole) => {
+    setError(null);
+    try {
+      await authApi.changeRole(role);
+      await refreshSession();
+    } catch (err) {
+      if (err instanceof AuthApiError) {
+        setError(err.message);
+        throw err;
+      }
+      setError("切换身份失败");
       throw err;
     }
   };
@@ -143,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         refreshSession,
         login,
         register,
+        changeRole,
         logout,
       }}
     >

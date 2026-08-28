@@ -4,12 +4,13 @@ import React, { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/context/auth-context";
+import { UserRole } from "@/lib/api/auth";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/Card";
 import { Alert, AlertDescription } from "@/components/ui/Alert";
-import { AlertCircle, Eye, EyeOff, Lock, Mail, User } from "lucide-react";
+import { AlertCircle, BookOpen, Eye, EyeOff, GraduationCap, Lock, Mail, User } from "lucide-react";
 
 function sanitizeNextUrl(next: string | null): string {
   if (!next) return "/";
@@ -27,6 +28,7 @@ function RegisterForm() {
 
   const { register, mode, user } = useAuth();
 
+  const [role, setRole] = useState<UserRole>("student");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -66,7 +68,7 @@ function RegisterForm() {
     setError(null);
 
     try {
-      await register(email.trim(), password, displayName.trim(), true);
+      await register(email.trim(), password, displayName.trim(), true, role);
       router.push(targetUrl);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -95,6 +97,38 @@ function RegisterForm() {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
+
+          <div className="space-y-1.5">
+            <Label required>选择身份</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setRole("student")}
+                disabled={loading}
+                className={`flex items-center justify-center gap-2 rounded-xl border p-2.5 text-xs font-medium transition-all cursor-pointer ${
+                  role === "student"
+                    ? "border-blue-600 bg-blue-50/50 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-300 ring-2 ring-blue-500/20 font-semibold"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+                }`}
+              >
+                <GraduationCap className="w-4 h-4" />
+                <span>我是学生</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRole("teacher")}
+                disabled={loading}
+                className={`flex items-center justify-center gap-2 rounded-xl border p-2.5 text-xs font-medium transition-all cursor-pointer ${
+                  role === "teacher"
+                    ? "border-blue-600 bg-blue-50/50 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-300 ring-2 ring-blue-500/20 font-semibold"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+                }`}
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>我是教师</span>
+              </button>
+            </div>
+          </div>
 
           <div className="space-y-1">
             <Label htmlFor="displayName" required>

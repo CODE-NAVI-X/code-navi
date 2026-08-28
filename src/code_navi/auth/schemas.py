@@ -1,6 +1,8 @@
 """Pydantic schemas for auth API request/response models."""
 
 from __future__ import annotations
+ 
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +13,7 @@ class UserOut(BaseModel):
     email: str
     emailVerified: bool
     status: str
+    role: str
 
 
 class SessionInfo(BaseModel):
@@ -40,6 +43,11 @@ class RegisterRequest(BaseModel):
     password: str
     displayName: str = Field(min_length=1, max_length=100)
     claimGuestData: bool = True
+    role: Literal["student", "teacher"] = "student"
+
+
+class RoleChangeRequest(BaseModel):
+    role: Literal["student", "teacher"]
 
 
 class LoginRequest(BaseModel):
@@ -99,6 +107,7 @@ class UserResponse(BaseModel):
     email: str
     emailVerified: bool
     status: str
+    role: str
 
 
 class SessionItem(BaseModel):

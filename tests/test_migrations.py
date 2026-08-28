@@ -564,3 +564,75 @@ def test_auth_csrf_and_learning_records_migration(
     assert "csrf_token_hash" not in columns
     assert session_row[0] == "s-csrf-1"
 
+
+def test_user_role_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'user-role-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "auth_csrf_learning_records_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO users ("
+                "id, email_normalized, email_display, email_verified_at, "
+                "display_name, status, created_at, updated_at"
+                ") VALUES ("
+                "'u-legacy-1', 'legacy@example.com', 'legacy@example.com', NULL, "
+                "'存量用户', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    # Upgrade to head (0019)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(users)")
+                )
+            }
+            user_row = connection.execute(
+                text("SELECT id, role FROM users WHERE id = 'u-legacy-1'")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert "role" in columns
+    assert user_row[0] == "u-legacy-1"
+    assert user_row[1] == "student"
+
+    # Verify downgrade drops the column
+    command.downgrade(config, "auth_csrf_learning_records_v1")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_after_downgrade = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(users)")
+                )
+            }
+    finally:
+        engine.dispose()
+
+    assert "role" not in columns_after_downgrade
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+

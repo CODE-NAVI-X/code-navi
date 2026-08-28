@@ -26,6 +26,8 @@ from .settings import session_settings
 
 logger = logging.getLogger(__name__)
 
+VALID_ROLES: set[str] = {"student", "teacher"}
+
 
 # ── Errors ───────────────────────────────────────────────────────────────
 
@@ -185,8 +187,12 @@ def register_user(
     password: str,
     display_name: str,
     claim_guest_data: bool,
+    role: str = "student",
 ) -> tuple[AuthSession, Principal, User, str, dict | None]:
     """Register a new user, create Principal and session, return claim result."""
+    if role not in VALID_ROLES:
+        raise AuthError("auth.invalid_role", "无效的身份", 400)
+
     email_norm = normalize_email(email)
     if not validate_email_format(email):
         raise AuthError("auth.validation_failed", "邮箱格式不正确", 422)
@@ -213,6 +219,7 @@ def register_user(
         email_display=email.strip(),
         display_name=display_name,
         status=status,
+        role=role,
         created_at=now,
         updated_at=now,
     )
@@ -854,6 +861,16 @@ def update_display_name(db: Session, user_id: str, display_name: str) -> User:
     user.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(user)
+    return user
+
+
+def change_role(user: User, role: str) -> User:
+    """Change the user's role to 'student' or 'teacher'."""
+    if role not in VALID_ROLES:
+        raise AuthError("auth.invalid_role", "无效的身份", 400)
+    if user.role != role:
+        user.role = role
+        user.updated_at = datetime.now(UTC)
     return user
 
 
