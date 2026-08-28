@@ -16,9 +16,11 @@ from ..db import get_db
 from .schemas import (
     ClassroomListResponse,
     ClassroomMemberListResponse,
+    ClassroomMemberOut,
     ClassroomOut,
     CreateClassroomRequest,
     JoinClassroomRequest,
+    UpdateMemberNoteRequest,
 )
 from .service import (
     ClassroomError,
@@ -27,6 +29,8 @@ from .service import (
     join_classroom,
     list_classrooms,
     list_members,
+    remove_member,
+    update_member_note,
 )
 
 router = APIRouter(prefix="/api/v1/classes", tags=["classes"])
@@ -174,3 +178,75 @@ def list_members_endpoint(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+
+
+@router.delete(
+    "/{class_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a student member from classroom (owner only)",
+)
+def delete_member_endpoint(
+    class_id: str,
+    user_id: str,
+    request: Request,
+    principal: CurrentPrincipal = _require_user_dep,
+    _csrf: None = _verify_csrf_dep,
+    db: Session = _db_dep,
+) -> None:
+    """Remove a student member from a classroom. Owner only."""
+    assert principal.user_id is not None
+    try:
+        remove_member(class_id, user_id, principal.user_id, db)
+    except ClassroomError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+
+    _log_event(
+        db,
+        event_type="class_member_removed",
+        user_id=principal.user_id,
+        principal_id=principal.principal_id,
+        request=request,
+        metadata={"class_id": class_id, "removed_user_id": user_id},
+    )
+    db.commit()
+
+
+@router.patch(
+    "/{class_id}/members/{user_id}",
+    response_model=ClassroomMemberOut,
+    status_code=status.HTTP_200_OK,
+    summary="Update private note on a student member (owner only)",
+)
+def update_member_note_endpoint(
+    class_id: str,
+    user_id: str,
+    body: UpdateMemberNoteRequest,
+    request: Request,
+    principal: CurrentPrincipal = _require_user_dep,
+    _csrf: None = _verify_csrf_dep,
+    db: Session = _db_dep,
+) -> ClassroomMemberOut:
+    """Update private note on a student member. Owner only."""
+    assert principal.user_id is not None
+    try:
+        member_out = update_member_note(class_id, user_id, body.note, principal.user_id, db)
+    except ClassroomError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+
+    _log_event(
+        db,
+        event_type="class_member_noted",
+        user_id=principal.user_id,
+        principal_id=principal.principal_id,
+        request=request,
+        metadata={"class_id": class_id, "noted_user_id": user_id},
+    )
+    db.commit()
+
+    return member_out

@@ -35,11 +35,14 @@ export interface SessionResponse {
 
 export interface AuthSessionItem {
   id: string;
+  deviceKey: string;
   createdAt: string;
   lastSeenAt: string;
   expiresAt: string;
   userAgentLabel: string | null;
   current: boolean;
+  sessionCount: number;
+  sessionIds: string[];
 }
 
 export interface AuthSessionListResponse {
@@ -209,6 +212,13 @@ export const authApi = {
   revokeSession(sessionId: string): Promise<void> {
     return request<void>(`/api/v1/auth/sessions/${sessionId}`, {
       method: "DELETE",
+    });
+  },
+
+  revokeMany(sessionIds: string[]): Promise<{ revokedCount: number }> {
+    return request<{ revokedCount: number }>("/api/v1/auth/sessions/revoke-many", {
+      method: "POST",
+      body: JSON.stringify({ sessionIds }),
     });
   },
 

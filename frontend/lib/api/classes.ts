@@ -14,6 +14,8 @@ export interface ClassroomItem {
 export interface ClassroomMember {
   userId: string;
   displayName: string;
+  email?: string | null;
+  note?: string | null;
   roleInClass: "teacher" | "student" | string;
   joinedAt: string;
 }
@@ -127,4 +129,21 @@ export async function joinClass(inviteCode: string): Promise<ClassroomItem> {
 export async function getClassMembers(classId: string): Promise<ClassroomMember[]> {
   const res = await request<{ items: ClassroomMember[] }>(`/api/v1/classes/${classId}/members`);
   return res.items;
+}
+
+export async function removeClassMember(classId: string, userId: string): Promise<void> {
+  await request<void>(`/api/v1/classes/${classId}/members/${userId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function updateMemberNote(
+  classId: string,
+  userId: string,
+  note: string | null
+): Promise<ClassroomMember> {
+  return request<ClassroomMember>(`/api/v1/classes/${classId}/members/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ note }),
+  });
 }

@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 # Force in-memory SQLite *before* any code_navi imports execute.
 os.environ["CODE_NAVI_DATABASE_URL"] = "sqlite:///:memory:"
 
+from code_navi.auth.models import Principal  # noqa: E402
 from code_navi.db import Base, SessionLocal, engine  # noqa: E402
 from code_navi.learning.quiz.schemas import (  # noqa: E402
     GradeRequest,
@@ -94,6 +95,7 @@ def _add_attempt(
     profile_id: str = PROFILE_A,
     session_id: str = "sess-a",
     created_at: datetime | None = None,
+    owner_principal_id: str | None = None,
 ) -> None:
     attempt = QuizAttemptModel(
         attempt_id=str(uuid.uuid4()),
@@ -101,7 +103,8 @@ def _add_attempt(
         session_id=session_id,
         knowledge_point=knowledge_point,
         profile_id=profile_id,
-        user_id=None,
+        user_id=owner_principal_id or "poc-user",
+        owner_principal_id=owner_principal_id,
         question_id="q1",
         question_type="single",
         points=max_score,
@@ -129,11 +132,13 @@ def _add_mark(
     profile_id: str = PROFILE_A,
     session_id: str = "sess-a",
     created_at: datetime | None = None,
+    owner_principal_id: str | None = None,
 ) -> None:
     mark = ConfusionMarkModel(
         session_id=session_id,
         profile_id=profile_id,
-        user_id=None,
+        user_id=owner_principal_id or "poc-user",
+        owner_principal_id=owner_principal_id,
         knowledge_point=knowledge_point,
         source_type=source_type,
         source_ref=source_ref,
@@ -153,10 +158,12 @@ def _add_practice_outcome(
     focus_label: str = "循环调试",
     summary: str = "运行时错误：ZeroDivisionError",
     knowledge_gap_kind: str | None = "runtime_error",
+    owner_principal_id: str | None = None,
 ) -> PracticeOutcomeModel:
     workspace = WorkspaceModel(
-        owner_scope_id=local_profile_id,
+        owner_scope_id=owner_principal_id or local_profile_id,
         personal_owner_scope_id=None,
+        owner_principal_id=owner_principal_id,
         title="Practice workspace",
         kind="general",
     )
@@ -173,6 +180,7 @@ def _add_practice_outcome(
         focus_type="topic",
         focus_id="loop-debugging",
         focus_label=focus_label,
+        owner_principal_id=owner_principal_id,
         expires_at=datetime.now(UTC) + timedelta(days=7),
     )
     db.add(launch)
@@ -197,6 +205,7 @@ def _add_practice_outcome(
             '"stderr":"secret stderr","source":"print(secret)","stdin":"private stdin"}'
         ),
         knowledge_gap_kind=knowledge_gap_kind,
+        owner_principal_id=owner_principal_id,
     )
     db.add(outcome)
     db.commit()
@@ -971,3 +980,119 @@ class TestBuildStudentProfilePrompt:
         assert prompt is not None
         assert "待复习" in prompt
         assert "概率" in prompt
+
+
+def _register(client: TestClient, role: str, name: str) -> dict:
+    uid = uuid.uuid4().hex[:8]
+    email = f"{role}_{uid}@example.com"
+    res = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": "SecurePassword123!",
+            "displayName": name,
+            "claimGuestData": False,
+            "role": role,
+        },
+    )
+    assert res.status_code == 201
+    return res.json()
+
+
+class TestProfileCrossAccountDataIsolation:
+    """Regression test for Round 5.1: Two accounts on same browser with identical profile_id."""
+
+    def test_authenticated_accounts_do_not_bleed_data_with_same_profile_id(
+        self, client: TestClient, db: Session
+    ) -> None:
+        shared_profile_id = str(uuid.uuid4())
+
+        # Account A registers and logs in
+        client_a = TestClient(app)
+        reg_a = _register(client_a, "student", "User A")
+        principal_a = (
+            db.query(Principal).filter(Principal.user_id == reg_a["user"]["id"]).first()
+        )
+        assert principal_a is not None
+
+        # User A creates a failed quiz attempt, a confusion mark, and a practice outcome
+        _add_attempt(
+            db,
+            knowledge_point="动态规划",
+            score=0,
+            max_score=10,
+            graded=True,
+            profile_id=shared_profile_id,
+            owner_principal_id=principal_a.id,
+        )
+        _add_mark(
+            db,
+            knowledge_point="动态规划",
+            profile_id=shared_profile_id,
+            owner_principal_id=principal_a.id,
+        )
+        _add_practice_outcome(
+            db,
+            learner_id=shared_profile_id,
+            local_profile_id="browser-local-id",
+            focus_label="动态规划",
+            owner_principal_id=principal_a.id,
+        )
+
+        # Verify Account A sees its own portrait and knowledge gaps
+        res_a_portrait = client_a.get(f"/api/v1/profile?profile_id={shared_profile_id}")
+        assert res_a_portrait.status_code == 200
+        assert len(res_a_portrait.json()["confusion"]) > 0
+
+        res_a_gaps = client_a.get(
+            f"/api/v1/learning/knowledge-gaps?local_profile_id=browser-local-id&profile_id={shared_profile_id}"
+        )
+        assert res_a_gaps.status_code == 200
+        assert len(res_a_gaps.json()["items"]) == 3
+
+        # Account B registers on the SAME browser, sending the SAME shared_profile_id
+        client_b = TestClient(app)
+        _register(client_b, "student", "User B")
+
+        # Account B's portrait and knowledge gaps MUST BE COMPLETELY EMPTY!
+        res_b_portrait = client_b.get(f"/api/v1/profile?profile_id={shared_profile_id}")
+        assert res_b_portrait.status_code == 200
+        data_b = res_b_portrait.json()
+        assert len(data_b["mastery"]) == 0
+        assert len(data_b["strengths"]) == 0
+        assert len(data_b["weaknesses"]) == 0
+        assert len(data_b["confusion"]) == 0
+
+        res_b_gaps = client_b.get(
+            f"/api/v1/learning/knowledge-gaps?local_profile_id=browser-local-id&profile_id={shared_profile_id}"
+        )
+        assert res_b_gaps.status_code == 200
+        assert len(res_b_gaps.json()["items"]) == 0
+
+    def test_unauthenticated_guest_can_still_query_own_guest_data(
+        self, client: TestClient, db: Session
+    ) -> None:
+        guest_profile_id = str(uuid.uuid4())
+        _add_attempt(
+            db,
+            knowledge_point="贪心算法",
+            score=0,
+            max_score=10,
+            graded=True,
+            profile_id=guest_profile_id,
+            owner_principal_id=None,
+        )
+        _add_mark(
+            db,
+            knowledge_point="贪心算法",
+            profile_id=guest_profile_id,
+            owner_principal_id=None,
+        )
+
+        # Unauthenticated guest client queries portrait
+        guest_client = TestClient(app)
+        res = guest_client.get(f"/api/v1/profile?profile_id={guest_profile_id}")
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data["confusion"]) == 1
+        assert data["confusion"][0]["knowledge_point"] == "贪心算法"

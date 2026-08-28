@@ -26,6 +26,7 @@ from .schemas import (
     LogoutAllRequest,
     RegisterRequest,
     ResetPasswordRequest,
+    RevokeManySessionsRequest,
     RoleChangeRequest,
     SessionInfo,
     SessionItem,
@@ -54,6 +55,7 @@ from .service import (
     request_email_verification,
     request_password_reset,
     reset_password,
+    revoke_many_sessions,
     revoke_session,
     update_display_name,
 )
@@ -293,6 +295,26 @@ def revoke_session_endpoint(
         )
     except AuthError as exc:
         raise _auth_error_to_http(exc) from exc
+
+
+@router.post("/api/v1/auth/sessions/revoke-many", status_code=200)
+def revoke_many_sessions_endpoint(
+    body: RevokeManySessionsRequest,
+    request: Request,
+    response: Response,
+    principal: CurrentPrincipal = _require_user_dep,
+    _csrf: None = _verify_csrf_dep,
+    db: Session = _db_dep,
+) -> dict[str, int]:
+    count = revoke_many_sessions(
+        db,
+        request,
+        response,
+        session_ids=body.sessionIds,
+        user_id=principal.user_id,  # type: ignore[arg-type]
+        current_session_id=principal.session_id,
+    )
+    return {"revokedCount": count}
 
 
 @router.post("/api/v1/auth/email-verification/request", status_code=202)

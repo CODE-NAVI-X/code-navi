@@ -326,10 +326,14 @@ export default function AccountSettingsPage(): React.ReactElement {
     };
   }, [activeTab, mode]);
 
-  const handleRevokeSession = async (sessionId: string) => {
-    setRevokingSessionId(sessionId);
+  const handleRevokeDevice = async (deviceItem: AuthSessionItem) => {
+    setRevokingSessionId(deviceItem.deviceKey);
     try {
-      await authApi.revokeSession(sessionId);
+      if (deviceItem.sessionIds && deviceItem.sessionIds.length > 0) {
+        await authApi.revokeMany(deviceItem.sessionIds);
+      } else {
+        await authApi.revokeSession(deviceItem.id);
+      }
       await loadSessions();
       showToast("已成功下线该设备");
     } catch (err) {
@@ -1008,6 +1012,11 @@ export default function AccountSettingsPage(): React.ReactElement {
                                     当前设备
                                   </span>
                                 )}
+                                {item.sessionCount > 1 && (
+                                  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700">
+                                    {item.sessionCount} 个会话
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-3 text-[11px] text-slate-400 dark:text-zinc-500 mt-1">
                                 <span>首次登录: {new Date(item.createdAt).toLocaleString()}</span>
@@ -1020,8 +1029,8 @@ export default function AccountSettingsPage(): React.ReactElement {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleRevokeSession(item.id)}
-                              loading={revokingSessionId === item.id}
+                              onClick={() => handleRevokeDevice(item)}
+                              loading={revokingSessionId === item.deviceKey}
                               disabled={revokingSessionId !== null}
                             >
                               下线

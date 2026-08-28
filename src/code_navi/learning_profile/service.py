@@ -102,20 +102,8 @@ class ProfileService:
         quiz_query = db.query(QuizAttemptModel).filter(QuizAttemptModel.graded.is_(True))
         mark_query = db.query(ConfusionMarkModel).filter(ConfusionMarkModel.status == "confused")
         if owned_ids:
-            quiz_query = quiz_query.filter(
-                (QuizAttemptModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (QuizAttemptModel.owner_principal_id.is_(None))
-                    & (QuizAttemptModel.profile_id == profile_id)
-                )
-            )
-            mark_query = mark_query.filter(
-                (ConfusionMarkModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (ConfusionMarkModel.owner_principal_id.is_(None))
-                    & (ConfusionMarkModel.profile_id == profile_id)
-                )
-            )
+            quiz_query = quiz_query.filter(QuizAttemptModel.owner_principal_id.in_(owned_ids))
+            mark_query = mark_query.filter(ConfusionMarkModel.owner_principal_id.in_(owned_ids))
         else:
             quiz_query = quiz_query.filter(QuizAttemptModel.profile_id == profile_id)
             mark_query = mark_query.filter(ConfusionMarkModel.profile_id == profile_id)
@@ -260,13 +248,7 @@ class ProfileService:
             QuizAttemptModel.score < QuizAttemptModel.max_score,
         )
         if owned_ids:
-            query = query.filter(
-                (QuizAttemptModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (QuizAttemptModel.owner_principal_id.is_(None))
-                    & (QuizAttemptModel.profile_id == profile_id)
-                )
-            )
+            query = query.filter(QuizAttemptModel.owner_principal_id.in_(owned_ids))
         else:
             query = query.filter(QuizAttemptModel.profile_id == profile_id)
         rows = (
@@ -318,13 +300,7 @@ class ProfileService:
             ConfusionMarkModel.status == "confused",
         )
         if owned_ids:
-            query = query.filter(
-                (ConfusionMarkModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (ConfusionMarkModel.owner_principal_id.is_(None))
-                    & (ConfusionMarkModel.profile_id == profile_id)
-                )
-            )
+            query = query.filter(ConfusionMarkModel.owner_principal_id.in_(owned_ids))
         else:
             query = query.filter(ConfusionMarkModel.profile_id == profile_id)
         rows = (
@@ -370,16 +346,7 @@ class ProfileService:
             )
         )
         if owned_ids:
-            query = query.filter(
-                (PracticeOutcomeModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (PracticeOutcomeModel.owner_principal_id.is_(None))
-                    & (
-                        PracticeOutcomeModel.local_profile_id == local_profile_id,
-                        PracticeOutcomeModel.learner_id == learner_id,
-                    )
-                )
-            )
+            query = query.filter(PracticeOutcomeModel.owner_principal_id.in_(owned_ids))
         else:
             query = query.filter(
                 PracticeOutcomeModel.local_profile_id == local_profile_id,

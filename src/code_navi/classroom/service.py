@@ -210,12 +210,12 @@ def join_classroom(user_id: str, invite_code: str, db: Session) -> ClassroomOut:
 def list_members(
     classroom_id: str, requester_user_id: str, db: Session
 ) -> list[ClassroomMemberOut]:
-    """List all members in a classroom without exposing email addresses."""
+    """List all members in a classroom. Exposes email and note only to owner."""
     classroom = db.query(Classroom).filter(Classroom.id == classroom_id).first()
     if not classroom:
         raise ClassroomError("class.not_found", "班级不存在", 404)
 
-    is_owner = (classroom.owner_user_id == requester_user_id)
+    is_owner = classroom.owner_user_id == requester_user_id
     is_member = (
         db.query(ClassroomMember.id)
         .filter(
@@ -229,7 +229,7 @@ def list_members(
         raise ClassroomError("class.not_found", "班级不存在", 404)
 
     rows = (
-        db.query(ClassroomMember, User.display_name)
+        db.query(ClassroomMember, User.display_name, User.email_display)
         .join(User, ClassroomMember.user_id == User.id)
         .filter(ClassroomMember.class_id == classroom_id)
         .order_by(
@@ -243,8 +243,87 @@ def list_members(
         ClassroomMemberOut(
             userId=m.user_id,
             displayName=display_name,
+            email=email_display if is_owner else None,
+            note=m.note if is_owner else None,
             roleInClass=m.role_in_class,
             joinedAt=m.joined_at,
         )
-        for m, display_name in rows
+        for m, display_name, email_display in rows
     ]
+
+
+def remove_member(
+    classroom_id: str,
+    member_user_id: str,
+    requester_user_id: str,
+    db: Session,
+) -> None:
+    """Remove a student member from a classroom. Owner only."""
+    classroom = db.query(Classroom).filter(Classroom.id == classroom_id).first()
+    if not classroom:
+        raise ClassroomError("class.not_found", "班级不存在", 404)
+
+    if classroom.owner_user_id != requester_user_id:
+        raise ClassroomError("class.not_found", "班级不存在", 404)
+
+    if member_user_id == classroom.owner_user_id:
+        raise ClassroomError("class.forbidden", "不能移除班级所有者", 400)
+
+    membership = (
+        db.query(ClassroomMember)
+        .filter(
+            ClassroomMember.class_id == classroom_id,
+            ClassroomMember.user_id == member_user_id,
+        )
+        .first()
+    )
+    if not membership:
+        raise ClassroomError("class.invalid_member", "该成员不在班级中", 404)
+
+    db.delete(membership)
+    db.commit()
+
+
+def update_member_note(
+    classroom_id: str,
+    member_user_id: str,
+    note: str | None,
+    requester_user_id: str,
+    db: Session,
+) -> ClassroomMemberOut:
+    """Update private note on a student member. Owner only."""
+    classroom = db.query(Classroom).filter(Classroom.id == classroom_id).first()
+    if not classroom:
+        raise ClassroomError("class.not_found", "班级不存在", 404)
+
+    if classroom.owner_user_id != requester_user_id:
+        raise ClassroomError("class.not_found", "班级不存在", 404)
+
+    membership = (
+        db.query(ClassroomMember)
+        .filter(
+            ClassroomMember.class_id == classroom_id,
+            ClassroomMember.user_id == member_user_id,
+        )
+        .first()
+    )
+    if not membership:
+        raise ClassroomError("class.invalid_member", "该成员不在班级中", 404)
+
+    user = db.query(User).filter(User.id == member_user_id).first()
+    display_name = user.display_name if user else "未知用户"
+    email = user.email_display if user else None
+
+    cleaned_note = note.strip() if note else None
+    membership.note = cleaned_note
+    db.commit()
+    db.refresh(membership)
+
+    return ClassroomMemberOut(
+        userId=membership.user_id,
+        displayName=display_name,
+        email=email,
+        note=membership.note,
+        roleInClass=membership.role_in_class,
+        joinedAt=membership.joined_at,
+    )
