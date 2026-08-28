@@ -112,12 +112,19 @@ class UserResponse(BaseModel):
 
 class SessionItem(BaseModel):
     id: str
+    deviceKey: str
+    userAgentLabel: str | None = None
     createdAt: str
     lastSeenAt: str
     expiresAt: str
-    userAgentLabel: str | None
     current: bool
+    sessionCount: int = 1
+    sessionIds: list[str] = Field(default_factory=list)
 
 
 class SessionListResponse(BaseModel):
     items: list[SessionItem]
+
+
+class RevokeManySessionsRequest(BaseModel):
+    sessionIds: list[str] = Field(default_factory=list)

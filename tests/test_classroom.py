@@ -297,15 +297,19 @@ def test_list_members_privacy_and_access_control(client: TestClient) -> None:
     assert items[1]["displayName"] == "郑同学"
     assert items[1]["roleInClass"] == "student"
 
-    # Privacy check: absolutely no email field
+    # Owner sees emails
     for item in items:
-        assert "email" not in item
+        assert item["email"] is not None
         assert "inviteCode" not in item
 
-    # Member lists members -> 200
+    # Member lists members -> 200, but email and note are None
     s_members = student_client.get(f"/api/v1/classes/{class_id}/members")
     assert s_members.status_code == 200
-    assert len(s_members.json()["items"]) == 2
+    s_items = s_members.json()["items"]
+    assert len(s_items) == 2
+    for item in s_items:
+        assert item.get("email") is None
+        assert item.get("note") is None
 
     # Outsider lists members -> 404
     outsider_client = TestClient(app)
@@ -372,3 +376,93 @@ def test_role_switch_preserves_classroom_membership(client: TestClient) -> None:
     assert t_classes[0]["isOwner"] is True
     assert t_classes[0]["roleInClass"] == "teacher"
     assert t_classes[0]["inviteCode"] == code
+
+
+def test_classroom_member_note_crud_and_remove(client: TestClient) -> None:
+    """8. Teacher manages student note and can remove student from class."""
+    teacher_client = TestClient(app)
+    t_reg = _register(teacher_client, "teacher", "徐老师")
+    create_res = teacher_client.post(
+        "/api/v1/classes",
+        json={"name": "操作系统实验班"},
+        headers={"X-CSRF-Token": t_reg["csrfToken"]},
+    )
+    class_id = create_res.json()["id"]
+    code = create_res.json()["inviteCode"]
+
+    student_client = TestClient(app)
+    s_reg = _register(student_client, "student", "韩同学")
+    join_res = student_client.post(
+        "/api/v1/classes/join",
+        json={"inviteCode": code},
+        headers={"X-CSRF-Token": s_reg["csrfToken"]},
+    )
+    assert join_res.status_code == 200
+    student_user_id = s_reg["user"]["id"]
+    teacher_user_id = t_reg["user"]["id"]
+
+    # Teacher updates note on student
+    patch_res = teacher_client.patch(
+        f"/api/v1/classes/{class_id}/members/{student_user_id}",
+        json={"note": "平时作业积极，代码规范好"},
+        headers={"X-CSRF-Token": t_reg["csrfToken"]},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["note"] == "平时作业积极，代码规范好"
+
+    # Teacher reads members: note is visible
+    t_members = teacher_client.get(f"/api/v1/classes/{class_id}/members").json()["items"]
+    student_item = next(i for i in t_members if i["userId"] == student_user_id)
+    assert student_item["note"] == "平时作业积极，代码规范好"
+    assert student_item["email"] is not None
+
+    # Student reads members: note is NOT visible (None)
+    s_members = student_client.get(f"/api/v1/classes/{class_id}/members").json()["items"]
+    s_student_item = next(i for i in s_members if i["userId"] == student_user_id)
+    assert s_student_item.get("note") is None
+    assert s_student_item.get("email") is None
+
+    # Student tries to update note -> 404
+    s_patch = student_client.patch(
+        f"/api/v1/classes/{class_id}/members/{student_user_id}",
+        json={"note": "恶意修改"},
+        headers={"X-CSRF-Token": s_reg["csrfToken"]},
+    )
+    assert s_patch.status_code == 404
+
+    # Teacher tries to delete self -> 400
+    del_self = teacher_client.delete(
+        f"/api/v1/classes/{class_id}/members/{teacher_user_id}",
+        headers={"X-CSRF-Token": t_reg["csrfToken"]},
+    )
+    assert del_self.status_code == 400
+
+    # Student tries to delete member -> 404
+    del_by_student = student_client.delete(
+        f"/api/v1/classes/{class_id}/members/{student_user_id}",
+        headers={"X-CSRF-Token": s_reg["csrfToken"]},
+    )
+    assert del_by_student.status_code == 404
+
+    # Teacher removes student -> 204
+    del_student = teacher_client.delete(
+        f"/api/v1/classes/{class_id}/members/{student_user_id}",
+        headers={"X-CSRF-Token": t_reg["csrfToken"]},
+    )
+    assert del_student.status_code == 204
+
+    # Classroom member count is now 1
+    t_classes = teacher_client.get("/api/v1/classes").json()["items"]
+    assert t_classes[0]["memberCount"] == 1
+
+    # Student list of classes is now empty
+    s_classes = student_client.get("/api/v1/classes").json()["items"]
+    assert len(s_classes) == 0
+
+    # Student can rejoin using invite code
+    rejoin = student_client.post(
+        "/api/v1/classes/join",
+        json={"inviteCode": code},
+        headers={"X-CSRF-Token": s_reg["csrfToken"]},
+    )
+    assert rejoin.status_code == 200

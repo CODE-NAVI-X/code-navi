@@ -126,13 +126,7 @@ async def list_recent_learning(
         )
     )
     if owned_ids:
-        query = query.filter(
-            (WorkspaceModel.owner_principal_id.in_(owned_ids))
-            | (
-                (WorkspaceModel.owner_principal_id.is_(None))
-                & (WorkspaceModel.owner_scope_id.in_(owned_ids))
-            )
-        )
+        query = query.filter(WorkspaceModel.owner_principal_id.in_(owned_ids))
     elif local_profile_id:
         query = query.filter(WorkspaceModel.owner_scope_id == local_profile_id)
     else:
@@ -172,13 +166,7 @@ async def get_recent_learning(
         )
     )
     if owned_ids:
-        query = query.filter(
-            (WorkspaceModel.owner_principal_id.in_(owned_ids))
-            | (
-                (WorkspaceModel.owner_principal_id.is_(None))
-                & (WorkspaceModel.owner_scope_id.in_(owned_ids))
-            )
-        )
+        query = query.filter(WorkspaceModel.owner_principal_id.in_(owned_ids))
     elif local_profile_id:
         query = query.filter(WorkspaceModel.owner_scope_id == local_profile_id)
 
@@ -210,10 +198,12 @@ async def list_knowledge_gaps(
     Workspace owner boundary. The endpoint does not create a KnowledgeGap table
     or imply account-level authorization.
     """
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
     return _profile_service.get_knowledge_gaps(
         local_profile_id=local_profile_id,
         profile_id=profile_id,
         db=db,
+        owned_ids=owned_ids,
         limit=limit,
     )
 
@@ -267,13 +257,7 @@ async def list_notebook_items(
     owned_ids = get_owned_principal_ids(principal, db) if principal else None
     query = db.query(NotebookItemModel)
     if owned_ids:
-        query = query.filter(
-            (NotebookItemModel.owner_principal_id.in_(owned_ids))
-            | (
-                (NotebookItemModel.owner_principal_id.is_(None))
-                & (NotebookItemModel.session_id == session_id)
-            )
-        )
+        query = query.filter(NotebookItemModel.owner_principal_id.in_(owned_ids))
     else:
         query = query.filter(NotebookItemModel.session_id == session_id)
 
@@ -316,13 +300,7 @@ async def get_presentation(
         NotebookItemModel.item_type == "presentation",
     )
     if owned_ids:
-        query = query.filter(
-            (NotebookItemModel.owner_principal_id.in_(owned_ids))
-            | (
-                (NotebookItemModel.owner_principal_id.is_(None))
-                & (NotebookItemModel.session_id == session_id)
-            )
-        )
+        query = query.filter(NotebookItemModel.owner_principal_id.in_(owned_ids))
     else:
         query = query.filter(NotebookItemModel.session_id == session_id)
 

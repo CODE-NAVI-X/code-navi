@@ -66,6 +66,8 @@ class ClassroomMemberOut(BaseModel):
 
     userId: str
     displayName: str
+    email: str | None = None
+    note: str | None = None
     roleInClass: str
     joinedAt: datetime
 
@@ -74,3 +76,11 @@ class ClassroomMemberListResponse(BaseModel):
     """List of classroom members."""
 
     items: list[ClassroomMemberOut]
+
+
+class UpdateMemberNoteRequest(BaseModel):
+    """Payload to update member note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, max_length=500)

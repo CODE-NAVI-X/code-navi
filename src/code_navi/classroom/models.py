@@ -75,6 +75,7 @@ class ClassroomMember(Base):
         String(16), nullable=False, default="student", server_default="student"
     )
     joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     classroom: Mapped[Classroom] = relationship("Classroom", back_populates="members")
     user: Mapped[User] = relationship("User", foreign_keys=[user_id])

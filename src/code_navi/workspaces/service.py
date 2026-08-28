@@ -56,10 +56,7 @@ class WorkspaceService:
     ):
         """Return SQLAlchemy filter condition for owned principals or fallback."""
         if owned_ids:
-            return model_cls.owner_principal_id.in_(owned_ids) | (
-                model_cls.owner_principal_id.is_(None)
-                & model_cls.owner_scope_id.in_(owned_ids)
-            )
+            return model_cls.owner_principal_id.in_(owned_ids)
         if local_profile_id:
             return (model_cls.owner_scope_id == local_profile_id) | (
                 model_cls.owner_principal_id == local_profile_id
@@ -89,7 +86,7 @@ class WorkspaceService:
             return existing
 
         candidate_owner_principal = principal_id or (effective_ids[0] if effective_ids else None)
-        candidate_scope = local_profile_id or candidate_owner_principal or "default"
+        candidate_scope = candidate_owner_principal or local_profile_id or "default"
         candidate = WorkspaceModel(
             owner_scope_id=candidate_scope,
             personal_owner_scope_id=candidate_scope,
@@ -478,27 +475,9 @@ class WorkspaceService:
     ) -> WorkspaceModel | None:
         query = db.query(WorkspaceModel).filter(WorkspaceModel.kind == "personal")
         if owned_ids:
-            query = query.filter(
-                (WorkspaceModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (WorkspaceModel.owner_principal_id.is_(None))
-                    & (
-                        WorkspaceModel.personal_owner_scope_id.in_(owned_ids)
-                        | WorkspaceModel.owner_scope_id.in_(owned_ids)
-                    )
-                )
-            )
+            query = query.filter(WorkspaceModel.owner_principal_id.in_(owned_ids))
         elif principal_id:
-            query = query.filter(
-                (WorkspaceModel.owner_principal_id == principal_id)
-                | (
-                    (WorkspaceModel.owner_principal_id.is_(None))
-                    & (
-                        (WorkspaceModel.personal_owner_scope_id == principal_id)
-                        | (WorkspaceModel.owner_scope_id == principal_id)
-                    )
-                )
-            )
+            query = query.filter(WorkspaceModel.owner_principal_id == principal_id)
         elif local_profile_id:
             query = query.filter(
                 (WorkspaceModel.personal_owner_scope_id == local_profile_id)

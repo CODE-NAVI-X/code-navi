@@ -893,13 +893,7 @@ class QuizGenerator:
             NotebookItemModel.item_type == "quiz",
         )
         if owned_ids:
-            query = query.filter(
-                (NotebookItemModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (NotebookItemModel.owner_principal_id.is_(None))
-                    & (NotebookItemModel.session_id == session_id)
-                )
-            )
+            query = query.filter(NotebookItemModel.owner_principal_id.in_(owned_ids))
         else:
             query = query.filter(NotebookItemModel.session_id == session_id)
         items = query.all()

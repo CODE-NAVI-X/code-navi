@@ -457,7 +457,7 @@ def list_user_sessions(
     user_id: str,
     current_session_id: str,
 ) -> list[dict]:
-    """Return active sessions for a user."""
+    """Return active sessions for a user grouped by device."""
     principals = db.query(Principal).filter(Principal.user_id == user_id).all()
     p_ids = [p.id for p in principals]
     now = datetime.now(UTC)
@@ -470,21 +470,46 @@ def list_user_sessions(
         .order_by(AuthSession.created_at.desc())
         .all()
     )
-    result = []
+
+    active_sessions = []
     for s in sessions:
         exp = s.expires_at
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)
         if now > exp:
             continue
+        active_sessions.append(s)
+
+    groups: dict[str, list[AuthSession]] = {}
+    for s in active_sessions:
+        ua_label = (s.user_agent_label or "").strip()
+        device_key = ua_label if ua_label else s.id
+        groups.setdefault(device_key, []).append(s)
+
+    result = []
+    for device_key, s_list in groups.items():
+        latest_session = s_list[0]
+        earliest_created = min(s.created_at for s in s_list)
+        latest_seen = max(s.last_seen_at for s in s_list)
+        latest_exp = max(
+            s.expires_at.replace(tzinfo=UTC) if s.expires_at.tzinfo is None else s.expires_at
+            for s in s_list
+        )
+        has_current = any(s.id == current_session_id for s in s_list)
+
         result.append({
-            "id": s.id,
-            "createdAt": s.created_at.replace(tzinfo=UTC).isoformat(),
-            "lastSeenAt": s.last_seen_at.replace(tzinfo=UTC).isoformat(),
-            "expiresAt": exp.isoformat(),
-            "userAgentLabel": s.user_agent_label,
-            "current": s.id == current_session_id,
+            "id": latest_session.id,
+            "deviceKey": device_key,
+            "userAgentLabel": latest_session.user_agent_label,
+            "createdAt": earliest_created.replace(tzinfo=UTC).isoformat(),
+            "lastSeenAt": latest_seen.replace(tzinfo=UTC).isoformat(),
+            "expiresAt": latest_exp.isoformat(),
+            "current": has_current,
+            "sessionCount": len(s_list),
+            "sessionIds": [s.id for s in s_list],
         })
+
+    result.sort(key=lambda item: item["lastSeenAt"], reverse=True)
     return result
 
 
@@ -518,6 +543,56 @@ def revoke_session(
     # If revoking current session, clear the cookie too
     if session_id == current_session_id:
         _clear_session_cookie(response)
+
+
+def revoke_many_sessions(
+    db: Session,
+    request: Request,
+    response: Response,
+    *,
+    session_ids: list[str],
+    user_id: str,
+    current_session_id: str,
+) -> int:
+    """Revoke multiple sessions belonging to this user."""
+    if not session_ids:
+        return 0
+
+    principals = db.query(Principal).filter(Principal.user_id == user_id).all()
+    p_ids = [p.id for p in principals]
+    targets = (
+        db.query(AuthSession)
+        .filter(
+            AuthSession.id.in_(session_ids),
+            AuthSession.principal_id.in_(p_ids),
+            AuthSession.revoked_at.is_(None),
+        )
+        .all()
+    )
+
+    now = datetime.now(UTC)
+    revoked_count = 0
+    current_revoked = False
+    for target in targets:
+        target.revoked_at = now
+        revoked_count += 1
+        if target.id == current_session_id:
+            current_revoked = True
+
+    if revoked_count > 0:
+        _log_event(
+            db,
+            event_type="session_revoked",
+            user_id=user_id,
+            request=request,
+            metadata={"revoked_count": revoked_count, "session_ids": session_ids},
+        )
+        db.commit()
+
+    if current_revoked:
+        _clear_session_cookie(response)
+
+    return revoked_count
 
 
 # ── Password management ─────────────────────────────────────────────────────

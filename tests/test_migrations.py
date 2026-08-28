@@ -697,4 +697,62 @@ def test_classroom_migration(
     command.upgrade(config, "head")
 
 
+def test_classroom_member_note_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'classroom-note-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0020_classroom")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_before = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(class_members)"))
+            }
+    finally:
+        engine.dispose()
+
+    assert "note" not in columns_before
+
+    # Upgrade to head (0021_classroom_member_note)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_after = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(class_members)"))
+            }
+    finally:
+        engine.dispose()
+
+    assert "note" in columns_after
+
+    # Downgrade to 0020_classroom
+    command.downgrade(config, "0020_classroom")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_down = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(class_members)"))
+            }
+    finally:
+        engine.dispose()
+
+    assert "note" not in columns_down
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+
+
 
