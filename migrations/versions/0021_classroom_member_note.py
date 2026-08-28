@@ -5,8 +5,8 @@ Revises: 0020_classroom
 Create Date: 2026-08-28 15:46:00
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0021_classroom_member_note"
