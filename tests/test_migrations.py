@@ -22,6 +22,7 @@ from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
 from code_navi.learning_profile import models as learning_profile_models  # noqa: E402,F401
 from code_navi.online_compiler import models as compiler_models  # noqa: E402,F401
+from code_navi.practice import models as practice_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
 from code_navi.workspaces import models as workspace_models  # noqa: E402,F401
 
@@ -692,6 +693,77 @@ def test_classroom_migration(
 
     assert "classes" not in tables_after
     assert "class_members" not in tables_after
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+
+def test_practice_sets_migration_adds_three_tables_on_the_current_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision 0022 adds the practice gateway tables and drops them on downgrade."""
+    database_url = f"sqlite:///{tmp_path / 'practice-sets-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0021_classroom_member_note")
+
+    engine = create_engine(database_url)
+    try:
+        tables_before = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "practice_sets" not in tables_before
+
+    # Upgrade to head (0022_practice_sets_v1)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.begin() as connection:
+            from sqlalchemy import text
+
+            connection.execute(
+                text(
+                    "INSERT INTO practice_sets "
+                    "(set_id, kind, generation_mode, provider_name, created_at) VALUES "
+                    "('set-keep-1', 'code_practice', 'mock', 'mock', CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO practice_set_items "
+                    "(set_id, item_id, position, item_kind, payload, judge_secret, "
+                    "created_at) VALUES "
+                    "('set-keep-1', 'item-01', 1, 'code_fill', '{}', "
+                    "'{\"blanks\": []}', CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO code_fill_attempts "
+                    "(attempt_id, item_id, set_id, is_mock, graded, created_at) VALUES "
+                    "('a-keep-1', 'item-01', 'set-keep-1', 1, 0, CURRENT_TIMESTAMP)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    assert {"practice_sets", "practice_set_items", "code_fill_attempts"} <= tables
+
+    # Downgrade to 0021_classroom_member_note drops all three tables
+    command.downgrade(config, "0021_classroom_member_note")
+    engine = create_engine(database_url)
+    try:
+        tables_after = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "practice_sets" not in tables_after
+    assert "practice_set_items" not in tables_after
+    assert "code_fill_attempts" not in tables_after
 
     # Re-upgrade to head
     command.upgrade(config, "head")

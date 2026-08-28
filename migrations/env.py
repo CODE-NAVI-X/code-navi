@@ -18,6 +18,7 @@ from code_navi.db import Base
 from code_navi.learning import models as learning_models  # noqa: F401
 from code_navi.learning_profile import models as learning_profile_models  # noqa: F401
 from code_navi.online_compiler import models as compiler_models  # noqa: F401
+from code_navi.practice import models as practice_models  # noqa: F401
 from code_navi.research import models as research_models  # noqa: F401
 from code_navi.workspaces import models as workspace_models  # noqa: F401
 
