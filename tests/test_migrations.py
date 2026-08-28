@@ -16,6 +16,7 @@ from alembic.migration import MigrationContext  # noqa: E402
 
 from code_navi import cli_conversation as cli_conversation_models  # noqa: E402,F401
 from code_navi.auth import models as auth_models  # noqa: E402,F401
+from code_navi.classroom import models as classroom_models  # noqa: E402,F401
 from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
@@ -634,5 +635,66 @@ def test_user_role_migration(
 
     # Re-upgrade to head
     command.upgrade(config, "head")
+
+
+def test_classroom_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'classroom-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0019_user_role")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO users ("
+                "id, email_normalized, email_display, email_verified_at, "
+                "display_name, status, role, created_at, updated_at"
+                ") VALUES ("
+                "'u-teacher-1', 'teacher@example.com', 'teacher@example.com', NULL, "
+                "'教师张', 'active', 'teacher', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    # Upgrade to head (0020_classroom)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            user_row = connection.execute(
+                text("SELECT id, role FROM users WHERE id = 'u-teacher-1'")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert "classes" in tables
+    assert "class_members" in tables
+    assert user_row[0] == "u-teacher-1"
+    assert user_row[1] == "teacher"
+
+    # Downgrade to 0019_user_role
+    command.downgrade(config, "0019_user_role")
+    engine = create_engine(database_url)
+    try:
+        tables_after = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "classes" not in tables_after
+    assert "class_members" not in tables_after
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
 
 

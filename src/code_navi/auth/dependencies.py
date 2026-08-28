@@ -170,6 +170,22 @@ def get_owned_principal_ids(
 _require_user_dep = Depends(require_user)
 
 
+def require_role(role: str):
+    def dep(principal: CurrentPrincipal = _require_user_dep) -> CurrentPrincipal:
+        if principal.role != role:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "auth.forbidden",
+                    "message": "该操作需要教师身份" if role == "teacher" else "该操作需要学生身份",
+                },
+            )
+        return principal
+
+    return dep
+
+
+
 def require_owned_principal_ids(
     principal: CurrentPrincipal = _require_user_dep,
     db: Session = _db_dep,

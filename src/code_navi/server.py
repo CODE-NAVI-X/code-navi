@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from .auth import models as auth_models  # noqa: F401  (register tables)
 from .auth.router import router as auth_router
 from .auth.settings import session_settings
+from .classroom import models as classroom_models  # noqa: F401  (register tables)
+from .classroom.router import router as classroom_router
 from .context_transfer import models as context_transfer_models  # noqa: F401
 from .context_transfer.router import router as context_transfer_router
 from .db import DATABASE_URL, Base, engine
@@ -76,6 +78,7 @@ app.include_router(research_router)
 app.include_router(compiler_router)
 app.include_router(context_transfer_router)
 app.include_router(workspace_router)
+app.include_router(classroom_router)
 
 # ---------------------------------------------------------------------------
 # CORS - explicit origin allowlist.
