@@ -4,7 +4,7 @@
 
 ## 0. 总则
 
-1. **鉴权与所有权**：沿用 `src/code_navi/auth/dependencies.py`——读接口用 `get_optional_principal` + `get_owned_principal_ids`，写接口用 `require_user`；新表一律带可空 `owner_principal_id`（兼容期），登录态下按 owner 过滤，跨 owner 资源统一 404。`profile_id`（UUID v4，== practice `learner_id`）仍作为画像聚合键传入。
+1. **鉴权与所有权**：沿用 `src/code_navi/auth/dependencies.py`——读接口用 `get_optional_principal` + `get_owned_principal_ids`，新表一律带可空 `owner_principal_id`（兼容期），登录态下按 owner 过滤，跨 owner 资源统一 404。**兼容期裁决（2026-08，S1 起生效）**：本契约的写接口暂不采用 `require_user`，与现有 `POST /learning/quiz/generate` 一致使用 `get_optional_principal`（匿名态 `owner_principal_id` 落 NULL）；兼容期结束后写接口统一切换 `require_user`。`profile_id`（UUID v4，== practice `learner_id`）仍作为画像聚合键传入。
 2. **错误码**：400 业务校验失败（JSON body，应用层手工校验时使用）；401 未认证；403 角色或所有权不符；404 资源不存在（跨 owner 也 404）；409 前置条件未满足（未确认、未达准备度、Provider 禁用且无规则回退）；413 上传超限；422 schema 不合法（Pydantic 边界）；500 只返回安全信息 + `error_id`。调用方不得把 4xx/5xx 映射为空结果或成功。
 3. **审计与事件**：每次模型运行产生可关联 Event；响应中的 `generation_mode`（`mock | model | rules_fallback`）与 `provider_name` 为必填事实字段，前端必须原样展示来源。
 4. **降级诚信**：模型不可用时回退规则并明确标注；判分字段 `graded_by: rules | mock | model`、`is_mock: bool`、`graded: bool` 缺一不可，离线不可判时 `graded=false` 并提示对照参考答案自查，禁止伪称模型结论。
