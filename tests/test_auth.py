@@ -519,5 +519,75 @@ def test_patch_user_role_success_and_idempotent_and_session_preserved(client: Te
     db.close()
 
 
+def test_require_role_dependency_behavior(client: TestClient) -> None:
+    """Verify require_role: teacher/student accessing POST /classes and POST /classes/join."""
+    # 1. Unauthenticated -> 401
+    unauth_create = client.post("/api/v1/classes", json={"name": "无登录建班"})
+    assert unauth_create.status_code == 401
+
+    # 2. Student registration
+    s_uid = uuid.uuid4().hex[:8]
+    s_reg = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"s_dep_{s_uid}@example.com",
+            "password": "Password123!",
+            "displayName": "测试学生",
+            "role": "student",
+        },
+    )
+    s_csrf = s_reg.json()["csrfToken"]
+
+    # Student cannot create class -> 403
+    s_create = client.post(
+        "/api/v1/classes",
+        json={"name": "学生测试建班"},
+        headers={"X-CSRF-Token": s_csrf},
+    )
+    assert s_create.status_code == 403
+    assert s_create.json()["detail"]["code"] == "auth.forbidden"
+
+    # 3. Teacher registration
+    t_client = TestClient(app)
+    t_uid = uuid.uuid4().hex[:8]
+    t_reg = t_client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"t_dep_{t_uid}@example.com",
+            "password": "Password123!",
+            "displayName": "测试老师",
+            "role": "teacher",
+        },
+    )
+    t_csrf = t_reg.json()["csrfToken"]
+
+    # Teacher creates class -> 201
+    t_create = t_client.post(
+        "/api/v1/classes",
+        json={"name": "老师测试班级"},
+        headers={"X-CSRF-Token": t_csrf},
+    )
+    assert t_create.status_code == 201
+    code = t_create.json()["inviteCode"]
+
+    # Teacher cannot join class via student endpoint -> 403
+    t_join = t_client.post(
+        "/api/v1/classes/join",
+        json={"inviteCode": code},
+        headers={"X-CSRF-Token": t_csrf},
+    )
+    assert t_join.status_code == 403
+    assert t_join.json()["detail"]["code"] == "auth.forbidden"
+
+    # Student joins class -> 200
+    s_join = client.post(
+        "/api/v1/classes/join",
+        json={"inviteCode": code},
+        headers={"X-CSRF-Token": s_csrf},
+    )
+    assert s_join.status_code == 200
+
+
+
 
 
