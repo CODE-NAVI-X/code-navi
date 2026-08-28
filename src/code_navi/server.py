@@ -25,6 +25,8 @@ from .learning_profile import models as learning_profile_models  # noqa: F401  (
 from .learning_profile.router import router as learning_profile_router
 from .online_compiler import models as compiler_models  # noqa: F401  (register tables)
 from .online_compiler.router import router as compiler_router
+from .practice import models as practice_models  # noqa: F401  (register tables)
+from .practice.router import router as practice_router
 from .provider_config import load_local_provider_config
 from .research import models as research_models  # noqa: F401  (register tables)
 from .research.router import router as research_router
@@ -76,6 +78,7 @@ app.include_router(learning_router)
 app.include_router(learning_profile_router)
 app.include_router(research_router)
 app.include_router(compiler_router)
+app.include_router(practice_router)
 app.include_router(context_transfer_router)
 app.include_router(workspace_router)
 app.include_router(classroom_router)
