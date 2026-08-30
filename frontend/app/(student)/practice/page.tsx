@@ -27,23 +27,35 @@ import {
   CompilerPracticeFocus,
   CompilerPracticeLaunch,
   CompilerRuntimeStatus,
+  CompilerStructureExercise,
+  CompilerStructureSubmissionResult,
   CompilerJudgeResult,
   GeneratedPracticeProblem,
   analyzeProblemImport,
+  askStructureTutor,
   createPracticeLaunch,
+  evaluateStructureExercise,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
   fetchCompilerRuntime,
+  fetchStructureExercises,
   generateProblemSet,
   requestCompilerGuidance,
+  submitStructureExercise,
   submitPython,
 } from "@/lib/api/compiler";
 import { getLocalProfileId } from "@/lib/api/workspaces";
+import {
+  LanguageBasicsPreference,
+  readLanguageBasics,
+  saveLanguageBasics,
+} from "@/lib/language-basics";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 
 type Difficulty = "easy" | "medium" | "hard" | "custom";
+type PracticeExerciseKind = "code_run" | "structure_sequence" | "framework_fill";
 
 interface PracticeExercise {
   id: string;
@@ -57,6 +69,8 @@ interface PracticeExercise {
   source: string;
   stdin: string;
   origin?: "built_in" | "python_file" | "uploaded_problem" | "generated_problem";
+  practiceType: PracticeExerciseKind;
+  structureExercise?: CompilerStructureExercise;
   judgeable?: boolean;
   problemId?: string;
   problemVersion?: number;
@@ -87,6 +101,18 @@ const DIFFICULTY_BADGES: Record<Difficulty, string> = {
   medium: "border-[#d8c48a] bg-[#fff3c9] text-[#725414]",
   hard: "border-[#e7aaa0] bg-[#ffe3dd] text-[#80342b]",
   custom: "border-[#b7bec8] bg-[#edf1f5] text-[#344052]",
+};
+
+const PRACTICE_TYPE_LABELS: Record<PracticeExerciseKind, string> = {
+  code_run: "语法编译",
+  structure_sequence: "结构排序",
+  framework_fill: "代码挖空",
+};
+
+const PRACTICE_TYPE_BADGES: Record<PracticeExerciseKind, string> = {
+  code_run: "border-[#b7bec8] bg-[#edf1f5] text-[#344052]",
+  structure_sequence: "border-[#9eb3a6] bg-[#e8f3df] text-[#365f2f]",
+  framework_fill: "border-[#d8c48a] bg-[#fff3c9] text-[#725414]",
 };
 
 const EXERCISES: PracticeExercise[] = [
@@ -169,7 +195,11 @@ else:
 `,
     stdin: "{[()]}\n",
   },
-].map((exercise) => ({ ...exercise, origin: "built_in" as const })) as PracticeExercise[];
+].map((exercise) => ({
+  ...exercise,
+  origin: "built_in" as const,
+  practiceType: "code_run" as const,
+})) as PracticeExercise[];
 
 function importedProblemToExercise(
   problem: ImportedCompilerProblem,
@@ -187,6 +217,7 @@ function importedProblemToExercise(
     source: problem.starterCode,
     stdin: "",
     origin: "uploaded_problem",
+    practiceType: "code_run",
     judgeable: false,
     orderReason: problem.orderReason,
     warnings: problem.warnings,
@@ -233,6 +264,7 @@ function generatedProblemToExercise(
         : problem.source === "uploaded"
           ? "uploaded_problem"
           : "generated_problem",
+    practiceType: "code_run",
     judgeable: problem.judgeable,
     problemId: problem.problemId,
     problemVersion: problem.problemVersion,
@@ -242,11 +274,572 @@ function generatedProblemToExercise(
   };
 }
 
+function structureExerciseToPracticeExercise(
+  exercise: CompilerStructureExercise,
+): PracticeExercise {
+  return {
+    id: `structure-${exercise.id}`,
+    title: exercise.title,
+    summary: `${exercise.domain} · ${PRACTICE_TYPE_LABELS[exercise.kind]}`,
+    difficulty: "medium",
+    tags: [exercise.domain, PRACTICE_TYPE_LABELS[exercise.kind]],
+    description: exercise.objective,
+    inputHint: "",
+    outputHint: "",
+    source: exercise.starterCode ?? "",
+    stdin: "",
+    origin: "built_in",
+    practiceType: exercise.kind,
+    structureExercise: exercise,
+  };
+}
+
+function StructureExerciseWorkspace({
+  exercise,
+  onBack,
+}: {
+  exercise: CompilerStructureExercise;
+  onBack: () => void;
+}) {
+  const [answer, setAnswer] = useState<string[] | string>(() =>
+    exercise.kind === "structure_sequence"
+      ? []
+      : exercise.starterCode?.replace("__BLANK__", "") ?? "",
+  );
+  const [levelAnswers, setLevelAnswers] = useState<string[][]>(() =>
+    exercise.levels?.map(() => []) ?? [],
+  );
+  const [currentLevelIndex, setCurrentLevelIndex] = useState(0);
+  const [result, setResult] = useState<CompilerStructureSubmissionResult | null>(null);
+  const [aiFeedback, setAiFeedback] = useState<CompilerAiFeedback | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [structureChat, setStructureChat] = useState<
+    Array<{ role: "user" | "assistant"; content: string }>
+  >([]);
+  const [structureQuestion, setStructureQuestion] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+
+  function selectOption(option: string) {
+    if (exercise.levels?.length) {
+      setLevelAnswers((current) => {
+        const next = [...current];
+        const levelAnswer = next[currentLevelIndex] ?? [];
+        if (levelAnswer.includes(option)) return current;
+        next[currentLevelIndex] = [...levelAnswer, option];
+        return next;
+      });
+      return;
+    }
+    setAnswer((current) => {
+      if (!Array.isArray(current) || current.includes(option)) return current;
+      return [...current, option];
+    });
+  }
+
+  function removeOption(option: string) {
+    if (exercise.levels?.length) {
+      setLevelAnswers((current) => {
+        const next = [...current];
+        next[currentLevelIndex] = (next[currentLevelIndex] ?? []).filter(
+          (item) => item !== option,
+        );
+        return next;
+      });
+      return;
+    }
+    setAnswer((current) => {
+      if (!Array.isArray(current)) return current;
+      return current.filter((item) => item !== option);
+    });
+  }
+
+  async function submitStructureAnswer() {
+    setSubmitting(true);
+    setError(null);
+    setAiFeedback(null);
+    try {
+      const isLevelSubmission = Boolean(exercise.levels?.length && currentLevel);
+      const submitAnswer = isLevelSubmission ? currentLevelAnswer : answer;
+      const levelNumber = isLevelSubmission ? currentLevel?.level : undefined;
+      const submitted = await submitStructureExercise({
+        exerciseId: exercise.id,
+        answer: submitAnswer,
+        level: levelNumber,
+      });
+      setResult(submitted);
+      setEvaluating(true);
+      try {
+        const evaluated = await evaluateStructureExercise({
+          exerciseId: exercise.id,
+          answer: submitAnswer,
+          level: levelNumber,
+        });
+        setAiFeedback(evaluated.ai);
+      } catch (evaluateError) {
+        setAiFeedback({
+          status: "unavailable",
+          message:
+            evaluateError instanceof Error ? evaluateError.message : "AI 评析暂不可用。",
+        });
+      } finally {
+        setEvaluating(false);
+      }
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "提交失败。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function goToNextLevel() {
+    setCurrentLevelIndex((index) => index + 1);
+    setResult(null);
+    setAiFeedback(null);
+    setStructureChat([]);
+    setStructureQuestion("");
+  }
+
+  async function askStructureQuestion() {
+    const question = structureQuestion.trim();
+    if (!question) return;
+    const history = structureChat;
+    setStructureChat((items) => [...items, { role: "user", content: question }]);
+    setStructureQuestion("");
+    setChatBusy(true);
+    try {
+      const response = await askStructureTutor({
+        exerciseId: exercise.id,
+        question,
+        history,
+      });
+      setStructureChat((items) => [
+        ...items,
+        { role: "assistant", content: response.ai.reply },
+      ]);
+    } catch (chatError) {
+      setStructureChat((items) => [
+        ...items,
+        {
+          role: "assistant",
+          content:
+            chatError instanceof Error ? chatError.message : "AI 引导暂不可用。",
+        },
+      ]);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  const currentLevel = exercise.levels?.[currentLevelIndex] ?? null;
+  const currentLevelAnswer = currentLevel
+    ? levelAnswers[currentLevelIndex] ?? []
+    : [];
+  const submitDisabled =
+    exercise.kind === "structure_sequence"
+      ? exercise.levels?.length
+        ? currentLevelAnswer.length !== (currentLevel?.options.length ?? 0)
+        : !Array.isArray(answer) || answer.length !== exercise.options.length
+      : false;
+
+  return (
+    <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
+      <header className="sticky top-16 z-30 flex min-h-16 items-center gap-3 border-b border-slate-200 bg-[var(--app-card)]/95 px-3 py-2 shadow-[var(--app-shadow)] backdrop-blur dark:border-zinc-800">
+        <button
+          type="button"
+          onClick={onBack}
+          className="app-button-secondary inline-flex h-10 w-10 items-center justify-center rounded-xl"
+          aria-label="返回练习题列表"
+        >
+          <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <span className="font-mono text-[10px] text-slate-400 dark:text-zinc-500">
+            {exercise.domain}
+          </span>
+          <strong className="block truncate text-sm text-slate-950 dark:text-zinc-50">
+            {exercise.title}
+          </strong>
+        </div>
+        <span className="app-card-subtle rounded-full px-3 py-1 text-xs text-slate-500 dark:text-zinc-400">
+          {PRACTICE_TYPE_LABELS[exercise.kind]}
+        </span>
+      </header>
+
+      <section className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
+        <div className="app-card rounded-2xl p-5">
+          <p className="text-sm leading-6 text-slate-600 dark:text-zinc-300">
+            {exercise.objective}
+          </p>
+          <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-zinc-400">
+            {exercise.instruction}
+          </p>
+
+          {exercise.kind === "structure_sequence" ? (
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              {currentLevel ? (
+                <>
+                  <div className="md:col-span-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-slate-950 px-3 py-1 text-xs font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
+                        第 {currentLevel.level} 级
+                      </span>
+                      <strong className="text-base font-bold text-slate-950 dark:text-zinc-50">
+                        {currentLevel.title}
+                      </strong>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-300">
+                      {currentLevel.instruction}
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                      可选模块
+                    </h3>
+                    <div className="mt-2 space-y-2">
+                      {currentLevel.options
+                        .filter((option) => !currentLevelAnswer.includes(option))
+                        .map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() => selectOption(option)}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-left text-xs text-slate-600 transition hover:border-slate-400 dark:border-zinc-800 dark:text-zinc-300"
+                          >
+                            {option}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                      你的顺序
+                    </h3>
+                    <ol className="mt-2 space-y-2">
+                      {currentLevelAnswer.length > 0 ? (
+                        currentLevelAnswer.map((option, index) => (
+                          <li key={option}>
+                            <button
+                              type="button"
+                              onClick={() => removeOption(option)}
+                              className="flex w-full items-center gap-3 rounded-xl bg-slate-100 px-3 py-2 text-left text-xs text-slate-700 transition hover:bg-slate-200 dark:bg-zinc-800 dark:text-zinc-200"
+                            >
+                              <span className="font-mono text-slate-400">
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <span className="min-w-0 flex-1">{option}</span>
+                              <span className="text-slate-400">移除</span>
+                            </button>
+                          </li>
+                        ))
+                      ) : (
+                        <li className="rounded-xl border border-dashed border-slate-200 p-4 text-xs text-slate-400 dark:border-zinc-700">
+                          点击左侧模块加入顺序
+                        </li>
+                      )}
+                    </ol>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                      可选模块
+                    </h3>
+                    <div className="mt-2 space-y-2">
+                      {exercise.options
+                        .filter((option) => !Array.isArray(answer) || !answer.includes(option))
+                        .map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() => selectOption(option)}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-left text-xs text-slate-600 transition hover:border-slate-400 dark:border-zinc-800 dark:text-zinc-300"
+                          >
+                            {option}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                      你的顺序
+                    </h3>
+                    <ol className="mt-2 space-y-2">
+                      {Array.isArray(answer) && answer.length > 0 ? (
+                        answer.map((option, index) => (
+                          <li key={option}>
+                            <button
+                              type="button"
+                              onClick={() => removeOption(option)}
+                              className="flex w-full items-center gap-3 rounded-xl bg-slate-100 px-3 py-2 text-left text-xs text-slate-700 transition hover:bg-slate-200 dark:bg-zinc-800 dark:text-zinc-200"
+                            >
+                              <span className="font-mono text-slate-400">
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <span className="min-w-0 flex-1">{option}</span>
+                              <span className="text-slate-400">移除</span>
+                            </button>
+                          </li>
+                        ))
+                      ) : (
+                        <li className="rounded-xl border border-dashed border-slate-200 p-4 text-xs text-slate-400 dark:border-zinc-700">
+                          点击左侧模块加入顺序
+                        </li>
+                      )}
+                    </ol>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="mt-6">
+              <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                代码片段
+                <textarea
+                  value={typeof answer === "string" ? answer : ""}
+                  onChange={(event) => setAnswer(event.target.value)}
+                  className="app-input mt-2 min-h-64 w-full resize-y rounded-xl p-4 font-mono text-xs leading-6"
+                />
+              </label>
+            </div>
+          )}
+
+          {exercise.hints.length > 0 ? (
+            <div className="mt-5 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+              <strong>提示</strong>
+              <ul className="mt-1 list-disc pl-4">
+                {exercise.hints.map((hint) => (
+                  <li key={hint}>{hint}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void submitStructureAnswer()}
+              disabled={submitting || submitDisabled}
+              className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold disabled:opacity-50"
+            >
+              {submitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />
+              )}
+              {submitting ? "提交中" : exercise.levels?.length ? "提交本级" : "提交答案"}
+            </button>
+          </div>
+
+          {error ? (
+            <p className="mt-4 text-xs text-red-600 dark:text-red-300">{error}</p>
+          ) : null}
+
+          {result ? (
+            <section className="mt-6 border-t border-slate-200 pt-5 dark:border-zinc-800">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-slate-950 dark:text-zinc-50">
+                  判题结果
+                </h3>
+                <strong
+                  className={`text-2xl ${
+                    result.verdict === "accepted" ? "text-[#47723e]" : "text-[#a44b38]"
+                  }`}
+                >
+                  {result.score} 分
+                </strong>
+              </div>
+              <div className="mt-4 space-y-2">
+                {result.feedback.map((item, index) => (
+                  <div
+                    key={`${item.token ?? item.index ?? index}-${item.status}`}
+                    className="flex items-start gap-2 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600 dark:bg-zinc-900 dark:text-zinc-300"
+                  >
+                    <span
+                      className={`mt-0.5 flex-none rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                        item.status === "passed"
+                          ? "bg-[#e8f3df] text-[#365f2f]"
+                          : "bg-[#ffe3dd] text-[#80342b]"
+                      }`}
+                    >
+                      {item.status === "passed" ? "通过" : "未通过"}
+                    </span>
+                    <span>{item.message}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-xs leading-6 text-slate-500 dark:text-zinc-400">
+                {result.explanation}
+              </p>
+            </section>
+          ) : null}
+
+          {result?.verdict === "accepted" &&
+          exercise.levels?.length &&
+          currentLevelIndex < exercise.levels.length - 1 ? (
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#9eb3a6] bg-[#e8f3df] p-3 dark:border-[#4f6a4e] dark:bg-[#20301e]">
+              <p className="text-sm font-semibold text-[#365f2f] dark:text-[#cbe8b6]">
+                本级已通过，是否进入下一级？
+              </p>
+              <button
+                type="button"
+                onClick={goToNextLevel}
+                className="app-button-primary rounded-xl px-4 py-2 text-xs font-bold"
+              >
+                进入下一级
+              </button>
+            </div>
+          ) : null}
+
+          {result ? (
+            <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-5 dark:border-zinc-700 dark:bg-zinc-900/70">
+              <div className="flex items-center gap-2">
+                <BrainCircuit className="h-5 w-5 text-slate-700 dark:text-zinc-200" strokeWidth={1.5} />
+                <h3 className="text-base font-bold text-slate-950 dark:text-zinc-50">
+                  AI 评析
+                </h3>
+                {evaluating ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-slate-500" strokeWidth={1.5} />
+                ) : null}
+              </div>
+              {evaluating ? (
+                <p className="mt-4 text-sm text-slate-600 dark:text-zinc-300">
+                  正在生成结构与框架评析...
+                </p>
+              ) : aiFeedback?.explanation ? (
+                <div className="mt-4 space-y-4">
+                  <p className="text-sm leading-7 text-slate-800 dark:text-zinc-100">
+                    {aiFeedback.explanation}
+                  </p>
+                  {aiFeedback.suggestions?.length ? (
+                    <ul className="space-y-2">
+                      {aiFeedback.suggestions.map((suggestion, index) => (
+                        <li
+                          key={suggestion}
+                          className="flex gap-2 text-sm leading-6 text-slate-700 dark:text-zinc-200"
+                        >
+                          <span className="font-mono text-slate-400">{index + 1}.</span>
+                          <span>{suggestion}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {aiFeedback.quality ? (
+                    <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-700 dark:text-zinc-200">
+                      <span>综合参考分：<strong>{aiFeedback.quality.overall}</strong></span>
+                      <span>可读性：{aiFeedback.quality.readability}</span>
+                      <span>结构：{aiFeedback.quality.structure}</span>
+                      <span>健壮性：{aiFeedback.quality.robustness}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-slate-700 dark:text-zinc-200">
+                  {aiFeedback?.message ?? "未启用或暂无 AI 反馈。"}
+                </p>
+              )}
+
+              <div className="mt-5 border-t border-slate-200 pt-4 dark:border-zinc-700">
+                <p className="text-sm font-semibold text-slate-800 dark:text-zinc-100">
+                  继续追问这道题
+                </p>
+                <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+                  {structureChat.map((message, index) => (
+                    <div
+                      key={`${message.role}-${index}`}
+                      className={`rounded-xl p-3 text-sm leading-6 ${
+                        message.role === "assistant"
+                          ? "bg-white text-slate-800 dark:bg-zinc-800 dark:text-zinc-100"
+                          : "ml-8 bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-950"
+                      }`}
+                    >
+                      {message.content}
+                    </div>
+                  ))}
+                </div>
+                <form
+                  className="mt-3 flex gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void askStructureQuestion();
+                  }}
+                >
+                  <input
+                    value={structureQuestion}
+                    onChange={(event) => setStructureQuestion(event.target.value)}
+                    placeholder="针对这道题提问，例如：为什么这一步应该在前面？"
+                    aria-label="针对这道题向 AI 提问"
+                    className="app-input min-w-0 flex-1 rounded-xl px-3 py-2 text-sm text-slate-900 outline-none dark:text-zinc-100"
+                  />
+                  <button
+                    type="submit"
+                    disabled={chatBusy || !structureQuestion.trim()}
+                    className="app-button-primary rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                  >
+                    {chatBusy ? "思考中" : "提问"}
+                  </button>
+                </form>
+              </div>
+            </section>
+          ) : null}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function LanguageBasicsDialog({
+  open,
+  onSelect,
+}: {
+  open: boolean;
+  onSelect: (preference: LanguageBasicsPreference) => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="app-card w-full max-w-lg rounded-2xl p-6 shadow-2xl">
+        <p className="font-mono text-xs font-semibold uppercase text-slate-500 dark:text-zinc-400">
+          Practice Path
+        </p>
+        <h2 className="mt-3 text-2xl font-bold text-slate-950 dark:text-zinc-50">
+          你是否有相关语言基础？
+        </h2>
+        <p className="mt-3 text-sm leading-6 text-slate-700 dark:text-zinc-200">
+          这只会影响首页推荐练习：有基础会优先展示算法与框架结构练习，无基础则先展示基础语法练习。之后可以随时修改。
+        </p>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onSelect("has_basics")}
+            className="app-button-primary rounded-xl px-4 py-3 text-sm font-semibold"
+          >
+            有基础
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelect("no_basics")}
+            className="app-button-secondary rounded-xl px-4 py-3 text-sm font-semibold"
+          >
+            没有基础
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const payload = useFlowStore((s) => s.payload);
   const [learnerId] = useState(() => getLearnerId());
+  const [languageBasics, setLanguageBasics] = useState<LanguageBasicsPreference>(() =>
+    readLanguageBasics(learnerId),
+  );
+  const [showLanguageDialog, setShowLanguageDialog] = useState(() => languageBasics === "unknown");
   const [persistedPayload, setPersistedPayload] = useState<ReturnType<typeof getPersistedFlowPayload>>(() =>
     typeof window === "undefined" ? null : getPersistedFlowPayload(),
   );
@@ -281,11 +874,22 @@ function PracticeContent() {
   const [view, setView] = useState<"start" | "workspace">("start");
   const [query, setQuery] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty | "all">("all");
+  const [practiceType, setPracticeType] = useState<PracticeExerciseKind | "all">("all");
+  useEffect(() => {
+    const handleLanguageBasicsChange = () => {
+      setLanguageBasics(readLanguageBasics(learnerId));
+      setPracticeType("all");
+    };
+    window.addEventListener("code-navi:language-basics-change", handleLanguageBasicsChange);
+    return () =>
+      window.removeEventListener("code-navi:language-basics-change", handleLanguageBasicsChange);
+  }, [learnerId]);
   const [selectedExerciseId, setSelectedExerciseId] = useState(EXERCISES[0].id);
   const [activeExercise, setActiveExercise] = useState<PracticeExercise>(EXERCISES[0]);
   const [practiceSelectionVersion, setPracticeSelectionVersion] = useState(0);
   const activePracticeKey = `${launchContextKey}:exercise:${activeExercise.id}:selection:${practiceSelectionVersion}`;
   const [importedExercises, setImportedExercises] = useState<PracticeExercise[]>([]);
+  const [structureExercises, setStructureExercises] = useState<CompilerStructureExercise[]>([]);
   const [problemImportText, setProblemImportText] = useState("");
   const [problemImportContentBase64, setProblemImportContentBase64] = useState<string | null>(null);
   const [problemImportFileName, setProblemImportFileName] = useState<string | null>(null);
@@ -378,21 +982,44 @@ function PracticeContent() {
     };
   }, [freeRunLaunchKey, learnerId, practiceFocus, problemSubmitLaunchKey, taskId, workspaceId]);
 
-  const exercises = useMemo(
-    () => [...importedExercises, ...EXERCISES],
-    [importedExercises],
+  const structurePracticeExercises = useMemo(
+    () => structureExercises.map(structureExerciseToPracticeExercise),
+    [structureExercises],
   );
+
+  const exercises = useMemo(() => {
+    if (languageBasics === "has_basics") {
+      return [...importedExercises, ...structurePracticeExercises];
+    }
+    if (languageBasics === "no_basics") {
+      return [...EXERCISES, ...importedExercises];
+    }
+    return [...EXERCISES, ...importedExercises, ...structurePracticeExercises];
+  }, [importedExercises, languageBasics, structurePracticeExercises]);
 
   const visibleExercises = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return exercises.filter((exercise) => {
       const matchesDifficulty = difficulty === "all" || exercise.difficulty === difficulty;
+      const matchesType = practiceType === "all" || exercise.practiceType === practiceType;
       const searchable = [exercise.title, exercise.summary, ...exercise.tags]
         .join(" ")
         .toLowerCase();
-      return matchesDifficulty && (!normalized || searchable.includes(normalized));
+      return matchesDifficulty && matchesType && (!normalized || searchable.includes(normalized));
     });
-  }, [difficulty, exercises, query]);
+  }, [difficulty, exercises, practiceType, query]);
+
+  const displayedExercises = useMemo(() => visibleExercises.slice(0, 5), [visibleExercises]);
+
+  const practiceTypeOptions = useMemo(() => {
+    if (languageBasics === "has_basics") {
+      return ["all", "structure_sequence", "framework_fill"] as const;
+    }
+    if (languageBasics === "no_basics") {
+      return ["all", "code_run"] as const;
+    }
+    return ["all", "code_run", "structure_sequence", "framework_fill"] as const;
+  }, [languageBasics]);
 
   useEffect(() => {
     let active = true;
@@ -417,10 +1044,36 @@ function PracticeContent() {
     };
   }, [learnerId]);
 
+  useEffect(() => {
+    let active = true;
+    void fetchStructureExercises()
+      .then((response) => {
+        if (active) setStructureExercises(response.exercises);
+      })
+      .catch(() => {
+        if (active) setStructureExercises([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   function invalidateActiveOperation() {
     setPracticeSelectionVersion((version) => version + 1);
     setRunningState(null);
     setGuidanceBusy(false);
+  }
+
+  function handleLanguageBasicsSelect(preference: LanguageBasicsPreference) {
+    saveLanguageBasics(learnerId, preference);
+    setLanguageBasics(preference);
+    setShowLanguageDialog(false);
+    setPracticeType("all");
+    setSelectedExerciseId(
+      preference === "has_basics"
+        ? structurePracticeExercises[0]?.id ?? EXERCISES[0].id
+        : EXERCISES[0].id,
+    );
   }
 
   function openExercise(exercise: PracticeExercise) {
@@ -442,7 +1095,7 @@ function PracticeContent() {
 
   function startSelectedPractice() {
     const exercise =
-      visibleExercises.find((item) => item.id === selectedExerciseId) ?? visibleExercises[0];
+      displayedExercises.find((item) => item.id === selectedExerciseId) ?? displayedExercises[0];
     if (exercise) openExercise(exercise);
   }
 
@@ -460,6 +1113,7 @@ function PracticeContent() {
       source: await file.text(),
       stdin: "",
       origin: "python_file",
+      practiceType: "code_run",
       judgeable: false,
     };
     setImportedExercises((items) => [imported, ...items.filter((item) => item.id !== imported.id)]);
@@ -895,6 +1549,26 @@ function PracticeContent() {
               ))}
             </div>
 
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-xs font-semibold text-slate-500 dark:text-zinc-400">
+                题型
+              </span>
+              {practiceTypeOptions.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setPracticeType(item)}
+                  className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                    practiceType === item
+                      ? "border-slate-400 bg-slate-950 text-white dark:border-zinc-500 dark:bg-zinc-100 dark:text-zinc-950"
+                      : "border-slate-200 bg-white text-slate-500 hover:text-slate-950 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                  }`}
+                >
+                  {item === "all" ? "全部题型" : PRACTICE_TYPE_LABELS[item]}
+                </button>
+              ))}
+            </div>
+
             <section className="mt-8">
               <div className="mb-3 flex items-end justify-between">
                 <div>
@@ -904,14 +1578,14 @@ function PracticeContent() {
                   <h2 className="mt-1 text-xl font-bold">练习题</h2>
                 </div>
                 <span className="app-card-subtle rounded-full px-3 py-1 text-xs text-slate-500 dark:text-zinc-400">
-                  {visibleExercises.length} 道
+                  {displayedExercises.length} 道
                 </span>
               </div>
               <div className="app-card overflow-hidden rounded-2xl">
-                {visibleExercises.length === 0 ? (
+                {displayedExercises.length === 0 ? (
                   <p className="p-5 text-sm text-slate-500 dark:text-zinc-400">没有匹配的练习题</p>
                 ) : (
-                  visibleExercises.map((exercise, index) => (
+                  displayedExercises.map((exercise, index) => (
                     <ExerciseRow
                       key={exercise.id}
                       exercise={exercise}
@@ -1112,7 +1786,26 @@ function PracticeContent() {
             </section>
           </section>
         </div>
+        <LanguageBasicsDialog
+          open={showLanguageDialog}
+          onSelect={handleLanguageBasicsSelect}
+        />
       </main>
+    );
+  }
+
+  if (
+    activeExercise.practiceType !== "code_run" &&
+    activeExercise.structureExercise
+  ) {
+    return (
+      <StructureExerciseWorkspace
+        exercise={activeExercise.structureExercise}
+        onBack={() => {
+          invalidateActiveOperation();
+          setView("start");
+        }}
+      />
     );
   }
 
@@ -1351,6 +2044,9 @@ function ExerciseRow({
         <span className="min-w-0">
           <span className="flex flex-wrap items-center gap-2">
             <strong className="truncate text-sm text-slate-950 dark:text-zinc-50">{exercise.title}</strong>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${PRACTICE_TYPE_BADGES[exercise.practiceType]}`}>
+              {PRACTICE_TYPE_LABELS[exercise.practiceType]}
+            </span>
             {recommended ? (
               <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] text-white dark:bg-zinc-100 dark:text-zinc-950">
                 推荐

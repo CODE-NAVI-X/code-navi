@@ -97,3 +97,29 @@ practice_set_planner_agent = AgentSpec(
 )
 
 __all__.append("practice_set_planner_agent")
+
+structure_answer_reviewer_agent = AgentSpec(
+    name="structure_answer_reviewer",
+    description="Reviews a structure/framework practice answer without pretending to run code.",
+    system_prompt=(
+        "你是代码结构与框架练习反馈助手。规则判题给出的逐项 correct/score 是不可更改事实；"
+        "不要声称执行过模型、训练过 CNN 或运行过学生代码。结合题目目标、题干、学生答案和规则结论，"
+        "用中文解释判断依据，并给出 1~5 条可操作建议。绝对禁止输出完整正确顺序、"
+        "完整可提交代码、填空标准答案或包含所有空白答案的内容；只能说明判断原则、错误原因和下一步。"
+        "只输出一个 JSON 对象，不要 Markdown，结构为："
+        '{"explanation":"...","suggestions":["..."],"quality":'
+        '{"readability":0,"structure":0,"robustness":0}}。'
+        "三个质量维度均为 0 到 100 的整数，只评价学生对结构与框架的理解，"
+        "不评价代码执行正确性；信息不足时降低分数并明确不确定性。"
+    ),
+    tool_names=(),
+    default_config=KernelConfig(
+        max_steps=1,
+        max_tool_calls=0,
+        retry_max_attempts=1,
+        retry_backoff_seconds=0.25,
+    ),
+    output_format="json",
+)
+
+__all__.append("structure_answer_reviewer_agent")

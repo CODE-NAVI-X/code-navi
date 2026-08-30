@@ -249,3 +249,5 @@ def learning_records(
     """Return compiler learning records for one anonymous learner."""
 
     return _json_response(application.learning_records(learnerId))
+
+

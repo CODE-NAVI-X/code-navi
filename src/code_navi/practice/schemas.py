@@ -189,7 +189,156 @@ class PracticeSetResponse(BaseModel):
     )
 
 
+class CodeFillGradeBlankAnswer(BaseModel):
+    """One student answer for one blank in a code-fill item."""
+
+    blank_id: str = Field(..., min_length=1, max_length=64)
+    value: str = Field(..., max_length=500)
+
+
+class CodeFillGradeRequest(BaseModel):
+    """Request for ``POST /api/v1/practice/code-fill/grade`` (contract §1.4)."""
+
+    set_id: str = Field(..., min_length=1)
+    item_id: str = Field(..., min_length=1, max_length=64)
+    attempt_id: str = Field(
+        ...,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Client-minted UUID v4 idempotency key.",
+    )
+    blank_answers: list[CodeFillGradeBlankAnswer] = Field(..., min_length=1, max_length=6)
+    profile_id: str | None = Field(
+        default=None,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Optional portrait key for later aggregation.",
+    )
+
+
+class CodeFillGradeResultItem(BaseModel):
+    """Grading fact for one blank."""
+
+    blank_id: str
+    correct: bool
+    score: int
+    max_score: int
+    comment: str | None = None
+    graded_by: Literal["rules", "model", "mock"]
+
+
+class CodeFillGradeResponse(BaseModel):
+    """Response for code-fill grading (contract §1.4)."""
+
+    attempt_id: str
+    item_id: str
+    set_id: str
+    results: list[CodeFillGradeResultItem]
+    total_score: int
+    total_max_score: int
+    graded: bool
+    is_mock: bool
+    provider_name: str | None = None
+
+
+class StructureEvaluationResponse(BaseModel):
+    """AI evaluation result for one static structure/framework submission."""
+
+    ai: dict[str, Any]
+
+
+class StructureCatalogTopic(BaseModel):
+    """Read-only topic summary for the practice UI."""
+
+    id: str
+    title: str
+    description: str
+    count: int
+
+
+class StructureCatalogExercise(BaseModel):
+    """Public summary of one static structure exercise."""
+
+    id: str
+    topic_id: str
+    title: str
+    kind: Literal["structure_sequence", "framework_fill"]
+    objective: str
+    instruction: str
+    options: list[str] = Field(default_factory=list)
+    starter_code: str | None = None
+    hints: list[str] = Field(default_factory=list)
+
+
+class StructureCatalogResponse(BaseModel):
+    """Catalog payload for selecting static structure/framework practice."""
+
+    schema_version: str
+    topics: list[StructureCatalogTopic]
+    exercises: list[StructureCatalogExercise]
+
+
+class CodeUploadAnalyzeRequest(BaseModel):
+    """Request for ``POST /api/v1/practice/code-uploads/analyze`` (contract §1.5)."""
+
+    filename: str = Field(..., min_length=1, max_length=255)
+    content_base64: str = Field(..., min_length=1)
+
+
+class CodeUploadSymbol(BaseModel):
+    """One extracted class or function symbol."""
+
+    kind: Literal["class", "function"]
+    name: str = Field(..., min_length=1)
+    line: int = Field(..., ge=1)
+    signature: str = Field(default="", max_length=300)
+    docstring_summary: str = Field(default="", max_length=300)
+
+
+class CodeUploadAnalysisResponse(BaseModel):
+    """Response for code/markdown upload analysis (contract §1.5)."""
+
+    upload_id: str
+    filename: str
+    content_hash: str
+    kind: Literal["python", "markdown"]
+    symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
+    imports: list[str] = Field(default_factory=list, max_length=30)
+    framework_hints: list[str] = Field(default_factory=list, max_length=8)
+    metrics: dict[str, int]
+    explanation_source: Literal["rules"]
+
+
+class ExplainSymbolRequest(BaseModel):
+    """Request for ``POST /api/v1/practice/code-fill/explain-symbol`` (contract §1.6)."""
+
+    upload_id: str | None = None
+    set_id: str | None = None
+    item_id: str | None = None
+    symbol: CodeUploadSymbol
+
+
+class ExplainSymbolResponse(BaseModel):
+    """Response for symbol explanation (contract §1.6)."""
+
+    explanation: str = Field(..., max_length=600)
+    source: Literal["model", "rules"]
+    cached: bool
+
+
 __all__ = [
+    "CodeFillGradeBlankAnswer",
+    "CodeFillGradeRequest",
+    "CodeFillGradeResponse",
+    "CodeFillGradeResultItem",
+    "CodeUploadAnalyzeRequest",
+    "CodeUploadAnalysisResponse",
+    "CodeUploadSymbol",
+    "ExplainSymbolRequest",
+    "ExplainSymbolResponse",
+    "StructureEvaluationResponse",
     "CodeFillBlankSpec",
     "CodeFillSpec",
     "CodeFillStep",
@@ -201,4 +350,7 @@ __all__ = [
     "PracticeSetGenerateRequest",
     "PracticeSetKind",
     "PracticeSetResponse",
+    "StructureCatalogExercise",
+    "StructureCatalogResponse",
+    "StructureCatalogTopic",
 ]

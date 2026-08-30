@@ -5,6 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/context/auth-context";
 import {
+  LanguageBasicsPreference,
+  readLanguageBasics,
+  saveLanguageBasics,
+} from "@/lib/language-basics";
+import { getOrCreateLearnerId } from "@/lib/learner";
+import {
   User,
   LogIn,
   UserPlus,
@@ -18,6 +24,12 @@ export function AuthNav(): React.ReactElement {
   const { mode, user, loading, logout } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [languageDialogOpen, setLanguageDialogOpen] = useState(false);
+  const [languageBasics, setLanguageBasics] = useState<LanguageBasicsPreference>(() =>
+    readLanguageBasics(getOrCreateLearnerId()),
+  );
+  const [pendingLanguageBasics, setPendingLanguageBasics] =
+    useState<LanguageBasicsPreference>(languageBasics);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on click outside
@@ -43,6 +55,15 @@ export function AuthNav(): React.ReactElement {
     } finally {
       setLoggingOut(false);
     }
+  };
+
+  const confirmLanguageBasics = () => {
+    if (pendingLanguageBasics === "unknown") return;
+    const learnerId = getOrCreateLearnerId();
+    saveLanguageBasics(learnerId, pendingLanguageBasics);
+    setLanguageBasics(pendingLanguageBasics);
+    setLanguageDialogOpen(false);
+    setDropdownOpen(false);
   };
 
   if (loading) {
@@ -98,6 +119,17 @@ export function AuthNav(): React.ReactElement {
                   <Settings className="h-3.5 w-3.5 text-slate-400" />
                   <span>账户设置</span>
                 </Link>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDropdownOpen(false);
+                    setLanguageDialogOpen(true);
+                  }}
+                  className="flex w-full items-center gap-2 px-2.5 py-1.5 rounded-lg text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors text-left"
+                >
+                  <Settings className="h-3.5 w-3.5 text-slate-400" />
+                  <span>语言基础设置</span>
+                </button>
               </div>
 
               <div className="pt-1 border-t border-slate-100 dark:border-zinc-800/80">
@@ -131,6 +163,63 @@ export function AuthNav(): React.ReactElement {
           </Link>
         </div>
       )}
+
+      {languageDialogOpen ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-zinc-700 dark:bg-zinc-900">
+            <h2 className="text-lg font-bold text-slate-950 dark:text-zinc-50">
+              语言基础设置
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-300">
+              选择后会影响 Practice 首页推荐的练习题。之后可以随时回来修改。
+            </p>
+            <div className="mt-5 grid gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingLanguageBasics("has_basics")}
+                className={`rounded-xl px-4 py-3 text-left text-sm font-semibold ${
+                  pendingLanguageBasics === "has_basics"
+                    ? "bg-slate-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
+                    : "bg-slate-100 text-slate-800 dark:bg-zinc-800 dark:text-zinc-100"
+                }`}
+              >
+                有基础，直接练习算法与框架结构
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingLanguageBasics("no_basics")}
+                className={`rounded-xl px-4 py-3 text-left text-sm font-semibold ${
+                  pendingLanguageBasics === "no_basics"
+                    ? "bg-slate-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
+                    : "bg-slate-100 text-slate-800 dark:bg-zinc-800 dark:text-zinc-100"
+                }`}
+              >
+                没有基础，先练习基础语法
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingLanguageBasics(languageBasics);
+                  setLanguageDialogOpen(false);
+                }}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:border-zinc-700 dark:text-zinc-300"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={confirmLanguageBasics}
+                disabled={pendingLanguageBasics === "unknown"}
+                className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-950"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

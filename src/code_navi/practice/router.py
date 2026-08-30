@@ -17,11 +17,31 @@ from ..auth.dependencies import (
     get_owned_principal_ids,
 )
 from ..db import get_db
-from .schemas import PracticeSetGenerateRequest, PracticeSetResponse
+from ..online_compiler.ai_evaluation import AiEvaluationError
+from ..online_compiler.config import Settings
+from ..online_compiler.provider_setup import create_ai_service
+from .schemas import (
+    CodeFillGradeRequest,
+    CodeFillGradeResponse,
+    CodeUploadAnalysisResponse,
+    CodeUploadAnalyzeRequest,
+    ExplainSymbolRequest,
+    ExplainSymbolResponse,
+    PracticeSetGenerateRequest,
+    PracticeSetResponse,
+    StructureCatalogResponse,
+    StructureEvaluationResponse,
+)
 from .service import (
     MissingGenerationBasis,
     PracticeSetNotFoundError,
     PracticeSetService,
+    UploadValidationError,
+)
+from .structure_practice import (
+    StructureExerciseNotFoundError,
+    StructureExerciseValidationError,
+    StructurePracticeService,
 )
 
 router = APIRouter(prefix="/api/v1/practice", tags=["Practice"])
@@ -29,6 +49,7 @@ router = APIRouter(prefix="/api/v1/practice", tags=["Practice"])
 _practice_service = PracticeSetService()
 _db_dependency = Depends(get_db)
 _opt_principal_dep = Depends(get_optional_principal)
+_legacy_structure_practice = StructurePracticeService()
 
 
 @router.post("/sets/generate", response_model=PracticeSetResponse, status_code=200)
@@ -57,3 +78,212 @@ async def get_practice_set(
         return _practice_service.get_set(db, set_id, owned_ids=owned_ids)
     except PracticeSetNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/structure-exercises", status_code=200)
+async def list_legacy_structure_exercises() -> dict:
+    """Return the frontend-compatible structure exercise catalogue."""
+    return _legacy_structure_practice.list_exercises()
+
+
+@router.post("/structure-exercises/{exercise_id}/submit", status_code=200)
+async def submit_legacy_structure_exercise(exercise_id: str, payload: dict) -> dict:
+    """Grade a structure exercise using the existing rule engine."""
+    if "answer" not in payload:
+        raise HTTPException(status_code=400, detail="answer is required")
+    level = payload.get("level")
+    if level is not None and not isinstance(level, int):
+        raise HTTPException(status_code=400, detail="level must be an integer")
+    try:
+        return _legacy_structure_practice.submit(exercise_id, payload["answer"], level=level)
+    except StructureExerciseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StructureExerciseValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/structure-exercises/{exercise_id}/evaluate", status_code=200)
+async def evaluate_legacy_structure_exercise(exercise_id: str, payload: dict) -> dict:
+    """Return AI feedback for a legacy structure exercise."""
+    if "answer" not in payload:
+        raise HTTPException(status_code=400, detail="answer is required")
+    level = payload.get("level")
+    if level is not None and not isinstance(level, int):
+        raise HTTPException(status_code=400, detail="level must be an integer")
+    try:
+        context = _legacy_structure_practice.exercise_public_context(exercise_id)
+        rule_result = _legacy_structure_practice.submit(exercise_id, payload["answer"], level=level)
+    except StructureExerciseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StructureExerciseValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ai_service = create_ai_service(Settings.from_env())
+    evaluator = ai_service.evaluator
+    if evaluator is None:
+        return {"ai": {"status": "disabled", "message": ai_service.message}}
+    try:
+        feedback = evaluator.evaluate_structure_answer(
+            context,
+            payload["answer"],
+            _legacy_rule_results(rule_result["feedback"]),
+            None,
+        )
+    except AiEvaluationError:
+        return {"ai": {"status": "unavailable", "message": "AI 反馈暂时不可用；规则结论不受影响。"}}
+    return {"ai": feedback.as_dict()}
+
+
+@router.post("/structure-exercises/{exercise_id}/chat", status_code=200)
+async def chat_legacy_structure_exercise(exercise_id: str, payload: dict) -> dict:
+    """Answer one follow-up question for a legacy structure exercise."""
+    question = payload.get("question")
+    history = payload.get("history") or []
+    if not isinstance(question, str) or not question.strip():
+        raise HTTPException(status_code=400, detail="question is required")
+    if not isinstance(history, list):
+        raise HTTPException(status_code=400, detail="history must be a list")
+    try:
+        context = _legacy_structure_practice.exercise_public_context(exercise_id)
+    except StructureExerciseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    ai_service = create_ai_service(Settings.from_env())
+    tutor = ai_service.tutor
+    if tutor is None:
+        return {"ai": {"reply": ai_service.message, "strategy": "explanation", "blocked": False}}
+    try:
+        reply = tutor.chat(question, context, history, None)
+    except AiEvaluationError:
+        return {"ai": {"reply": "AI 引导暂时不可用。", "strategy": "explanation", "blocked": False}}
+    return {"ai": reply}
+
+
+@router.get(
+    "/structure-catalog",
+    response_model=StructureCatalogResponse,
+    status_code=200,
+)
+async def list_structure_catalog() -> StructureCatalogResponse:
+    """Return read-only topics and public exercise summaries for static practice."""
+    return _practice_service.list_structure_catalog()
+
+
+@router.post(
+    "/code-fill/grade",
+    response_model=CodeFillGradeResponse,
+    status_code=200,
+)
+async def grade_code_fill(
+    request: CodeFillGradeRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> CodeFillGradeResponse:
+    """Grade one code-fill item with deterministic rules; no code execution."""
+    principal_id = principal.principal_id if principal else None
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _practice_service.grade_code_fill(
+            request,
+            db,
+            owner_principal_id=principal_id,
+            owned_ids=owned_ids,
+        )
+    except PracticeSetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/code-fill/evaluate",
+    response_model=StructureEvaluationResponse,
+    status_code=200,
+)
+async def evaluate_code_fill(
+    request: CodeFillGradeRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> StructureEvaluationResponse:
+    """Return AI feedback for one static structure/framework submission."""
+    principal_id = principal.principal_id if principal else None
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        exercise, answer, rule_results = _practice_service.structure_evaluation_context(
+            request,
+            db,
+            owner_principal_id=principal_id,
+            owned_ids=owned_ids,
+        )
+    except PracticeSetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    ai_service = create_ai_service(Settings.from_env())
+    evaluator = ai_service.evaluator
+    if evaluator is None:
+        return StructureEvaluationResponse(
+            ai={
+                "status": "disabled",
+                "message": ai_service.message,
+            }
+        )
+    try:
+        feedback = evaluator.evaluate_structure_answer(
+            exercise,
+            answer,
+            rule_results,
+            principal_id,
+        )
+    except AiEvaluationError:
+        return StructureEvaluationResponse(
+            ai={
+                "status": "unavailable",
+                "message": "AI 反馈暂时不可用；规则结论不受影响。",
+            }
+        )
+    return StructureEvaluationResponse(ai=feedback.as_dict())
+
+
+@router.post(
+    "/code-uploads/analyze",
+    response_model=CodeUploadAnalysisResponse,
+    status_code=200,
+)
+async def analyze_code_upload(
+    request: CodeUploadAnalyzeRequest,
+) -> CodeUploadAnalysisResponse:
+    """Analyze a .py/.md upload with rules only; original text is not stored."""
+    try:
+        return _practice_service.analyze_code_upload(request)
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post(
+    "/code-fill/explain-symbol",
+    response_model=ExplainSymbolResponse,
+    status_code=200,
+)
+async def explain_symbol(
+    request: ExplainSymbolRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+) -> ExplainSymbolResponse:
+    """Return a rule-based symbol explanation; no model call."""
+    principal_id = principal.principal_id if principal else None
+    try:
+        return _practice_service.explain_symbol(request, principal_id=principal_id)
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+def _legacy_rule_results(feedback: list[dict]) -> list[dict]:
+    """Convert the legacy structure feedback shape to AI rule results."""
+    results = []
+    for index, item in enumerate(feedback):
+        passed = item.get("status") == "passed"
+        results.append(
+            {
+                "blank_id": item.get("token") or f"step-{index + 1}",
+                "correct": passed,
+                "score": 10 if passed else 0,
+                "max_score": 10,
+                "graded_by": "rules",
+            }
+        )
+    return results
