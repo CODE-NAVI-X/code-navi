@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense } from "react";
-import { BookOpen, BriefcaseBusiness, Microscope } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, Microscope, Users } from "lucide-react";
 import { WorkspaceContextBar } from "@/components/WorkspaceContextBar";
 import { AuthNav } from "@/components/AuthNav";
 
@@ -11,6 +11,7 @@ const modules = [
   { href: "/", label: "工作台", section: "workbench", icon: BriefcaseBusiness },
   { href: "/learning", label: "学习", match: "learning", icon: BookOpen },
   { href: "/research", label: "科研", match: "research", icon: Microscope },
+  { href: "/classes", label: "班级", match: "classes", icon: Users },
 ] as const;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -32,7 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            <nav aria-label="主要模块" className="grid min-w-0 grid-cols-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-card)] p-0.5 shadow-sm sm:p-1">
+            <nav aria-label="主要模块" className="grid min-w-0 grid-cols-4 rounded-xl border border-[var(--app-border)] bg-[var(--app-card)] p-0.5 shadow-sm sm:p-1">
               {modules.map(({ href, label, icon: Icon, ...module }) => {
                 const active =
                   "section" in module

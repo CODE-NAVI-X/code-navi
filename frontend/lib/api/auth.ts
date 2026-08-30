@@ -1,11 +1,14 @@
 import { API_BASE } from "@/lib/api/learning";
 
+export type UserRole = "student" | "teacher";
+
 export interface AuthUser {
   id: string;
   displayName: string;
   email: string;
   emailVerified: boolean;
   status: string;
+  role: UserRole;
 }
 
 export interface SessionInfo {
@@ -32,11 +35,14 @@ export interface SessionResponse {
 
 export interface AuthSessionItem {
   id: string;
+  deviceKey: string;
   createdAt: string;
   lastSeenAt: string;
   expiresAt: string;
   userAgentLabel: string | null;
   current: boolean;
+  sessionCount: number;
+  sessionIds: string[];
 }
 
 export interface AuthSessionListResponse {
@@ -164,6 +170,7 @@ export const authApi = {
     password: string;
     displayName: string;
     claimGuestData?: boolean;
+    role?: UserRole;
   }): Promise<SessionResponse> {
     return request<SessionResponse>("/api/v1/auth/register", {
       method: "POST",
@@ -205,6 +212,13 @@ export const authApi = {
   revokeSession(sessionId: string): Promise<void> {
     return request<void>(`/api/v1/auth/sessions/${sessionId}`, {
       method: "DELETE",
+    });
+  },
+
+  revokeMany(sessionIds: string[]): Promise<{ revokedCount: number }> {
+    return request<{ revokedCount: number }>("/api/v1/auth/sessions/revoke-many", {
+      method: "POST",
+      body: JSON.stringify({ sessionIds }),
     });
   },
 
@@ -253,6 +267,13 @@ export const authApi = {
     return request<AuthUser>("/api/v1/users/me", {
       method: "PATCH",
       body: JSON.stringify({ displayName }),
+    });
+  },
+
+  changeRole(role: UserRole): Promise<AuthUser> {
+    return request<AuthUser>("/api/v1/users/me/role", {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
     });
   },
 

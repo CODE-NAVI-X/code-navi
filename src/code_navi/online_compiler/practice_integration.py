@@ -289,13 +289,7 @@ class PracticeIntegrationService:
             PracticeOutcomeModel.id == parsed_outcome_id
         )
         if owned_ids:
-            query = query.filter(
-                (PracticeOutcomeModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (PracticeOutcomeModel.owner_principal_id.is_(None))
-                    & (PracticeOutcomeModel.local_profile_id == local_profile_id)
-                )
-            )
+            query = query.filter(PracticeOutcomeModel.owner_principal_id.in_(owned_ids))
         elif local_profile_id:
             query = query.filter(PracticeOutcomeModel.local_profile_id == local_profile_id)
         outcome = query.first()

@@ -26,6 +26,8 @@ from .schemas import (
     LogoutAllRequest,
     RegisterRequest,
     ResetPasswordRequest,
+    RevokeManySessionsRequest,
+    RoleChangeRequest,
     SessionInfo,
     SessionItem,
     SessionListResponse,
@@ -36,8 +38,10 @@ from .schemas import (
 )
 from .service import (
     AuthError,
+    _log_event,
     cancel_account_deletion,
     change_password,
+    change_role,
     confirm_email_change,
     confirm_email_verification,
     get_or_create_guest_session,
@@ -51,6 +55,7 @@ from .service import (
     request_email_verification,
     request_password_reset,
     reset_password,
+    revoke_many_sessions,
     revoke_session,
     update_display_name,
 )
@@ -120,6 +125,7 @@ def _build_session_response(
             email=user.email_display,
             emailVerified=user.email_verified_at is not None,
             status=user.status,
+            role=user.role,
         )
 
     return SessionResponse(
@@ -192,6 +198,7 @@ def register(
             password=body.password,
             display_name=body.displayName,
             claim_guest_data=body.claimGuestData,
+            role=body.role,
         )
     except AuthError as exc:
         raise _auth_error_to_http(exc) from exc
@@ -288,6 +295,26 @@ def revoke_session_endpoint(
         )
     except AuthError as exc:
         raise _auth_error_to_http(exc) from exc
+
+
+@router.post("/api/v1/auth/sessions/revoke-many", status_code=200)
+def revoke_many_sessions_endpoint(
+    body: RevokeManySessionsRequest,
+    request: Request,
+    response: Response,
+    principal: CurrentPrincipal = _require_user_dep,
+    _csrf: None = _verify_csrf_dep,
+    db: Session = _db_dep,
+) -> dict[str, int]:
+    count = revoke_many_sessions(
+        db,
+        request,
+        response,
+        session_ids=body.sessionIds,
+        user_id=principal.user_id,  # type: ignore[arg-type]
+        current_session_id=principal.session_id,
+    )
+    return {"revokedCount": count}
 
 
 @router.post("/api/v1/auth/email-verification/request", status_code=202)
@@ -460,6 +487,7 @@ def get_me(
         email=user.email_display,
         emailVerified=user.email_verified_at is not None,
         status=user.status,
+        role=user.role,
     )
 
 
@@ -480,6 +508,53 @@ def update_me(
         email=user.email_display,
         emailVerified=user.email_verified_at is not None,
         status=user.status,
+        role=user.role,
+    )
+
+
+@router.patch("/api/v1/users/me/role", response_model=UserResponse)
+def update_role(
+    body: RoleChangeRequest,
+    request: Request,
+    principal: CurrentPrincipal = _require_user_dep,
+    _csrf: None = _verify_csrf_dep,
+    db: Session = _db_dep,
+) -> UserResponse:
+    user = db.query(User).filter(User.id == principal.user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "auth.session_required",
+                "message": "用户不存在",
+                "fieldErrors": {},
+            },
+        )
+    old_role = user.role
+    try:
+        user = change_role(user, body.role)
+    except AuthError as exc:
+        raise _auth_error_to_http(exc) from exc
+
+    if old_role != user.role:
+        _log_event(
+            db,
+            event_type="role_changed",
+            user_id=user.id,
+            principal_id=principal.principal_id,
+            request=request,
+            metadata={"from": old_role, "to": user.role},
+        )
+    db.commit()
+    db.refresh(user)
+
+    return UserResponse(
+        id=user.id,
+        displayName=user.display_name,
+        email=user.email_display,
+        emailVerified=user.email_verified_at is not None,
+        status=user.status,
+        role=user.role,
     )
 
 

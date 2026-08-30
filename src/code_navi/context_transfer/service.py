@@ -52,13 +52,7 @@ class ContextTransferService:
             NotebookItemModel.id == request.source_object.id,
         )
         if owned_ids:
-            query = query.filter(
-                (NotebookItemModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (NotebookItemModel.owner_principal_id.is_(None))
-                    & (NotebookItemModel.session_id == request.source_scope_id)
-                )
-            )
+            query = query.filter(NotebookItemModel.owner_principal_id.in_(owned_ids))
         else:
             query = query.filter(NotebookItemModel.session_id == request.source_scope_id)
         source = query.first()
@@ -196,13 +190,7 @@ class ContextTransferService:
             ContextTransferModel.id == transfer_id,
         )
         if owned_ids:
-            query = query.filter(
-                (ContextTransferModel.owner_principal_id.in_(owned_ids))
-                | (
-                    (ContextTransferModel.owner_principal_id.is_(None))
-                    & (ContextTransferModel.source_scope_id == source_scope_id)
-                )
-            )
+            query = query.filter(ContextTransferModel.owner_principal_id.in_(owned_ids))
         else:
             query = query.filter(ContextTransferModel.source_scope_id == source_scope_id)
         transfer = query.first()

@@ -16,11 +16,13 @@ from alembic.migration import MigrationContext  # noqa: E402
 
 from code_navi import cli_conversation as cli_conversation_models  # noqa: E402,F401
 from code_navi.auth import models as auth_models  # noqa: E402,F401
+from code_navi.classroom import models as classroom_models  # noqa: E402,F401
 from code_navi.context_transfer import models as context_transfer_models  # noqa: E402,F401
 from code_navi.db import Base  # noqa: E402
 from code_navi.learning import models as learning_models  # noqa: E402,F401
 from code_navi.learning_profile import models as learning_profile_models  # noqa: E402,F401
 from code_navi.online_compiler import models as compiler_models  # noqa: E402,F401
+from code_navi.practice import models as practice_models  # noqa: E402,F401
 from code_navi.research import models as research_models  # noqa: E402,F401
 from code_navi.workspaces import models as workspace_models  # noqa: E402,F401
 
@@ -563,4 +565,266 @@ def test_auth_csrf_and_learning_records_migration(
     assert "csrf_token" in columns
     assert "csrf_token_hash" not in columns
     assert session_row[0] == "s-csrf-1"
+
+
+def test_user_role_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'user-role-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "auth_csrf_learning_records_v1")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO users ("
+                "id, email_normalized, email_display, email_verified_at, "
+                "display_name, status, created_at, updated_at"
+                ") VALUES ("
+                "'u-legacy-1', 'legacy@example.com', 'legacy@example.com', NULL, "
+                "'存量用户', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    # Upgrade to head (0019)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(users)")
+                )
+            }
+            user_row = connection.execute(
+                text("SELECT id, role FROM users WHERE id = 'u-legacy-1'")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert "role" in columns
+    assert user_row[0] == "u-legacy-1"
+    assert user_row[1] == "student"
+
+    # Verify downgrade drops the column
+    command.downgrade(config, "auth_csrf_learning_records_v1")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_after_downgrade = {
+                row[1]
+                for row in connection.execute(
+                    text("PRAGMA table_info(users)")
+                )
+            }
+    finally:
+        engine.dispose()
+
+    assert "role" not in columns_after_downgrade
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+
+def test_classroom_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'classroom-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0019_user_role")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        from sqlalchemy import text
+
+        connection.execute(
+            text(
+                "INSERT INTO users ("
+                "id, email_normalized, email_display, email_verified_at, "
+                "display_name, status, role, created_at, updated_at"
+                ") VALUES ("
+                "'u-teacher-1', 'teacher@example.com', 'teacher@example.com', NULL, "
+                "'教师张', 'active', 'teacher', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    # Upgrade to head (0020_classroom)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            user_row = connection.execute(
+                text("SELECT id, role FROM users WHERE id = 'u-teacher-1'")
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert "classes" in tables
+    assert "class_members" in tables
+    assert user_row[0] == "u-teacher-1"
+    assert user_row[1] == "teacher"
+
+    # Downgrade to 0019_user_role
+    command.downgrade(config, "0019_user_role")
+    engine = create_engine(database_url)
+    try:
+        tables_after = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "classes" not in tables_after
+    assert "class_members" not in tables_after
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+
+def test_practice_sets_migration_adds_three_tables_on_the_current_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision 0022 adds the practice gateway tables and drops them on downgrade."""
+    database_url = f"sqlite:///{tmp_path / 'practice-sets-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0021_classroom_member_note")
+
+    engine = create_engine(database_url)
+    try:
+        tables_before = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "practice_sets" not in tables_before
+
+    # Upgrade to head (0022_practice_sets_v1)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.begin() as connection:
+            from sqlalchemy import text
+
+            connection.execute(
+                text(
+                    "INSERT INTO practice_sets "
+                    "(set_id, kind, generation_mode, provider_name, created_at) VALUES "
+                    "('set-keep-1', 'code_practice', 'mock', 'mock', CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO practice_set_items "
+                    "(set_id, item_id, position, item_kind, payload, judge_secret, "
+                    "created_at) VALUES "
+                    "('set-keep-1', 'item-01', 1, 'code_fill', '{}', "
+                    "'{\"blanks\": []}', CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO code_fill_attempts "
+                    "(attempt_id, item_id, set_id, is_mock, graded, created_at) VALUES "
+                    "('a-keep-1', 'item-01', 'set-keep-1', 1, 0, CURRENT_TIMESTAMP)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    assert {"practice_sets", "practice_set_items", "code_fill_attempts"} <= tables
+
+    # Downgrade to 0021_classroom_member_note drops all three tables
+    command.downgrade(config, "0021_classroom_member_note")
+    engine = create_engine(database_url)
+    try:
+        tables_after = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "practice_sets" not in tables_after
+    assert "practice_set_items" not in tables_after
+    assert "code_fill_attempts" not in tables_after
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+
+def test_classroom_member_note_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = f"sqlite:///{tmp_path / 'classroom-note-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0020_classroom")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_before = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(class_members)"))
+            }
+    finally:
+        engine.dispose()
+
+    assert "note" not in columns_before
+
+    # Upgrade to head (0021_classroom_member_note)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_after = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(class_members)"))
+            }
+    finally:
+        engine.dispose()
+
+    assert "note" in columns_after
+
+    # Downgrade to 0020_classroom
+    command.downgrade(config, "0020_classroom")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            from sqlalchemy import text
+
+            columns_down = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(class_members)"))
+            }
+    finally:
+        engine.dispose()
+
+    assert "note" not in columns_down
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
+
+
+
 

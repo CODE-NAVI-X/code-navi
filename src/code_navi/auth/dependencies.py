@@ -27,6 +27,7 @@ class CurrentPrincipal:
     mode: str  # "guest" | "authenticated"
     email_verified: bool
     session_id: str
+    role: str | None = None
 
 
 def _resolve_session(
@@ -105,12 +106,14 @@ def get_optional_principal(
     if user and user.email_verified_at is not None:
         email_verified = True
     mode = "authenticated" if principal.user_id else "guest"
+    role = user.role if user else None
     return CurrentPrincipal(
         principal_id=principal.id,
         user_id=principal.user_id,
         mode=mode,
         email_verified=email_verified,
         session_id=session.id,
+        role=role,
     )
 
 
@@ -165,6 +168,22 @@ def get_owned_principal_ids(
 
 
 _require_user_dep = Depends(require_user)
+
+
+def require_role(role: str):
+    def dep(principal: CurrentPrincipal = _require_user_dep) -> CurrentPrincipal:
+        if principal.role != role:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "auth.forbidden",
+                    "message": "该操作需要教师身份" if role == "teacher" else "该操作需要学生身份",
+                },
+            )
+        return principal
+
+    return dep
+
 
 
 def require_owned_principal_ids(

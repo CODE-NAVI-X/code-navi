@@ -27,13 +27,15 @@ import {
   ShieldCheck,
   Smartphone,
   Trash2,
+  GraduationCap,
+  BookOpen,
 } from "lucide-react";
 
 export default function AccountSettingsPage(): React.ReactElement {
   const router = useRouter();
-  const { user, mode, loading: authLoading, refreshSession, logout } = useAuth();
+  const { user, mode, loading: authLoading, refreshSession, logout, changeRole } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<"profile" | "email" | "password" | "sessions" | "danger">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "role" | "email" | "password" | "sessions" | "danger">("profile");
   const [toastMessage, setToastMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const showToast = (text: string, type: "success" | "error" = "success") => {
@@ -47,6 +49,41 @@ export default function AccountSettingsPage(): React.ReactElement {
       router.push("/login");
     }
   }, [authLoading, mode, user, router]);
+
+  // -------------------------------------------------------------
+  // Role Section State
+  // -------------------------------------------------------------
+  const [selectedRole, setSelectedRole] = useState<"student" | "teacher">(user?.role ?? "student");
+  const [changingRole, setChangingRole] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
+  const [showRoleConfirmModal, setShowRoleConfirmModal] = useState(false);
+
+  const currentRole = user?.role ?? "student";
+
+  const handleOpenRoleConfirm = (e: React.FormEvent) => {
+    e.preventDefault();
+    setRoleError(null);
+    setShowRoleConfirmModal(true);
+  };
+
+  const handleConfirmRoleChange = async () => {
+    setShowRoleConfirmModal(false);
+    setChangingRole(true);
+    setRoleError(null);
+    try {
+      await changeRole(selectedRole);
+      setSelectedRole(selectedRole);
+      showToast("身份已切换");
+    } catch (err) {
+      if (err instanceof AuthApiError) {
+        setRoleError(err.message);
+      } else {
+        setRoleError("切换身份失败，请重试");
+      }
+    } finally {
+      setChangingRole(false);
+    }
+  };
 
   // -------------------------------------------------------------
   // Profile Section State
@@ -289,10 +326,14 @@ export default function AccountSettingsPage(): React.ReactElement {
     };
   }, [activeTab, mode]);
 
-  const handleRevokeSession = async (sessionId: string) => {
-    setRevokingSessionId(sessionId);
+  const handleRevokeDevice = async (deviceItem: AuthSessionItem) => {
+    setRevokingSessionId(deviceItem.deviceKey);
     try {
-      await authApi.revokeSession(sessionId);
+      if (deviceItem.sessionIds && deviceItem.sessionIds.length > 0) {
+        await authApi.revokeMany(deviceItem.sessionIds);
+      } else {
+        await authApi.revokeSession(deviceItem.id);
+      }
       await loadSessions();
       showToast("已成功下线该设备");
     } catch (err) {
@@ -444,6 +485,21 @@ export default function AccountSettingsPage(): React.ReactElement {
           </button>
 
           <button
+            onClick={() => {
+              setActiveTab("role");
+              setSelectedRole(user?.role ?? "student");
+            }}
+            className={`flex items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-xs font-medium transition-colors text-left whitespace-nowrap cursor-pointer ${
+              activeTab === "role"
+                ? "bg-slate-100 text-slate-900 dark:bg-zinc-800 dark:text-zinc-100 font-semibold"
+                : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-zinc-400 dark:hover:bg-zinc-800/50 dark:hover:text-zinc-200"
+            }`}
+          >
+            <GraduationCap className="h-4 w-4 shrink-0" />
+            <span>身份</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("email")}
             className={`flex items-center gap-2.5 rounded-lg px-3.5 py-2.5 text-xs font-medium transition-colors text-left whitespace-nowrap cursor-pointer ${
               activeTab === "email"
@@ -565,6 +621,89 @@ export default function AccountSettingsPage(): React.ReactElement {
                   </div>
                   <Button type="submit" loading={updatingProfile} disabled={updatingProfile}>
                     保存资料
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* TAB: 身份 */}
+          {activeTab === "role" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>身份设置</CardTitle>
+                <CardDescription>管理您的账户身份类型（学生 / 教师）</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {roleError && (
+                  <Alert variant="error">
+                    <AlertDescription>{roleError}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-slate-500 dark:text-zinc-400">当前身份</div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-lg font-semibold text-slate-900 dark:text-zinc-100">
+                          {currentRole === "teacher" ? "教师" : "学生"}
+                        </span>
+                        <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950/50 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50">
+                          当前生效
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400">
+                      <GraduationCap className="h-5 w-5" />
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-500 dark:text-zinc-400 border-t border-slate-200/60 pt-3 dark:border-zinc-800/60">
+                    说明：切换身份不会影响班级归属与已有数据。
+                  </p>
+                </div>
+
+                <form onSubmit={handleOpenRoleConfirm} className="space-y-4 max-w-md">
+                  <div>
+                    <Label className="mb-2 block">切换目标身份</Label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRole("student")}
+                        disabled={changingRole}
+                        className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border p-4 text-center transition-all cursor-pointer ${
+                          selectedRole === "student"
+                            ? "border-blue-600 bg-blue-50/50 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-300 ring-2 ring-blue-500/20 font-semibold"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+                        }`}
+                      >
+                        <GraduationCap className="h-5 w-5" />
+                        <span className="text-sm">学生</span>
+                        <span className="text-[11px] text-slate-400 dark:text-zinc-500">学习与练习为主</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRole("teacher")}
+                        disabled={changingRole}
+                        className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border p-4 text-center transition-all cursor-pointer ${
+                          selectedRole === "teacher"
+                            ? "border-blue-600 bg-blue-50/50 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-300 ring-2 ring-blue-500/20 font-semibold"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+                        }`}
+                      >
+                        <BookOpen className="h-5 w-5" />
+                        <span className="text-sm">教师</span>
+                        <span className="text-[11px] text-slate-400 dark:text-zinc-500">教学与辅导为主</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="submit"
+                    loading={changingRole}
+                    disabled={changingRole}
+                  >
+                    保存身份
                   </Button>
                 </form>
               </CardContent>
@@ -873,6 +1012,11 @@ export default function AccountSettingsPage(): React.ReactElement {
                                     当前设备
                                   </span>
                                 )}
+                                {item.sessionCount > 1 && (
+                                  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700">
+                                    {item.sessionCount} 个会话
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-3 text-[11px] text-slate-400 dark:text-zinc-500 mt-1">
                                 <span>首次登录: {new Date(item.createdAt).toLocaleString()}</span>
@@ -885,8 +1029,8 @@ export default function AccountSettingsPage(): React.ReactElement {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleRevokeSession(item.id)}
-                              loading={revokingSessionId === item.id}
+                              onClick={() => handleRevokeDevice(item)}
+                              loading={revokingSessionId === item.deviceKey}
                               disabled={revokingSessionId !== null}
                             >
                               下线
@@ -1072,6 +1216,38 @@ export default function AccountSettingsPage(): React.ReactElement {
           )}
         </div>
       </div>
+
+      {/* 切换身份确认弹窗 */}
+      {showRoleConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-100">
+              确认切换身份
+            </h3>
+            <p className="mt-2 text-sm text-slate-600 dark:text-zinc-400 leading-relaxed">
+              切换身份仅改变功能入口，不影响班级归属与已有数据。
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowRoleConfirmModal(false)}
+                disabled={changingRole}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                onClick={handleConfirmRoleChange}
+                loading={changingRole}
+                disabled={changingRole}
+              >
+                确认切换
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

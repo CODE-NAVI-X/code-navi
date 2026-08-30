@@ -30,6 +30,9 @@ class User(Base):
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_verification")
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="student", server_default="student"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_now, onupdate=_now
