@@ -136,6 +136,11 @@ class ResearchConversationSearchService:
         payload["conversation_id"] = conversation_id
         payload["requested_sources"] = request.sources
         payload["tool_audit"] = result.result["audit"]
+        payload["papers"] = [
+            {**paper, "paper_id": _bundle_paper_id(record.id, paper)}
+            for paper in payload["papers"]
+            if isinstance(paper, dict)
+        ]
         bundle = ConversationEvidenceBundle.model_validate(payload)
         record.bundle_data = bundle.model_dump(mode="json")
         db.commit()
@@ -205,7 +210,7 @@ class ResearchConversationSearchService:
         ]
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         next_steps = (
             [entry.content for entry in plan.two_week_mvp_plan[:3]]
@@ -337,6 +342,24 @@ def _evidence_reference(bundle_id: str, paper: AcademicPaperResult) -> EvidenceR
         evidence_level="abstract" if paper.abstract_excerpt else "metadata",
         evidence_summary=paper.abstract_excerpt[:1000] if paper.abstract_excerpt else None,
     )
+
+
+def _bundle_paper_id(bundle_id: str, paper: dict[str, object]) -> str:
+    identity = next(
+        (
+            str(value).strip().casefold()
+            for value in (
+                paper.get("doi"),
+                paper.get("arxiv_id"),
+                paper.get("identifier"),
+                paper.get("url"),
+                paper.get("title"),
+            )
+            if value and str(value).strip()
+        ),
+        "unknown-paper",
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{bundle_id}|{identity}"))
 
 
 __all__ = [

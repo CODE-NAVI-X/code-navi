@@ -306,7 +306,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         bundles = self._evidence_bundles(conversation.id, db)
         return build_topic_difficulty_analysis(
@@ -327,7 +327,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         return build_experiment_design(
             profile,
@@ -346,7 +346,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         return build_experiment_code_draft(
             profile,
@@ -444,7 +444,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         created_at = datetime.now(UTC)
         pipeline_id = str(uuid.uuid4())
@@ -496,7 +496,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         return build_paper_blueprint(
             profile,
@@ -691,7 +691,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         blueprint = build_paper_blueprint(
             profile,
@@ -997,7 +997,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         plan = build_conversation_research_plan(
             profile,
-            ready_for_plan=assess_readiness(profile).stage == "ready_for_plan",
+            ready_for_plan=assess_readiness(profile).can_prepare_search,
         )
         return build_paper_export_package(
             draft,
@@ -1183,7 +1183,7 @@ class ResearchConversationService:
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
             profile,
-            ready_for_plan=readiness.stage == "ready_for_plan",
+            ready_for_plan=readiness.can_prepare_search,
         )
         bundles = self._evidence_bundles(conversation.id, db)
         return ResearchConversationResponse(
@@ -1194,7 +1194,7 @@ class ResearchConversationService:
             profile=profile,
             readiness=readiness,
             stage=readiness.stage,
-            ready_for_plan=readiness.stage == "ready_for_plan",
+            ready_for_plan=readiness.can_prepare_search,
             research_plan=plan,
             research_mindmap=build_research_mindmap(
                 profile,
@@ -1324,6 +1324,8 @@ def assess_readiness(profile: ResearchProfile) -> ResearchReadiness:
         score += 10
     else:
         reasons.append("数据或研究路径尚未讨论")
+    if profile.metrics:
+        score += 5
     if profile.constraints:
         score += 10
     if profile.expected_output:
@@ -1336,12 +1338,11 @@ def assess_readiness(profile: ResearchProfile) -> ResearchReadiness:
         stage = "focusing"
     else:
         stage = "ready_for_plan"
+    ready_for_plan = stage == "ready_for_plan"
     return ResearchReadiness(
         score=score,
         stage=stage,
-        can_prepare_search=bool(
-            profile.topic and (profile.research_questions or profile.candidate_questions)
-        ),
+        can_prepare_search=ready_for_plan,
         reasons=reasons,
     )
 
@@ -1356,7 +1357,7 @@ def _enforce_runtime_decision(
     provisional = _apply_decision(profile, decision)
     if (
         _requests_prepare_search(user_message)
-        and assess_readiness(provisional).stage == "ready_for_plan"
+        and assess_readiness(provisional).can_prepare_search
     ):
         return decision.model_copy(
             update={
@@ -1415,7 +1416,7 @@ def _fallback_decision(
             f"哪些因素会影响{provisional.topic}的结果？",
         ]
     readiness = assess_readiness(provisional)
-    if _requests_prepare_search(user_message) and readiness.stage == "ready_for_plan":
+    if _requests_prepare_search(user_message) and readiness.can_prepare_search:
         return ResearchConversationDecision(
             reply=(
                 "需求确认 Skill 已完成本轮澄清，当前画像已经可以形成检索约束。"
@@ -1472,7 +1473,7 @@ def _fallback_decision(
         suggested_answers=suggestions,
         recommended_action=(
             "continue_dialogue"
-            if continuing_narrowing or readiness.stage != "ready_for_plan"
+            if continuing_narrowing or not readiness.can_prepare_search
             else "review_profile"
         ),
     )
@@ -1494,10 +1495,22 @@ def _fallback_patch(
     explicitly_reframes_topic = any(
         marker in message for marker in ("改成", "换成", "主题是", "方向改为")
     )
+    labeled_topic = _first_capture(
+        message,
+        (
+            r"拟以([^，。；,;？?]+?)(?:为题|作为题目)",
+            r"课题聚焦([^，。；,;？?]+)",
+            r"计划比较([^，。；,;？?]+)",
+            r"希望评估([^，。；,;？?]+)",
+            r"(?:研究主题|主题)(?:是|为|：|:)([^，。；,;？?]+)",
+        ),
+    )
     if match and (profile.topic is None or explicitly_reframes_topic):
         candidate = match.group(1).strip("：: ")
         if candidate not in {"什么", "一下", "这个", "这个方向"} and len(candidate) >= 2:
             topic = candidate
+    if labeled_topic and (profile.topic is None or explicitly_reframes_topic):
+        topic = labeled_topic
     context: str | None = None
     context_match = re.search(r"(?:面向|针对)([^，。；,;]+)", message)
     if context_match:
@@ -1529,15 +1542,57 @@ def _fallback_patch(
         "本科生",
     )
     constraints.extend(marker for marker in markers if marker in message)
+    resource_constraint = _first_capture(
+        message,
+        (r"(?:资源限制是|资源是|我只有|仅可使用|没有)([^，。；,;？?]+)",),
+    )
+    if resource_constraint:
+        constraints.append(resource_constraint)
+    time_scope = _first_capture(
+        message,
+        (
+            r"(?:时间安排为|计划)([一二三四五六七八九十两\d]+(?:天|周|个月|月|年)(?:内)?(?:完成|给出)?)",
+            r"([一二三四五六七八九十两\d]+(?:天|周|个月|月|年)内(?:完成|给出))",
+        ),
+    )
     expected_output = next(
         (value for value in ("论文", "文献综述", "开题报告", "原型系统") if value in message),
         None,
     )
-    research_questions: list[str] | None = None
-    if any(marker in message for marker in ("是否", "如何", "为什么", "影响", "比较")):
+    research_question = _first_capture(
+        message,
+        (r"(?:候选问题|研究问题|想回答)(?:是|为|：|:)?([^，。；,;？?]+)",),
+    )
+    research_questions = [research_question] if research_question else None
+    if research_questions is None and any(
+        marker in message for marker in ("是否", "如何", "为什么", "影响", "比较")
+    ):
         research_questions = [message.strip()]
-    methods: list[str] | None = None
-    data_requirements: str | None = None
+    method = _first_capture(
+        message,
+        (
+            r"(?:方法(?:采用|是|为)?|采用)([^，。；,;？?]+)",
+            r"通过([^，。；,;？?]*(?:分析|评测|实验|访谈)[^，。；,;？?]*)",
+            r"使用([^，。；,;？?]*(?:分析|标注|评测|实验)[^，。；,;？?]*)",
+        ),
+    )
+    data_requirements = _first_capture(
+        message,
+        (
+            r"(?:数据集|数据)(?:为|是|：|:)?([^，。；,;？?]+)",
+            r"使用([^，。；,;？?]*(?:数据集|数据|记录|样本|问答集)[^，。；,;？?]*)",
+            r"([^，。；,;？?]*(?:公开数据|公开样本|课程记录|问答集)[^，。；,;？?]*)",
+        ),
+    )
+    if re.search(r"不(?:太)?清楚|不知道|没想好", message):
+        data_requirements = None
+    metric = _first_capture(
+        message,
+        (
+            r"指标(?:包括|为|是|：|:)?([^，。；,;？?]+)",
+            r"以\s*([^，。；,;？?]+?)\s*为指标",
+        ),
+    )
     if (
         profile.context
         and not (profile.methods or profile.data_requirements)
@@ -1556,18 +1611,30 @@ def _fallback_patch(
         ]
         if "实验" in message and "对照实验" not in message:
             method_names.append("实验")
-        methods = list(dict.fromkeys(method_names)) or None
-        if methods is None or any(marker in message for marker in ("数据", "材料", "案例", "样本")):
+        method = "；".join(dict.fromkeys(method_names)) or method
+        if method is None or any(marker in message for marker in ("数据", "材料", "案例", "样本")):
             data_requirements = message.strip()
     return ResearchProfilePatch(
         topic=topic,
         context=context,
-        methods=methods,
+        methods=[method] if method else None,
         data_requirements=data_requirements,
+        metrics=[metric] if metric else None,
         constraints=constraints or None,
         expected_output=expected_output,
+        time_scope=time_scope,
         research_questions=research_questions,
     )
+
+
+def _first_capture(message: str, patterns: tuple[str, ...]) -> str | None:
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            value = match.group(1).strip(" ：:，。；,;")
+            if value:
+                return value
+    return None
 
 
 def _apply_patch_only(

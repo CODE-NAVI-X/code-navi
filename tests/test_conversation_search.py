@@ -119,6 +119,36 @@ def test_search_plan_uses_profile_fields_without_calling_a_source(
     assert source.calls == 0
 
 
+def test_one_complete_rules_request_can_prepare_search_without_network_call(
+    client: TestClient,
+) -> None:
+    source = FakeSource()
+    _conversation_search_service.search_tool = AcademicSearchTool({"arxiv": source})
+    _conversation_service.decision_generator = type(
+        "UnavailableGenerator",
+        (),
+        {"generate": lambda self, **kwargs: ConversationDecisionOutcome.unavailable()},
+    )()
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={
+            "initial_message": (
+                "我想研究 GCN 在 Cora 节点分类中的表现，候选问题是 GCN 是否优于 GraphSAGE；"
+                "采用对照实验，使用 Cora 数据集，指标 Accuracy；只有 RTX 4060 笔记本，"
+                "计划两周完成开题报告。"
+            )
+        },
+    ).json()
+
+    response = client.get(
+        f"/api/v1/research/conversations/{created['conversation_id']}/search-plan"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["user_confirmation_required"] is True
+    assert source.calls == 0
+
+
 def test_explicit_conversation_search_dispatches_registered_tool(
     client: TestClient,
 ) -> None:
@@ -163,10 +193,19 @@ def test_repeated_search_uses_persistent_cache_and_restores_bundle(
     assert second.status_code == 200
     assert second.json()["cache_hit"] is True
     assert second.json()["bundle_id"] == first.json()["bundle_id"]
+    first_paper = first.json()["papers"][0]
+    assert first_paper["paper_id"]
+    assert first_paper["arxiv_id"] == "2501.00001"
+    assert first_paper["information_scope"] == "metadata_and_abstract_only"
+    assert first_paper["metadata_evidence"][0]["classification"] == "fact"
+    assert first_paper["relevance"]["classification"] == "inference"
+    assert first_paper["verification"]["classification"] == "to_verify"
     assert source.calls == 1
     assert restored.status_code == 200
     assert len(restored.json()) == 1
     assert restored.json()[0]["bundle_id"] == first.json()["bundle_id"]
+    assert restored.json()[0]["papers"][0]["paper_id"] == first_paper["paper_id"]
+    assert restored.json()[0]["papers"][0]["arxiv_id"] == first_paper["arxiv_id"]
 
 
 def test_selected_evidence_is_saved_as_a_traceable_learning_research_note(

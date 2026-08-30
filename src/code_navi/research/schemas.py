@@ -78,18 +78,22 @@ class AcademicSourceStatus(BaseModel):
 
 
 class AcademicPaperResult(BaseModel):
+    paper_id: str | None = None
     title: str
     authors: list[str]
     year: int | None = None
     source_name: str
     url: str
     identifier: str | None = None
+    doi: str | None = None
+    arxiv_id: str | None = None
     abstract_excerpt: str | None = None
     accessed_at: datetime
     information_scope: Literal["metadata_and_abstract_only"]
     metadata_evidence: list[EvidenceStatement]
     supporting_snippets: list[EvidenceStatement]
     relevance: EvidenceStatement
+    paper_kind: EvidenceStatement | None = None
     verification: EvidenceStatement
     full_text_available: Literal[False]
 

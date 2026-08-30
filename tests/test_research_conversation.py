@@ -39,7 +39,10 @@ from code_navi.research.conversation_schemas import (  # noqa: E402
     ResearchProfilePatch,
     SendResearchMessageRequest,
 )
-from code_navi.research.conversation_service import ResearchConversationService  # noqa: E402
+from code_navi.research.conversation_service import (  # noqa: E402
+    ResearchConversationService,
+    assess_readiness,
+)
 from code_navi.research.models import ResearchConversationModel  # noqa: E402
 from code_navi.research.research_artifact_llm import ArtifactLlmOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
@@ -541,6 +544,72 @@ def test_readiness_is_explainable_instead_of_a_required_field_gate(
     assert body["readiness"]["score"] >= 70
     assert "missing_fields" not in body
     assert body["recommended_action"] == "review_profile"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        (
+            "我想研究图卷积网络在 Cora 节点分类中的表现：候选问题是 GCN 与 GraphSAGE 的 "
+            "Accuracy 差异；方法采用对照实验；使用 Cora 数据集，指标为 Accuracy；我只有 RTX "
+            "4060 笔记本，计划两周完成，产出开题报告。"
+        ),
+        (
+            "拟以生成式 AI 辅助本科编程学习为题，研究问题是不同提示策略如何影响学习成绩；"
+            "采用离线对照评测，数据为公开课程记录，指标包括正确率；资源限制是单张消费级 "
+            "GPU，时间安排为三周，交付研究计划。"
+        ),
+        (
+            "课题聚焦医疗文本分类的可解释性，想回答注意力可视化是否改善医生理解；通过案例 "
+            "比较分析 MIMIC 公开样本，以 F1 为指标；仅可使用 16GB 内存设备，一个月内完成 "
+            "文献综述。"
+        ),
+        (
+            "计划比较联邦学习与集中训练在校园传感器预测中的效果：研究问题为隐私约束下误差 "
+            "是否扩大；方法是模拟实验，数据集为 UCI 公开数据，指标 RMSE；没有服务器，"
+            "两周内给出原型系统。"
+        ),
+        (
+            "希望评估检索增强生成在课程问答中的可信度，候选问题是检索覆盖率如何影响答案 "
+            "准确率；使用日志分析和人工标注，数据为公开问答集，指标为 Accuracy 与覆盖率；"
+            "资源是本地笔记本，计划四周完成论文。"
+        ),
+    ],
+)
+def test_rules_fallback_accepts_complete_research_request_in_one_turn(
+    client: TestClient,
+    message: str,
+) -> None:
+    _conversation_service.decision_generator = FakeDecisionGenerator(
+        [ConversationDecisionOutcome.unavailable()]
+    )
+
+    response = client.post("/api/v1/research/conversations", json={"initial_message": message})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["generation_mode"] == "rules"
+    assert body["profile"]["topic"]
+    assert body["profile"]["research_questions"]
+    assert body["profile"]["methods"]
+    assert body["profile"]["data_requirements"]
+    assert body["profile"]["metrics"]
+    assert body["profile"]["constraints"]
+    assert body["profile"]["time_scope"]
+    assert body["stage"] == "ready_for_plan"
+    assert body["ready_for_plan"] is True
+    assert body["readiness"]["can_prepare_search"] is True
+    assert "研究主题" not in (body["next_question"] or "")
+    assert "研究问题" not in (body["next_question"] or "")
+
+
+def test_search_readiness_does_not_diverge_from_plan_stage() -> None:
+    readiness = assess_readiness(
+        ResearchProfile(topic="图卷积网络", research_questions=["GCN 是否优于基线？"])
+    )
+
+    assert readiness.stage != "ready_for_plan"
+    assert readiness.can_prepare_search is False
 
 
 def test_ready_conversation_returns_a_restorable_rules_research_plan(

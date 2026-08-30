@@ -20,6 +20,7 @@ ProfileField = Literal[
     "context",
     "methods",
     "data_requirements",
+    "metrics",
     "evidence_preferences",
     "time_scope",
     "constraints",
@@ -39,6 +40,7 @@ class ResearchProfile(BaseModel):
     context: str | None = Field(default=None, min_length=1, max_length=1000)
     methods: list[str] = Field(default_factory=list, max_length=12)
     data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    metrics: list[str] = Field(default_factory=list, max_length=8)
     evidence_preferences: list[str] = Field(default_factory=list, max_length=12)
     time_scope: str | None = Field(default=None, min_length=1, max_length=300)
     constraints: list[str] = Field(default_factory=list, max_length=12)
@@ -50,6 +52,7 @@ class ResearchProfile(BaseModel):
         "research_questions",
         "candidate_questions",
         "methods",
+        "metrics",
         "evidence_preferences",
         "constraints",
         "assumptions",
@@ -79,15 +82,17 @@ class ResearchProfilePatch(BaseModel):
     context: str | None = Field(default=None, min_length=1, max_length=1000)
     methods: list[str] | None = Field(default=None, max_length=12)
     data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    metrics: list[str] | None = Field(default=None, max_length=8)
     evidence_preferences: list[str] | None = Field(default=None, max_length=12)
     time_scope: str | None = Field(default=None, min_length=1, max_length=300)
     constraints: list[str] | None = Field(default=None, max_length=12)
     expected_output: str | None = Field(default=None, min_length=1, max_length=500)
-    clear_fields: list[ProfileField] = Field(default_factory=list, max_length=11)
+    clear_fields: list[ProfileField] = Field(default_factory=list, max_length=12)
 
     @field_validator(
         "research_questions",
         "methods",
+        "metrics",
         "evidence_preferences",
         "constraints",
     )
