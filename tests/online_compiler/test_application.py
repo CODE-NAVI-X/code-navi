@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import io
+from dataclasses import replace
 from uuid import UUID
 
+import pytest
 from docx import Document
 
 from code_navi.online_compiler.ai_evaluation import AiEvaluator, ProblemOrganizer
@@ -14,7 +16,12 @@ from code_navi.online_compiler.application import (
 from code_navi.online_compiler.config import Settings
 from code_navi.online_compiler.evaluation import AiFeedback, QualityRubric, RuleAssessment
 from code_navi.online_compiler.learning_records import LearningRecordStore
-from code_navi.online_compiler.piston import ExecutionLimits, ExecutionResult, RuntimeInfo
+from code_navi.online_compiler.piston import (
+    ExecutionLimits,
+    ExecutionResult,
+    PistonUnavailableError,
+    RuntimeInfo,
+)
 from code_navi.online_compiler.problem_imports import ImportedProblem
 
 
