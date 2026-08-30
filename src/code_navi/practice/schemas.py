@@ -189,10 +189,135 @@ class PracticeSetResponse(BaseModel):
     )
 
 
+class CodeFillGradeBlankAnswer(BaseModel):
+    """One student answer for one blank in a code-fill item."""
+
+    blank_id: str = Field(..., min_length=1, max_length=64)
+    value: str = Field(..., max_length=500)
+
+
+class CodeFillGradeRequest(BaseModel):
+    """Request for ``POST /api/v1/practice/code-fill/grade`` (contract §1.4)."""
+
+    set_id: str = Field(..., min_length=1)
+    item_id: str = Field(..., min_length=1, max_length=64)
+    attempt_id: str = Field(
+        ...,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Client-minted UUID v4 idempotency key.",
+    )
+    blank_answers: list[CodeFillGradeBlankAnswer] = Field(..., min_length=1, max_length=6)
+    profile_id: str | None = Field(
+        default=None,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Optional portrait key for later aggregation.",
+    )
+
+
+class CodeFillGradeResultItem(BaseModel):
+    """Grading fact for one blank."""
+
+    blank_id: str
+    correct: bool
+    score: int
+    max_score: int
+    comment: str | None = None
+    graded_by: Literal["rules", "model", "mock"]
+
+
+class CodeFillGradeResponse(BaseModel):
+    """Response for code-fill grading (contract §1.4)."""
+
+    attempt_id: str
+    item_id: str
+    set_id: str
+    results: list[CodeFillGradeResultItem]
+    total_score: int
+    total_max_score: int
+    graded: bool
+    is_mock: bool
+    provider_name: str | None = None
+
+
+class CodeUploadAnalyzeRequest(BaseModel):
+    """Request for ``POST /api/v1/practice/code-uploads/analyze`` (contract §1.5)."""
+
+    filename: str = Field(..., min_length=1, max_length=255)
+    content_base64: str = Field(..., min_length=1)
+
+
+class CodeUploadSymbol(BaseModel):
+    """One extracted class or function symbol."""
+
+    kind: Literal["class", "function"]
+    name: str = Field(..., min_length=1)
+    line: int = Field(..., ge=1)
+    signature: str = Field(default="", max_length=300)
+    docstring_summary: str = Field(default="", max_length=300)
+
+
+class CodeUploadAnalysisResponse(BaseModel):
+    """Response for code/markdown upload analysis (contract §1.5)."""
+
+    upload_id: str
+    filename: str
+    content_hash: str
+    kind: Literal["python", "markdown"]
+    symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
+    imports: list[str] = Field(default_factory=list, max_length=30)
+    framework_hints: list[str] = Field(default_factory=list, max_length=8)
+    metrics: dict[str, int]
+    explanation_source: Literal["rules"]
+
+
+class ExplainSymbol(BaseModel):
+    """A symbol to explain (contract §1.6).
+
+    This is intentionally separate from ``CodeUploadSymbol``: explanation
+    requests require ``code_excerpt`` (≤4000 chars) so the rules/model path
+    never has to read an absent attribute.
+    """
+
+    name: str = Field(..., min_length=1, max_length=128)
+    kind: Literal["class", "function"]
+    code_excerpt: str = Field(..., max_length=4000)
+
+
+class ExplainSymbolRequest(BaseModel):
+    """Request for ``POST /api/v1/practice/code-fill/explain-symbol`` (contract §1.6)."""
+
+    upload_id: str | None = Field(default=None, min_length=1, max_length=36)
+    set_id: str | None = Field(default=None, min_length=1)
+    item_id: str | None = Field(default=None, min_length=1, max_length=64)
+    symbol: ExplainSymbol
+
+
+class ExplainSymbolResponse(BaseModel):
+    """Response for symbol explanation (contract §1.6)."""
+
+    explanation: str = Field(..., max_length=600)
+    source: Literal["model", "rules"]
+    cached: bool
+
+
 __all__ = [
     "CodeFillBlankSpec",
+    "CodeFillGradeBlankAnswer",
+    "CodeFillGradeRequest",
+    "CodeFillGradeResponse",
+    "CodeFillGradeResultItem",
     "CodeFillSpec",
     "CodeFillStep",
+    "CodeUploadAnalysisResponse",
+    "CodeUploadAnalyzeRequest",
+    "CodeUploadSymbol",
+    "ExplainSymbol",
+    "ExplainSymbolRequest",
+    "ExplainSymbolResponse",
     "JudgeChannel",
     "PracticeContextKnowledgePoint",
     "PracticeContextV1",

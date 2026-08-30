@@ -118,3 +118,28 @@ class CodeFillAttemptModel(Base):
         String(36), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class CodeUploadAnalysisModel(Base):
+    """Archived result of ``POST /api/v1/practice/code-uploads/analyze``.
+
+    The original file content is never stored — only its SHA-256 hash and the
+    rules-derived structural summary. ``upload_id`` is the opaque reference
+    accepted by ``POST /api/v1/practice/sets/generate`` (§1.2) and
+    ``POST /api/v1/practice/code-fill/explain-symbol`` (§1.6).
+    """
+
+    __tablename__ = "practice_code_uploads"
+
+    upload_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    imports: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    framework_hints: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    owner_principal_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
