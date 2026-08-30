@@ -77,6 +77,7 @@ CodeFillSpec {
 | `practice_sets` | `set_id` PK、`kind`、`context_snapshot` JSON、`local_profile_id`、`profile_id`、`generation_mode`、`provider_name` | 归档生成上下文，刷新恢复用 |
 | `practice_set_items` | `item_id`、`set_id` FK、`position`、`item_kind`、`payload` JSON、`judge_secret` JSON | `judge_secret` 存答案/参考代码，任何出参路径剥离 |
 | `code_fill_attempts` | `attempt_id`、`item_id`、`set_id`、`blank_answers` JSON、`score`、`max_score`、`graded_by`、`is_mock`、`graded`、`comment` | 判分事实；UNIQUE(attempt_id, item_id) |
+| `practice_code_uploads` | `upload_id` PK、`filename`、`content_hash`、`kind`、`symbols` JSON、`imports` JSON、`framework_hints` JSON、`metrics` JSON | §1.5 解析结果归档；不落原文，只存摘要与哈希 |
 
 ### 1.2 `POST /api/v1/practice/sets/generate` — 统一生成网关
 
@@ -124,7 +125,7 @@ CodeFillSpec {
 }
 ```
 
-错误：422 schema 或缺少生成依据；409 Provider 禁用且规则回退也不可用（同现状 quiz 语义）；413 不会出现（上下文超限归入 422）。
+错误：422 schema 或缺少生成依据；404 引用的 `upload_id` 不存在或非本人；409 Provider 禁用且规则回退也不可用（同现状 quiz 语义）；413 不会出现（上下文超限归入 422）。
 
 ### 1.3 `GET /api/v1/practice/sets/{set_id}` — 恢复归档
 
@@ -147,10 +148,10 @@ CodeFillSpec {
 处理：
 
 1. 服务端从归档加载 `judge_secret`。
-2. **规则预判**：规范化（去空白、大小写折叠）后与 `answer`/`alternate_answers` 精确匹配，命中即满分，`graded_by=rules`。
-3. 未命中的空白拼接回完整代码，交 LLM 做**静态**正确性/等价性评审（prompt 约束：只做静态分析，禁止声称执行过代码；按空白逐项给分并给中文评语）。
-4. 逐项 `score`（0 或满分制，部分分由模型按比例给出）、总分汇总；落 `code_fill_attempts`；`profile_id` 存在时进入画像聚合。
-5. 离线降级：规则可判的判；规则不可判且模型不可用 → `graded=false`、`score=0`、`is_mock=true`、`comment="离线模式无法静态判分，请对照参考答案自查"`（`hint` 不足以公开答案，不出示）。
+2. **规则预判**：规范化（去空白、大小写折叠）后与 `answer`/`alternate_answers` 精确匹配，命中即满分；未命中同样是规则判分事实，`correct=false`、`score=0`、`graded=true`、`graded_by=rules`、`is_mock=false`。
+3. 在线 Provider 可用时，未命中的空白拼接回完整代码，交 LLM 做**静态**正确性/等价性评审（prompt 约束：只做静态分析，禁止声称执行过代码；按空白逐项给分并给中文评语），相应结果 `graded_by=model`。
+4. 逐项 `score`、总分汇总；按 `(attempt_id, item_id)` 幂等 upsert 到 `code_fill_attempts`；`profile_id` 存在时进入画像聚合。
+5. 离线降级：按第 2 步规则结果返回；只有 `judge_secret` 缺失或答案结构不完整、无法判分时，才 `graded=false`、`score=0`、`is_mock=true`、`comment="离线模式无法静态判分，请对照参考答案自查"`（`hint` 不足以公开答案，不出示）。不得把已经按规则判错的题标记为未判分。
 
 响应：
 
@@ -174,7 +175,7 @@ CodeFillSpec {
 - 解码后 ≤256KB，否则 413；
 - 内容特征拒绝：检测到内联数据集痕迹（连续分隔符行 >2000、`pickle`/`parquet`/二进制魔数）→ 400，message 指示"仅支持核心代码或文档文件"。
 
-处理：AST 解析（`ast` 模块）提取类/函数/签名/docstring 摘要；`.md` 提取标题结构与代码块清单；导入依赖清单；框架提示（flask/fastapi/torch/transformers 等关键词）。归档解析结果（原文只留 `content_hash`，不落原文），返回 `upload_id` 供 §1.2 引用与前端左栏结构树。
+处理：AST 解析（`ast` 模块）提取类/函数/签名/docstring 摘要；`.md` 提取标题结构与代码块清单；导入依赖清单；框架提示（flask/fastapi/torch/transformers 等关键词）。解析结果归档到 `practice_code_uploads`（原文只留 `content_hash`，不落原文），返回 `upload_id` 供 §1.2 引用与前端左栏结构树；§1.2 生成前校验 `upload_id` 存在且属于当前 owner。
 
 响应：
 
@@ -197,7 +198,7 @@ CodeFillSpec {
 
 请求：`{"upload_id" | "set_id"+"item_id", "symbol": {"name": str ≤128, "kind": "class"|"function", "code_excerpt": str ≤4000}}`。
 
-处理：以 `sha256(name + excerpt)` 为缓存键（进程内 LRU ≤256 条）；未命中时调 LLM 生成 ≤600 字中文功能解析（约束：仅基于摘录，不得断言摘录外行为）。Provider 禁用 → 规则模板（签名 + docstring 摘要）并标注。
+处理：以 `sha256(name + excerpt)` 为缓存键（进程内 LRU ≤256 条）；命中直接返回同一解析并置 `cached=true`。未命中时调 LLM 生成 ≤600 字中文功能解析（约束：仅基于摘录，不得断言摘录外行为）；Provider 禁用 → 规则模板（签名 + docstring/摘录摘要）并标注。
 
 响应：`{"explanation": str ≤600, "source": "model"|"rules", "cached": bool}`。限频：同 principal 30 次/分钟，超出 429。
 
@@ -431,6 +432,13 @@ CodeFillSpec {
 3. S4：上下文协议（§3）接线 + 画像统一读口（§4，梓柯）；
 4. S5：前端导航与 UI（总案 D4）。
 每片完成标准：`tests/` 契约测试通过 + 手动端到端闭环（mock 与真实 Provider 各一轮）+ 受影响文档同步。
+
+### 5.1 P1-A 实现状态
+
+- §1.2：mock 生成行为保持冻结；`upload_ids` 已接入 `practice_code_uploads` 存在性/owner 校验；mixed/concept 概念题双写 quiz 归档完成。
+- §1.4：规则判分、跨 owner 404、`explain_only` 409、`(attempt_id, item_id)` 幂等 upsert 已实现；LLM 静态评审与画像聚合留待真实 Provider 接线。
+- §1.5：`.py/.md` 解析、415/413/数据集 400 与结果持久化已实现。
+- §1.6：`symbol.code_excerpt` schema 已补齐；进程内 LRU≤256 缓存、规则回退与同 principal 限频已实现。
 
 ## 6. 评审变更记录（v2 自评审，2026-01）
 
