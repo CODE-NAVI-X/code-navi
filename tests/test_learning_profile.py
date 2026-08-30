@@ -48,6 +48,7 @@ from code_navi.online_compiler.models import (  # noqa: E402
     PracticeLaunchModel,
     PracticeOutcomeModel,
 )
+from code_navi.practice.models import CodeFillAttemptModel, PracticeSetModel  # noqa: E402
 from code_navi.server import app  # noqa: E402
 from code_navi.workspaces.models import WorkspaceModel  # noqa: E402
 
@@ -211,6 +212,64 @@ def _add_practice_outcome(
     db.commit()
     db.refresh(outcome)
     return outcome
+
+
+def _add_code_fill_attempt(
+    db: Session,
+    *,
+    set_id: str,
+    item_id: str = "item-01",
+    profile_id: str | None = PROFILE_A,
+    topic: str = "动态规划",
+    context_points: list[str] | None = None,
+    score: int = 0,
+    max_score: int = 2,
+    graded: bool = True,
+    graded_by: str = "rules",
+    comment: str | None = None,
+    owner_principal_id: str | None = None,
+) -> None:
+    """Seed one practice set plus a graded code-fill attempt (contract §4.2)."""
+    if context_points:
+        request_snapshot = {
+            "context": {
+                "knowledge_points": [{"name": name} for name in context_points],
+            },
+        }
+    else:
+        request_snapshot = {"topic": topic}
+    db.add(
+        PracticeSetModel(
+            set_id=set_id,
+            kind="code_practice",
+            context_snapshot={
+                "request": request_snapshot,
+                "coverage": context_points or [topic],
+                "audit": None,
+                "effective_context": None,
+                "effective_topic": None if context_points else topic,
+            },
+            profile_id=profile_id,
+            generation_mode="mock",
+            provider_name="mock",
+            owner_principal_id=owner_principal_id,
+        )
+    )
+    db.add(
+        CodeFillAttemptModel(
+            attempt_id=str(uuid.uuid4()),
+            item_id=item_id,
+            set_id=set_id,
+            score=score,
+            max_score=max_score,
+            graded_by=graded_by,
+            is_mock=graded_by == "mock",
+            graded=graded,
+            comment=comment,
+            owner_principal_id=owner_principal_id,
+        )
+    )
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -598,6 +657,160 @@ class TestKnowledgeGapProjection:
             "?local_profile_id=profile-owner&profile_id=not-a-uuid"
         )
         assert response.status_code == 422
+
+    def test_learning_knowledge_gaps_includes_graded_code_fill_attempts(
+        self, client: TestClient, db: Session
+    ) -> None:
+        """Only graded misses participate; full-score and ungraded rows do not."""
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-wrong",
+            item_id="item-01",
+            context_points=["动态规划"],
+            score=0,
+            max_score=2,
+        )
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-partial",
+            item_id="item-01",
+            topic="递归",
+            score=1,
+            max_score=2,
+        )
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-full",
+            item_id="item-01",
+            topic="排序",
+            score=2,
+            max_score=2,
+        )
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-ungraded",
+            item_id="item-01",
+            topic="图论",
+            score=0,
+            max_score=2,
+            graded=False,
+        )
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        items = [
+            item
+            for item in response.json()["items"]
+            if item["sourceType"] == "code_fill_attempt"
+        ]
+        assert {item["source"]["setId"] for item in items} == {
+            "set-gap-wrong",
+            "set-gap-partial",
+        }
+
+        wrong = next(
+            item for item in items if item["source"]["setId"] == "set-gap-wrong"
+        )
+        assert wrong["topic"] == "动态规划"
+        assert wrong["gapKind"] == "code_fill_incorrect"
+        assert wrong["summary"] == "挖空判分未全部通过，需要回看对应知识点。"
+        assert wrong["source"]["score"] == 0
+        assert wrong["source"]["maxScore"] == 2
+        assert wrong["source"]["gradedBy"] == "rules"
+
+        partial = next(
+            item for item in items if item["source"]["setId"] == "set-gap-partial"
+        )
+        assert partial["gapKind"] == "code_fill_partial_score"
+        assert partial["topic"] == "递归"
+
+    def test_learning_knowledge_gaps_code_fill_summary_truncates_comment(
+        self, client: TestClient, db: Session
+    ) -> None:
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-comment",
+            comment="挖空 blank-1 未命中参考答案，" + "细节" * 200,
+        )
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        item = next(
+            item
+            for item in response.json()["items"]
+            if item["sourceType"] == "code_fill_attempt"
+        )
+        assert item["summary"].startswith("挖空 blank-1")
+        assert len(item["summary"]) <= 220
+
+    def test_learning_knowledge_gaps_code_fill_never_exposes_answers(
+        self, client: TestClient, db: Session
+    ) -> None:
+        _add_code_fill_attempt(db, set_id="set-gap-secret", comment="规则判定未匹配。")
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        assert "total + value" not in response.text
+        assert "judge_secret" not in response.text
+        assert "blank_answers" not in response.text
+
+    def test_learning_knowledge_gaps_code_fill_scopes_by_profile_and_owner(
+        self, client: TestClient, db: Session
+    ) -> None:
+        """Anonymous reads scope by the set's archived profile_id; login by owner."""
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-mine",
+            profile_id=PROFILE_A,
+            owner_principal_id="principal-A",
+        )
+        _add_code_fill_attempt(
+            db, set_id="set-gap-other", profile_id=PROFILE_B, topic="别人的缺口"
+        )
+
+        anonymous = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+        assert anonymous.status_code == 200
+        code_fill_sets = {
+            item["source"]["setId"]
+            for item in anonymous.json()["items"]
+            if item["sourceType"] == "code_fill_attempt"
+        }
+        assert code_fill_sets == {"set-gap-mine"}
+
+        _add_code_fill_attempt(
+            db,
+            set_id="set-gap-foreign-owner",
+            profile_id=PROFILE_A,
+            owner_principal_id="principal-B",
+        )
+        service = ProfileService()
+        response = service.get_knowledge_gaps(
+            local_profile_id="profile-owner",
+            profile_id=PROFILE_A,
+            db=db,
+            owned_ids=["principal-A"],
+        )
+        owned_sets = {
+            item.source["setId"]
+            for item in response.items
+            if item.source_type == "code_fill_attempt"
+        }
+        assert owned_sets == {"set-gap-mine"}
 
 
 class TestGradeToProfileFlow:

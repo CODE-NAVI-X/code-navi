@@ -158,7 +158,9 @@ class ProfileResponse(BaseModel):
     )
 
 
-KnowledgeGapSourceType = Literal["quiz_attempt", "confusion_mark", "practice_outcome"]
+KnowledgeGapSourceType = Literal[
+    "quiz_attempt", "confusion_mark", "practice_outcome", "code_fill_attempt"
+]
 
 
 class KnowledgeGapItem(BaseModel):
@@ -169,7 +171,10 @@ class KnowledgeGapItem(BaseModel):
     source_type: KnowledgeGapSourceType = Field(
         ...,
         alias="sourceType",
-        description="Stable source kind: quiz_attempt | confusion_mark | practice_outcome.",
+        description=(
+            "Stable source kind: quiz_attempt | confusion_mark | practice_outcome "
+            "| code_fill_attempt."
+        ),
     )
     source_id: str = Field(
         ...,
