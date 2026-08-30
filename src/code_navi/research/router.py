@@ -13,6 +13,15 @@ from code_navi.auth.dependencies import (
 from code_navi.db import get_db
 from code_navi.providers import ProviderConfigurationError
 
+from .conversation_guidance import (
+    ResearchConversationGuidanceService,
+    StudyRecommendationsNotConfirmedError,
+)
+from .conversation_guidance_schemas import (
+    StageBriefingResponse,
+    StudyRecommendationRequest,
+    StudyRecommendationsResponse,
+)
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ApplyRevisionSuggestionRequest,
@@ -104,6 +113,7 @@ router = APIRouter(prefix="/api/v1/research", tags=["Research"])
 _service = ResearchClarificationService()
 _evidence_service = ResearchEvidenceService()
 _conversation_service = ResearchConversationService()
+_conversation_guidance_service = ResearchConversationGuidanceService()
 _conversation_search_service = ResearchConversationSearchService()
 _reproduction_evaluation_service = ReproductionEvaluationService()
 _db_dependency = Depends(get_db)
@@ -219,6 +229,60 @@ def get_conversation(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/stage-briefing",
+    response_model=StageBriefingResponse,
+)
+def get_stage_briefing(
+    conversation_id: str,
+    include_evidence_trends: bool = False,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> StageBriefingResponse:
+    """Return the pure-rule first-screen stage briefing (contract §2.1)."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_guidance_service.stage_briefing(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+            include_evidence_trends=include_evidence_trends,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/study-recommendations",
+    response_model=StudyRecommendationsResponse,
+)
+def create_study_recommendations(
+    conversation_id: str,
+    request: StudyRecommendationRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> StudyRecommendationsResponse:
+    """Return explicitly triggered pure-rule study recommendations (contract §2.2)."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_guidance_service.study_recommendations(
+            conversation_id, request, db, owned_ids=owned_ids
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+    except StudyRecommendationsNotConfirmedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Study recommendations require explicit user confirmation.",
         ) from error
 
 
