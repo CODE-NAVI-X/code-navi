@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from code_navi.online_compiler.models import PracticeLaunchModel, PracticeOutcomeModel
+from code_navi.practice.models import CodeFillAttemptModel, PracticeSetModel
 
 from .models import ConfusionMarkModel, QuizAttemptModel
 from .schemas import (
@@ -51,6 +52,28 @@ def _kp_key(knowledge_point: str) -> str:
 def _trim(value: str | None, *, fallback: str, max_length: int) -> str:
     text = (value or "").strip() or fallback
     return text[:max_length]
+
+
+def _knowledge_points_from_practice_snapshot(snapshot: dict | None) -> list[str]:
+    """Derive the §1.1 envelope ``knowledge_points`` from an archived practice set.
+
+    Mirrors the read-time rule used by the practice gateway: the request's
+    ``context.knowledge_points`` names win (≤4), otherwise the free-text
+    ``topic``.  Items do not store knowledge points themselves, so the set
+    snapshot is the archived source of this fact.
+    """
+    request = (snapshot or {}).get("request") or {}
+    context = request.get("context") or {}
+    points = context.get("knowledge_points") or []
+    names: list[str] = []
+    for point in points:
+        name = (point or {}).get("name", "")
+        if name and name not in names:
+            names.append(name)
+    if names:
+        return names[:4]
+    topic = request.get("topic")
+    return [topic] if topic else []
 
 
 class _GroupIndex:
@@ -223,8 +246,11 @@ class ProfileService:
             limit=limit,
             owned_ids=owned_ids,
         )
+        code_fill_items = self._code_fill_gap_items(
+            profile_id=profile_id, db=db, limit=limit, owned_ids=owned_ids
+        )
         items = sorted(
-            [*quiz_items, *confusion_items, *practice_items],
+            [*quiz_items, *confusion_items, *practice_items, *code_fill_items],
             key=lambda item: item.occurred_at,
             reverse=True,
         )[:limit]
@@ -389,6 +415,88 @@ class ProfileService:
                         "category": row.category,
                         "severity": row.severity,
                         "score": row.score,
+                    },
+                )
+            )
+        return items
+
+    def _code_fill_gap_items(
+        self,
+        *,
+        profile_id: str,
+        db: Session,
+        limit: int,
+        owned_ids: list[str] | None = None,
+    ) -> list[KnowledgeGapItem]:
+        """Project graded code-fill misses (contract §4.2, additive read projection).
+
+        Only ``graded=true`` attempts with a partial or zero score participate —
+        the same gap rule as quiz attempts.  The knowledge focus comes from the
+        owning practice set's archived generation snapshot (the §1.1 envelope
+        ``knowledge_points``); the summary truncates the grading ``comment``.
+        Attempt rows carry no profile key, so the anonymous path scopes through
+        the set's archived ``profile_id``.  Answer material never leaves the
+        server: the trace fields below are scores and ids only.
+        """
+        query = (
+            db.query(CodeFillAttemptModel, PracticeSetModel)
+            .join(PracticeSetModel, CodeFillAttemptModel.set_id == PracticeSetModel.set_id)
+            .filter(
+                CodeFillAttemptModel.graded.is_(True),
+                CodeFillAttemptModel.score.isnot(None),
+                CodeFillAttemptModel.max_score.isnot(None),
+                CodeFillAttemptModel.score < CodeFillAttemptModel.max_score,
+            )
+        )
+        if owned_ids:
+            query = query.filter(CodeFillAttemptModel.owner_principal_id.in_(owned_ids))
+        else:
+            query = query.filter(PracticeSetModel.profile_id == profile_id)
+        rows = (
+            query.order_by(
+                CodeFillAttemptModel.created_at.desc(),
+                CodeFillAttemptModel.attempt_id.desc(),
+                CodeFillAttemptModel.item_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        items: list[KnowledgeGapItem] = []
+        for attempt, practice_set in rows:
+            knowledge_points = _knowledge_points_from_practice_snapshot(
+                practice_set.context_snapshot
+            )
+            gap_kind = (
+                "code_fill_incorrect" if attempt.score == 0 else "code_fill_partial_score"
+            )
+            items.append(
+                KnowledgeGapItem(
+                    source_type="code_fill_attempt",
+                    source_id=f"{attempt.attempt_id}:{attempt.item_id}",
+                    topic=_trim(
+                        knowledge_points[0] if knowledge_points else None,
+                        fallback=f"CodeFill {attempt.item_id}",
+                        max_length=512,
+                    ),
+                    label=_trim(
+                        attempt.comment,
+                        fallback=f"CodeFill {attempt.item_id}",
+                        max_length=_MAX_GAP_LABEL,
+                    ),
+                    gap_kind=gap_kind,
+                    occurred_at=attempt.created_at.isoformat(),
+                    summary=_trim(
+                        attempt.comment,
+                        fallback="挖空判分未全部通过，需要回看对应知识点。",
+                        max_length=_MAX_GAP_SUMMARY,
+                    ),
+                    source={
+                        "attemptId": attempt.attempt_id,
+                        "setId": attempt.set_id,
+                        "itemId": attempt.item_id,
+                        "score": attempt.score,
+                        "maxScore": attempt.max_score,
+                        "gradedBy": attempt.graded_by,
                     },
                 )
             )
