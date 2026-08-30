@@ -148,16 +148,18 @@ def test_research_workspace_labels_direction_analysis_as_a_non_paper_fact() -> N
     assert "ResearchDifficultyPanel" in workspace_source
     assert "topic_difficulty_analysis" in workspace_source
     assert "不是论文精读或实验结论" in difficulty_source
-    assert "模型个性化建议" in difficulty_source
-    assert "模型失败后的规则降级" in difficulty_source
+    assert "generationModeLabel" in difficulty_source
+    assert "GenerationFailure" in difficulty_source
+    assert "rules_fallback" not in difficulty_source
     assert "分析元数据/摘要难点" in search_source
 
 
 def test_experiment_design_discloses_model_or_rules_generation_mode() -> None:
     experiment_source = EXPERIMENT.read_text(encoding="utf-8")
 
-    assert "模型个性化建议" in experiment_source
-    assert "模型失败后的规则降级" in experiment_source
+    assert "generationModeLabel" in experiment_source
+    assert "GenerationFailure" in experiment_source
+    assert "rules_fallback" not in experiment_source
     assert "我确认仅预览代码草案" in experiment_source
     assert "复制代码" in experiment_source
     assert "下载草案文本" in experiment_source
@@ -248,20 +250,42 @@ def test_research_downstream_refreshes_only_from_saved_contracts() -> None:
     assert "来源范围：{item.source_scope}" in experiment_source
 
 
-def test_research_workflow_uses_the_five_step_primary_path() -> None:
+def test_research_workflow_uses_the_eight_step_primary_path() -> None:
     workspace_source = WORKSPACE.read_text(encoding="utf-8")
     workflow_source = WORKFLOW.read_text(encoding="utf-8")
 
     assert "当前阶段" in workflow_source
+    assert "当前研究主题" in workflow_source
+    assert "当前选择论文" in workflow_source
     assert "当前缺失信息" in workflow_source
     assert "唯一下一步" in workflow_source
     for label in (
-        "研究需求",
-        "检索计划",
-        "保存原始论文",
-        "复现方案",
-        "证据边界与下一步任务",
+        "总结已学习知识",
+        "了解热门研究方向",
+        "选择感兴趣的方向",
+        "检索并保存相关论文",
+        "选择论文并按章节分析",
+        "检查用户理解程度",
+        "生成复现方案并记录实验",
+        "汇总证据边界与后续任务",
     ):
         assert label in workflow_source
     assert "PaperDraftReviewPanel" in workspace_source
     assert "ResearchMindMapPanel" in workspace_source
+
+
+def test_research_profile_hides_context_as_a_primary_display_field() -> None:
+    profile_source = PROFILE.read_text(encoding="utf-8")
+
+    assert "对象与场景" not in profile_source
+
+
+def test_research_conversation_keeps_the_selected_paper_in_the_primary_flow() -> None:
+    conversation_source = WORKSPACE.read_text(encoding="utf-8")
+    pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
+
+    assert 'const [selectedPaperTitle, setSelectedPaperTitle]' in conversation_source
+    assert 'selectedPaperTitle={selectedPaperTitle}' in conversation_source
+    assert 'onPipelineSaved={(pipeline) =>' in conversation_source
+    assert 'onPipelineSaved?: (pipeline: ReproductionPipeline) => void;' in pipeline_source
+    assert 'onPipelineSaved?.(savedPipeline);' in pipeline_source

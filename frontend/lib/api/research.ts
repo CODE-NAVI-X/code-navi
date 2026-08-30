@@ -697,9 +697,15 @@ export class ResearchApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly stage?: string,
   ) {
     super(message);
     this.name = "ResearchApiError";
+  }
+
+  /** True when the model failed to generate advice; the UI should offer a retry. */
+  get isGenerationFailure(): boolean {
+    return this.status === 503 || this.stage !== undefined;
   }
 }
 
@@ -1053,9 +1059,11 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    const info = await errorInfo(response);
     throw new ResearchApiError(
       response.status,
-      (await errorDetail(response)) ?? `科研服务请求失败（HTTP ${response.status}）。`,
+      info.message ?? `科研服务请求失败（HTTP ${response.status}）。`,
+      info.stage,
     );
   }
   try {
@@ -1065,12 +1073,26 @@ async function request<T>(
   }
 }
 
-async function errorDetail(response: Response): Promise<string | null> {
+interface ErrorInfo {
+  message: string | null;
+  stage?: string;
+}
+
+async function errorInfo(response: Response): Promise<ErrorInfo> {
   try {
     const body: unknown = await response.json();
-    if (!body || typeof body !== "object" || !("detail" in body)) return null;
+    if (!body || typeof body !== "object" || !("detail" in body)) {
+      return { message: null };
+    }
     const detail = (body as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") return { message: detail };
+    if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+      const info = detail as { message?: unknown; stage?: unknown };
+      return {
+        message: typeof info.message === "string" ? info.message : null,
+        stage: typeof info.stage === "string" ? info.stage : undefined,
+      };
+    }
     if (Array.isArray(detail)) {
       const messages = detail.flatMap((item) => {
         if (!item || typeof item !== "object") return [];
@@ -1081,10 +1103,10 @@ async function errorDetail(response: Response): Promise<string | null> {
           : "请求内容";
         return [`${location || "请求内容"}：${validation.msg}`];
       });
-      return messages.length ? messages.join("；") : null;
+      return { message: messages.length ? messages.join("；") : null };
     }
   } catch {
     // A proxy may return HTML or an empty body. Keep the status fallback.
   }
-  return response.statusText || null;
+  return { message: response.statusText || null };
 }

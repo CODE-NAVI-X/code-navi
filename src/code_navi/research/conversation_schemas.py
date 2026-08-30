@@ -447,7 +447,7 @@ class ResearchConversationResponse(BaseModel):
     ready_for_plan: bool
     research_plan: ConversationResearchPlan | None = None
     research_mindmap: ResearchMindMap
-    topic_difficulty_analysis: TopicDifficultyAnalysis
+    topic_difficulty_analysis: TopicDifficultyAnalysis | None = None
     experiment_design: ExperimentDesign | None = None
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
@@ -695,6 +695,9 @@ class ReproductionPipeline(BaseModel):
     two_week_mvp: list[ReproductionPipelineItem]
     created_at: datetime
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
 
 
 class CreateReproductionPipelineRequest(BaseModel):

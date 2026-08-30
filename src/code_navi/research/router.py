@@ -86,6 +86,7 @@ from .reproduction_evaluation_service import (
     ReproductionEvaluationService,
     ReproductionImprovementTaskNotFoundError,
 )
+from .research_generation import ResearchGenerationError
 from .schemas import (
     CreateEvidenceBundleRequest,
     CreateResearchSessionRequest,
@@ -108,6 +109,23 @@ _conversation_search_service = ResearchConversationSearchService()
 _reproduction_evaluation_service = ReproductionEvaluationService()
 _db_dependency = Depends(get_db)
 _opt_principal_dep = Depends(get_optional_principal)
+
+
+def _raise_generation_error(error: ResearchGenerationError) -> None:
+    """Surface a failed generation as an explicit, retryable error; never rules prose."""
+    status_code = (
+        status.HTTP_503_SERVICE_UNAVAILABLE
+        if error.stage in {"provider_unavailable", "timeout"}
+        else status.HTTP_422_UNPROCESSABLE_CONTENT
+    )
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "code": "research_generation_failed",
+            "stage": error.stage,
+            "message": "模型生成失败，本次未生成科研建议。请重试。",
+        },
+    ) from error
 
 
 @router.get("/provider/status", response_model=ProviderStatusResponse)
@@ -319,9 +337,11 @@ def create_reproduction_pipeline(
     request: CreateReproductionPipelineRequest,
     db: Session = _db_dependency,
 ) -> ReproductionPipeline:
-    """Create a rules-only plan from one user-selected already-saved paper."""
+    """Create a model-written plan from one user-selected already-saved paper."""
     try:
         return _conversation_service.create_reproduction_pipeline(conversation_id, request, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
     except ReproductionPipelineNotFoundError as error:
@@ -512,6 +532,8 @@ def analyze_conversation_paper(
     """Analyze only metadata/abstract from a user-selected saved evidence item."""
     try:
         return _conversation_search_service.analyze_paper(conversation_id, request, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
     except ConversationPaperNotFoundError as error:
@@ -534,6 +556,8 @@ def generate_topic_difficulty_analysis(
     del request
     try:
         return _conversation_service.generate_topic_difficulty_analysis(conversation_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -557,6 +581,8 @@ def generate_experiment_design(
                 detail="当前科研画像尚未形成规则研究计划。",
             )
         return design
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -573,6 +599,8 @@ def create_experiment_code_draft(
     """Return preview code only after the request explicitly confirms intent."""
     try:
         return _conversation_service.create_experiment_code_draft(conversation_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ConversationNotFoundError as error:
@@ -686,10 +714,12 @@ def generate_paper_blueprint(
     request: GenerateResearchArtifactRequest,
     db: Session = _db_dependency,
 ) -> PaperBlueprint:
-    """Create a rules-only paper outline after an explicit user confirmation."""
+    """Create a source-bounded model paper outline after explicit confirmation."""
     del request
     try:
         return _conversation_service.generate_paper_blueprint(conversation_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -730,6 +760,8 @@ def create_paper_review(
     del request
     try:
         return _conversation_service.create_paper_review(draft_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except LookupError as error:
         raise HTTPException(status_code=404, detail="Paper draft not found.") from error
 
@@ -773,6 +805,8 @@ def create_revision_suggestion(
     del request
     try:
         return _conversation_service.create_revision_suggestion(review_id, task_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except LookupError as error:
         raise HTTPException(
             status_code=404, detail="Paper review or revision task not found."

@@ -15,6 +15,7 @@ import {
   type ReproductionPipeline,
 } from "@/lib/api/research";
 import { ClassificationBadge } from "./ClassificationBadge";
+import { GenerationFailure, isGenerationFailure } from "./generationUi";
 
 const categoryLabels: Array<{ value: ExperimentEvidenceCategory; label: string }> = [
   { value: "data_or_sample", label: "数据或样本实际情况" },
@@ -61,6 +62,8 @@ export function ExperimentEvidencePanel({
   const [blueprint, setBlueprint] = useState<PaperBlueprint | null>(null);
   const [buildingBlueprint, setBuildingBlueprint] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [blueprintError, setBlueprintError] = useState<string | null>(null);
+  const [blueprintFailure, setBlueprintFailure] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -108,11 +111,13 @@ export function ExperimentEvidencePanel({
 
   async function buildBlueprint() {
     setBuildingBlueprint(true);
-    setError(null);
+    setBlueprintError(null);
+    setBlueprintFailure(false);
     try {
       setBlueprint(await generatePaperBlueprint(conversationId));
     } catch (value) {
-      setError(value instanceof Error ? value.message : "生成论文蓝图失败。请重试。");
+      setBlueprintFailure(isGenerationFailure(value));
+      setBlueprintError(value instanceof Error ? value.message : "生成论文蓝图失败。请重试。");
     } finally {
       setBuildingBlueprint(false);
     }
@@ -150,6 +155,12 @@ export function ExperimentEvidencePanel({
       {error && <p role="alert" className="mt-2 whitespace-pre-wrap text-xs text-rose-600">{error}</p>}
       {loading ? <p role="status" aria-live="polite" className="mt-3 text-[11px] text-slate-500">正在恢复已保存的实验结果…</p> : bundles.length ? <div className="mt-3 space-y-2">{bundles.map((bundle) => <details key={bundle.bundle_id} className="app-card-subtle rounded-lg p-2"><summary className="cursor-pointer text-xs font-semibold">{bundle.experiment_name.content} · {new Date(bundle.submitted_at).toLocaleString()}</summary><p className="mt-2 text-[11px]"><EntryLabel classification={bundle.goal.classification} />：{bundle.goal.content}</p>{bundle.items.map((item, index) => <div key={`${item.category}-${index}`} className="mt-1"><p className="text-[11px]"><EntryLabel classification={item.classification} />：{item.content}</p><p className="text-[10px] text-slate-500">来源范围：{item.source_scope} · 依据：{item.basis}</p></div>)}<p className="mt-2 text-[10px] text-slate-500">证据范围：{bundle.provenance_note}</p></details>)}</div> : <p className="mt-3 text-[11px] text-slate-500">尚未保存实验结果。没有结果时仍可生成“待补充”的论文蓝图。</p>}
       <button type="button" onClick={() => void buildBlueprint()} disabled={buildingBlueprint} className="app-button-primary mt-4 inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50">{buildingBlueprint ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}我确认生成论文蓝图</button>
+      {blueprintError &&
+        (blueprintFailure ? (
+          <GenerationFailure error={blueprintError} busy={buildingBlueprint} hasLastSuccess={blueprint !== null} onRetry={() => void buildBlueprint()} />
+        ) : (
+          <p role="alert" className="mt-2 text-sm text-rose-600">{blueprintError}</p>
+        ))}
       {blueprint && <div className="app-card-subtle mt-3 rounded-xl p-3 text-xs"><p className="font-bold">{blueprint.candidate_titles[0]?.content}</p><p className="mt-1 text-[11px]">投稿就绪度：<EntryLabel classification={blueprint.submission_readiness.classification} /> · {blueprint.submission_readiness.content}</p>{blueprint.sections.map((section) => <details key={section.section} className="mt-2 rounded-lg bg-slate-50 p-2 dark:bg-zinc-950/50"><summary className="cursor-pointer font-semibold">{section.section}：{section.writing_goal.content}</summary><p className="mt-1 text-[11px]">可用证据：{section.evidence_references.length ? section.evidence_references.map((reference) => reference.label).join("；") : "暂无"}</p><p className="mt-1 text-[11px]">待补充：{section.missing_evidence.map((item) => item.content).join("；") || "无"}</p></details>)}<p className="mt-2 text-[10px] text-slate-500">{blueprint.provenance_note}</p></div>}
     </section>
   );

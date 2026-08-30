@@ -20,6 +20,7 @@ from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa
 from code_navi.research.research_artifact_llm import ArtifactLlmOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.server import app  # noqa: E402
+from research_llm_fakes import ContextAwareArtifactGenerator  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -33,9 +34,7 @@ def fresh_tables() -> Generator[None, None, None]:
 def restore_generators() -> Generator[None, None, None]:
     decision = _conversation_service.decision_generator
     artifact = _conversation_service.artifact_generator
-    _conversation_service.artifact_generator = StaticArtifactGenerator(
-        ArtifactLlmOutcome.unavailable()
-    )
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator()
     yield
     _conversation_service.decision_generator = decision
     _conversation_service.artifact_generator = artifact
@@ -138,12 +137,12 @@ def test_rules_review_marks_unsupported_significance_as_to_verify(client: TestCl
     claim = next(item for item in findings if "显著" in item["issue"])
     assert claim["severity"] == "major"
     assert claim["classification"] == "to_verify"
-    assert review.json()["generation_mode"] == "rules"
+    assert review.json()["generation_mode"] == "llm"
 
 
-def test_invalid_model_review_falls_back_to_rules(client: TestClient) -> None:
-    _conversation_service.artifact_generator = StaticArtifactGenerator(
-        ArtifactLlmOutcome.generated("not-json")
+def test_invalid_model_review_is_rejected_with_a_generation_error(client: TestClient) -> None:
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator(
+        {"paper_review": ArtifactLlmOutcome.generated("not-json")}
     )
     conversation_id = _conversation(client)
     draft = client.post(
@@ -153,18 +152,22 @@ def test_invalid_model_review_falls_back_to_rules(client: TestClient) -> None:
     review = client.post(
         f"/api/v1/research/paper-drafts/{draft['draft_id']}/reviews",
         json={"user_confirmed": True},
-    ).json()
+    )
 
-    assert review["generation_mode"] == "rules_fallback"
+    assert review.status_code == 422
+    assert review.json()["detail"]["code"] == "research_generation_failed"
+    assert review.json()["detail"]["stage"] == "invalid_output"
 
 
 def test_valid_model_only_enhances_existing_rule_explanations(client: TestClient) -> None:
-    _conversation_service.artifact_generator = StaticArtifactGenerator(
-        ArtifactLlmOutcome.generated(
-            '{"explanations":[{"finding_id":"unsupported-claim-1",'
-            '"why_it_matters":"当前结果表述需要可追溯的实验事实。",'
-            '"recommended_action":"保留待补充结果占位符。"}]}'
-        )
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator(
+        {
+            "paper_review": ArtifactLlmOutcome.generated(
+                '{"explanations":[{"finding_id":"unsupported-claim-1",'
+                '"why_it_matters":"当前结果表述需要可追溯的实验事实。",'
+                '"recommended_action":"保留待补充结果占位符。"}]}'
+            )
+        }
     )
     conversation_id = _conversation(client)
     draft = client.post(
@@ -313,11 +316,15 @@ def test_next_suggestion_uses_latest_revision_when_tasks_share_a_paragraph(
     assert "补充“引言”小节" in revisions[1]["content"]
 
 
-def test_invalid_model_suggestion_falls_back_without_promoting_claim_to_fact(
+def test_invalid_model_suggestion_is_rejected_without_promoting_claim_to_fact(
     client: TestClient,
 ) -> None:
-    _conversation_service.artifact_generator = StaticArtifactGenerator(
-        ArtifactLlmOutcome.generated('{"candidate_text":"实验显著提升且证明有效"}')
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator(
+        {
+            "revision_suggestion": ArtifactLlmOutcome.generated(
+                '{"candidate_text":"实验显著提升且证明有效"}'
+            )
+        }
     )
     conversation_id = _conversation(client)
     draft = client.post(
@@ -340,21 +347,22 @@ def test_invalid_model_suggestion_falls_back_without_promoting_claim_to_fact(
         json={"user_confirmed": True},
     )
 
-    assert suggestion.status_code == 201
-    assert suggestion.json()["generation_mode"] == "rules_fallback"
-    assert suggestion.json()["classification"] == "to_verify"
-    assert "[待补充实验结果]" in suggestion.json()["candidate_text"]
+    assert suggestion.status_code == 422
+    assert suggestion.json()["detail"]["code"] == "research_generation_failed"
+    assert suggestion.json()["detail"]["stage"] == "invalid_output"
 
 
 def test_valid_model_candidate_is_restorable_without_changing_rule_boundary(
     client: TestClient,
 ) -> None:
-    _conversation_service.artifact_generator = StaticArtifactGenerator(
-        ArtifactLlmOutcome.generated(
-            '{"candidate_text":"[待补充实验结果]",'
-            '"rationale":"先补充已保存的对照与指标记录。",'
-            '"to_verify_items":["差异需统计检验"]}'
-        )
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator(
+        {
+            "revision_suggestion": ArtifactLlmOutcome.generated(
+                '{"candidate_text":"[待补充实验结果]",'
+                '"rationale":"先补充已保存的对照与指标记录。",'
+                '"to_verify_items":["差异需统计检验"]}'
+            )
+        }
     )
     conversation_id = _conversation(client)
     draft = client.post(

@@ -188,6 +188,7 @@ function PanelSection({
         <span className="min-w-0">
           <span className="block text-sm font-bold text-slate-900 dark:text-zinc-100">{title}</span>
           {state === "completed" && <span className="mt-0.5 block text-[11px] leading-5 text-emerald-700 dark:text-emerald-300">已完成阶段摘要：可展开查看已保存内容。</span>}
+          {state === "upcoming" && <span className="mt-0.5 block text-[11px] leading-5 text-slate-500 dark:text-zinc-400">未开始：完成前一阶段后可用。</span>}
           {state !== "upcoming" && state !== "completed" && <span className="mt-0.5 block text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{description}</span>}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-180" />
@@ -202,6 +203,7 @@ export function ResearchConversation() {
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [evidenceVersion, setEvidenceVersion] = useState(0);
   const [workflowStage, setWorkflowStage] = useState(0);
+  const [selectedPaperTitle, setSelectedPaperTitle] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<RequestPhase>("initializing");
@@ -220,7 +222,7 @@ export function ResearchConversation() {
         try {
           const restored = await getResearchConversation(savedId);
           setConversation(restored);
-          setWorkflowStage(restored.recommended_action === "prepare_search" ? 1 : 0);
+          setWorkflowStage(restored.recommended_action === "prepare_search" ? 3 : 0);
           return;
         } catch (requestError) {
           if (!(requestError instanceof ResearchApiError) || requestError.status !== 404) {
@@ -236,7 +238,7 @@ export function ResearchConversation() {
       );
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       setConversation(created);
-      setWorkflowStage(created.recommended_action === "prepare_search" ? 1 : 0);
+      setWorkflowStage(created.recommended_action === "prepare_search" ? 3 : 0);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {
@@ -268,7 +270,7 @@ export function ResearchConversation() {
     try {
       const updated = await sendResearchMessage(conversation.conversation_id, cleaned);
       setConversation(updated);
-      setWorkflowStage(updated.recommended_action === "prepare_search" ? 1 : 0);
+      setWorkflowStage(updated.recommended_action === "prepare_search" ? 3 : 0);
       setDraft("");
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -309,6 +311,7 @@ export function ResearchConversation() {
       );
       setConversation(created);
       setEvidenceVersion(0);
+      setSelectedPaperTitle(null);
       setWorkflowStage(0);
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -419,7 +422,11 @@ export function ResearchConversation() {
           </aside>
         )}
 
-        <ResearchWorkflowNav conversation={conversation} currentStage={workflowStage} />
+        <ResearchWorkflowNav
+          conversation={conversation}
+          currentStage={workflowStage}
+          selectedPaperTitle={selectedPaperTitle}
+        />
 
         <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
           <PanelSection
@@ -479,7 +486,7 @@ export function ResearchConversation() {
                     <AcademicSearchPanel
                       key={conversation.conversation_id}
                       conversationId={conversation.conversation_id}
-                      onEvidenceSaved={() => refreshDownstream(2)}
+                      onEvidenceSaved={() => refreshDownstream(4)}
                     />
                   </div>
                 )}
@@ -565,7 +572,7 @@ export function ResearchConversation() {
           >
             <ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} />
           </PanelSection>
-          {conversation.experiment_design && (
+          {conversation.research_plan && (
             <PanelSection
               id="research-section-experiment"
               title="实验方案与代码草案"
@@ -585,7 +592,7 @@ export function ResearchConversation() {
               <ExperimentEvidencePanel
                 conversationId={conversation.conversation_id}
                 evidenceVersion={evidenceVersion}
-                onEvidenceSaved={() => refreshDownstream(4)}
+                onEvidenceSaved={() => refreshDownstream(7)}
               />
             </PanelSection>
           )}
@@ -607,7 +614,10 @@ export function ResearchConversation() {
               <ReproductionPipelinePanel
                 conversationId={conversation.conversation_id}
                 evidenceVersion={evidenceVersion}
-                onPipelineSaved={() => refreshDownstream(3)}
+                onPipelineSaved={(pipeline) => {
+                  setSelectedPaperTitle(pipeline.selected_paper.title);
+                  refreshDownstream(6);
+                }}
               />
             </PanelSection>
           )}

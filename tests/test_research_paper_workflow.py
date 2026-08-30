@@ -19,6 +19,7 @@ from code_navi.research.conversation_agent import (  # noqa: E402
 from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.server import app  # noqa: E402
+from research_llm_fakes import ContextAwareArtifactGenerator  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +32,11 @@ def fresh_tables() -> Generator[None, None, None]:
 @pytest.fixture(autouse=True)
 def restore_generator() -> Generator[None, None, None]:
     original = _conversation_service.decision_generator
+    original_artifact = _conversation_service.artifact_generator
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator()
     yield
     _conversation_service.decision_generator = original
+    _conversation_service.artifact_generator = original_artifact
 
 
 @pytest.fixture
@@ -134,7 +138,7 @@ def test_blueprint_without_experiment_evidence_is_explicitly_pending(client: Tes
 
     assert response.status_code == 200
     body = response.json()
-    assert body["generation_mode"] == "rules"
+    assert body["generation_mode"] == "llm"
     assert body["submission_readiness"]["classification"] == "to_verify"
     experiment = next(item for item in body["sections"] if item["section"] == "实验")
     assert experiment["evidence_references"] == []

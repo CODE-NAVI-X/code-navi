@@ -689,7 +689,8 @@ def test_conversation_response_does_not_generate_optional_artifacts(
     response = client.post("/api/v1/research/conversations", json={})
 
     assert response.status_code == 201
-    assert response.json()["topic_difficulty_analysis"]["generation_mode"] == "rules"
+    assert response.json()["topic_difficulty_analysis"] is None
+    assert response.json()["experiment_design"] is None
 
 
 def test_difficulty_personalization_requires_explicit_endpoint(

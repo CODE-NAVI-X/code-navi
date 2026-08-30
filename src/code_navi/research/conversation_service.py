@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from code_navi.context_transfer.schemas import ConfirmedContextProvenance
@@ -309,13 +310,20 @@ class ResearchConversationService:
             profile, ready_for_plan=readiness.can_prepare_search
         )
         bundles = self._evidence_bundles(conversation.id, db)
-        return build_topic_difficulty_analysis(
+        analysis = build_topic_difficulty_analysis(
             profile,
             plan=plan,
             evidence_bundles=bundles,
             generator=self.artifact_generator,
             conversation_id=conversation.id,
         )
+        self._store_generated_artifact(
+            conversation,
+            "topic_difficulty_analysis",
+            analysis.model_dump(mode="json"),
+            db,
+        )
+        return analysis
 
     def generate_experiment_design(
         self,
@@ -329,12 +337,34 @@ class ResearchConversationService:
         plan = build_conversation_research_plan(
             profile, ready_for_plan=readiness.can_prepare_search
         )
-        return build_experiment_design(
+        design = build_experiment_design(
             profile,
             plan=plan,
             generator=self.artifact_generator,
             conversation_id=conversation.id,
         )
+        if design is not None:
+            self._store_generated_artifact(
+                conversation,
+                "experiment_design",
+                design.model_dump(mode="json"),
+                db,
+            )
+        return design
+
+    @staticmethod
+    def _store_generated_artifact(
+        conversation: ResearchConversationModel,
+        key: str,
+        payload: dict[str, object],
+        db: Session,
+    ) -> None:
+        """Persist the latest successful artefact; failures never overwrite it."""
+        stored = dict(conversation.generated_artifacts or {})
+        stored[key] = payload
+        conversation.generated_artifacts = stored
+        db.add(conversation)
+        db.commit()
 
     def create_experiment_code_draft(
         self,
@@ -454,6 +484,8 @@ class ResearchConversationService:
             bundle,
             paper,
             self._experiment_evidence_bundles(conversation_id, db),
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
             pipeline_id=pipeline_id,
             created_at=created_at,
         )
@@ -491,7 +523,7 @@ class ResearchConversationService:
         conversation_id: str,
         db: Session,
     ) -> PaperBlueprint:
-        """Build a rules-only, traceable outline after an explicit user action."""
+        """Generate a source-bounded outline after an explicit user action."""
         conversation = self._get_model(conversation_id, db)
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
@@ -504,6 +536,7 @@ class ResearchConversationService:
             plan=plan,
             academic_evidence=self._evidence_bundles(conversation.id, db),
             experiment_evidence=self._experiment_evidence_bundles(conversation.id, db),
+            generator=self.artifact_generator,
         )
 
     def create_paper_draft(
@@ -699,6 +732,7 @@ class ResearchConversationService:
             plan=plan,
             academic_evidence=self._evidence_bundles(draft.conversation_id, db),
             experiment_evidence=self._experiment_evidence_bundles(draft.conversation_id, db),
+            generator=self.artifact_generator,
         )
         review = build_rules_paper_review(
             draft,
@@ -1186,6 +1220,13 @@ class ResearchConversationService:
             ready_for_plan=readiness.can_prepare_search,
         )
         bundles = self._evidence_bundles(conversation.id, db)
+        stored = conversation.generated_artifacts or {}
+        topic_analysis = _stored_artifact(
+            TopicDifficultyAnalysis, stored.get("topic_difficulty_analysis")
+        )
+        experiment_design = _stored_artifact(
+            ExperimentDesign, stored.get("experiment_design")
+        )
         return ResearchConversationResponse(
             conversation_id=conversation.id,
             next_skill=(
@@ -1201,12 +1242,8 @@ class ResearchConversationService:
                 plan=plan,
                 evidence_bundles=bundles,
             ),
-            topic_difficulty_analysis=build_topic_difficulty_analysis(
-                profile,
-                plan=plan,
-                evidence_bundles=bundles,
-            ),
-            experiment_design=build_experiment_design(profile, plan=plan),
+            topic_difficulty_analysis=topic_analysis,
+            experiment_design=experiment_design,
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",
@@ -1254,6 +1291,19 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         ResearchConversationMessage.model_validate(message)
         for message in conversation.messages_data
     ]
+
+
+_StoredArtifactT = TypeVar("_StoredArtifactT", bound=BaseModel)
+
+
+def _stored_artifact(model: type[_StoredArtifactT], payload: object) -> _StoredArtifactT | None:
+    """Return a persisted last-successful artefact, ignoring stale/invalid payloads."""
+    if payload is None:
+        return None
+    try:
+        return model.model_validate(payload)
+    except ValueError:
+        return None
 
 
 def _kernel_conversation_history(

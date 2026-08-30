@@ -26,6 +26,7 @@ import {
   saveResearchNotebookNote,
 } from "@/lib/api/research";
 import { getLearningSessionId } from "@/lib/api/learning";
+import { GenerationFailure, generationModeLabel, isGenerationFailure } from "./generationUi";
 
 function searchErrorMessage(error: unknown): string {
   if (error instanceof ResearchApiError) {
@@ -50,6 +51,10 @@ export function AcademicSearchPanel({
   const [phase, setPhase] = useState<"planning" | "ready" | "searching">("planning");
   const [error, setError] = useState<string | null>(null);
   const [paperAnalysis, setPaperAnalysis] = useState<PaperAnalysis | null>(null);
+  const [analysisUrl, setAnalysisUrl] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisFailure, setAnalysisFailure] = useState(false);
   const [selectedPaperUrls, setSelectedPaperUrls] = useState<string[]>([]);
   const [savingNote, setSavingNote] = useState(false);
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
@@ -116,11 +121,19 @@ export function AcademicSearchPanel({
   }
 
   async function analyzePaper(paperUrl: string) {
-    setError(null);
+    setAnalyzing(true);
+    setAnalysisUrl(paperUrl);
+    setAnalysisError(null);
+    setAnalysisFailure(false);
     try {
       setPaperAnalysis(await analyzeResearchPaper(conversationId, paperUrl));
     } catch (requestError) {
-      setError(searchErrorMessage(requestError));
+      setAnalysisFailure(isGenerationFailure(requestError));
+      setAnalysisError(
+        requestError instanceof Error ? requestError.message : "论文难点分析生成失败。",
+      );
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -282,10 +295,21 @@ export function AcademicSearchPanel({
                 )}
               </div>
             )}
+            {analysisError &&
+              (analysisFailure && analysisUrl ? (
+                <GenerationFailure
+                  error={analysisError}
+                  busy={analyzing}
+                  hasLastSuccess={paperAnalysis !== null}
+                  onRetry={() => void analyzePaper(analysisUrl)}
+                />
+              ) : (
+                <p role="alert" className="mt-3 text-sm text-rose-600">{analysisError}</p>
+              ))}
             {paperAnalysis && (
-              <article className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 text-xs leading-5 dark:border-orange-900/60 dark:bg-orange-950/20">
+              <article className="rounded-xl border border-orange-200 bg-orange-50/40 p-4 text-sm leading-6 dark:border-orange-900/60 dark:bg-orange-950/20">
                 <p className="font-bold text-orange-900 dark:text-orange-200">论文/方向难点分析：{paperAnalysis.title}</p>
-                <p className="mt-1 text-[11px] text-orange-800 dark:text-orange-300">{paperAnalysis.generation_mode === "llm" ? "模型个性化建议" : paperAnalysis.generation_mode === "rules_fallback" ? "模型失败后的规则降级" : "基础规则"}；仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
+                <p className="mt-1 text-orange-800 dark:text-orange-300">{generationModeLabel(paperAnalysis.generation_mode)}；仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
                 <ul className="mt-2 space-y-2">{paperAnalysis.items.map((item) => <li key={item.area}><span className="font-semibold">{item.area}：</span>{item.content}{item.evidence_refs.map((reference) => <a key={`${reference.bundle_id}:${reference.paper_url}`} href={reference.paper_url} target="_blank" rel="noreferrer" className="ml-2 font-semibold text-sky-700 underline dark:text-sky-300">查看所用 Evidence</a>)}</li>)}</ul>
               </article>
             )}

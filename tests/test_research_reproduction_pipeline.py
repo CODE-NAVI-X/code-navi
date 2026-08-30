@@ -1,5 +1,8 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from code_navi.research.conversation_reproduction import build_reproduction_pipeline
 from code_navi.research.conversation_schemas import (
@@ -11,6 +14,8 @@ from code_navi.research.conversation_schemas import (
     ResearchPlanRisk,
     ResearchProfile,
 )
+from code_navi.research.research_artifact_llm import ArtifactLlmOutcome
+from code_navi.research.research_generation import ResearchGenerationError
 from code_navi.research.schemas import (
     AcademicPaperResult,
     AcademicSourceStatus,
@@ -18,6 +23,80 @@ from code_navi.research.schemas import (
 )
 
 NOW = datetime(2026, 8, 15, tzinfo=UTC)
+
+
+class FakeArtifactGenerator:
+    def __init__(self, outcome: ArtifactLlmOutcome) -> None:
+        self.outcome = outcome
+        self.calls: list[str] = []
+
+    def generate(
+        self,
+        *,
+        kind: str,
+        context: dict[str, object],
+        conversation_id: str,
+    ) -> ArtifactLlmOutcome:
+        self.calls.append(kind)
+        return self.outcome
+
+
+def _item(content: str, classification: str = "to_verify") -> dict[str, str]:
+    return {
+        "content": content,
+        "classification": classification,
+        "basis": "模型基于已保存上下文生成。",
+        "source_scope": "profile_and_plan_only",
+    }
+
+
+def _task(task_id: str) -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "title": f"任务 {task_id}",
+        "description": "学习脚手架任务，不含可执行代码。",
+        "classification": "inference",
+        "basis": "模型生成的任务建议。",
+        "source_scope": "profile_and_plan_only",
+        "status": "not_started",
+        "evidence_links": [],
+    }
+
+
+def _llm_pipeline_payload(
+    paper: AcademicPaperResult, *, task_ids: list[str]
+) -> ArtifactLlmOutcome:
+    payload = {
+        "schema_version": "reproduction-pipeline.v1",
+        "pipeline_id": "pipeline-model",
+        "conversation_id": "conversation-1",
+        "source_bundle_id": "bundle-1",
+        "selected_paper": {
+            "url": paper.url,
+            "title": paper.title,
+            "source_name": paper.source_name,
+            "year": paper.year,
+            "identifier": paper.identifier,
+            "abstract_scope": "metadata_and_abstract",
+            "abstract_excerpt": paper.abstract_excerpt,
+        },
+        "reproduction_goal": _item("定义可确认的复现目标。", "inference"),
+        "research_question": _item("研究问题。", "inference"),
+        "known_method": _item("方法细节待核验。"),
+        "data_and_sample_conditions": [_item("数据集与样本范围待核验。")],
+        "candidate_baselines": [_item("候选基线待确认。", "inference")],
+        "metrics": [_item("主指标与阈值待确认。")],
+        "experiment_steps": [_item("先记录输入与对照。", "inference")],
+        "resources": [_item("设备与时间待确认。")],
+        "risks": [_item("摘要不足以证明可复现性。")],
+        "ethics": [_item("数据治理与伦理待确认。")],
+        "confirmation_items": [_item("确认边界后再人工实验。")],
+        "tasks": [_task(task_id) for task_id in task_ids],
+        "two_week_mvp": [_item("两周 MVP 范围待确认。", "inference")],
+        "created_at": NOW.isoformat(),
+        "provenance_note": "模型生成；边界由规则校验。",
+    }
+    return ArtifactLlmOutcome.generated(json.dumps(payload, ensure_ascii=False))
 
 
 def _entry(content: str) -> ResearchPlanEntry:
@@ -99,8 +178,11 @@ def _plan() -> ConversationResearchPlan:
     )
 
 
-def test_pipeline_marks_abstract_gaps_as_to_verify() -> None:
+def test_pipeline_is_model_written_and_keeps_identity_and_boundary() -> None:
     paper = _paper()
+    generator = FakeArtifactGenerator(
+        _llm_pipeline_payload(paper, task_ids=["confirm-python-environment"])
+    )
 
     pipeline = build_reproduction_pipeline(
         ResearchProfile(topic="Prompt learning", research_questions=["Which prompt helps?"]),
@@ -108,26 +190,79 @@ def test_pipeline_marks_abstract_gaps_as_to_verify() -> None:
         _bundle(paper),
         paper,
         [],
+        generator=generator,
+        conversation_id="conversation-1",
     )
 
+    assert generator.calls == ["reproduction_pipeline"]
     assert pipeline.schema_version == "reproduction-pipeline.v1"
+    assert pipeline.generation_mode == "llm"
     assert pipeline.selected_paper.abstract_scope == "metadata_and_abstract"
-    assert pipeline.known_method.classification == "fact"
-    assert all(item.classification == "to_verify" for item in pipeline.data_and_sample_conditions)
-    assert "摘要/元数据未覆盖" in pipeline.data_and_sample_conditions[0].source_scope
+    assert pipeline.selected_paper.identifier == paper.identifier
+    assert pipeline.known_method.classification != "fact"
+    assert all(
+        item.classification != "fact" for item in pipeline.data_and_sample_conditions
+    )
     assert all(task.status == "not_started" for task in pipeline.tasks)
 
 
-def test_pipeline_keeps_metadata_only_method_and_scope_to_verify() -> None:
+def test_pipeline_restamps_metadata_only_scope_from_the_selected_paper() -> None:
     paper = _paper().model_copy(update={"abstract_excerpt": None})
+    generator = FakeArtifactGenerator(
+        _llm_pipeline_payload(paper, task_ids=["confirm-python-environment"])
+    )
 
     pipeline = build_reproduction_pipeline(
-        ResearchProfile(topic="Prompt learning"), _plan(), _bundle(paper), paper, []
+        ResearchProfile(topic="Prompt learning"),
+        _plan(),
+        _bundle(paper),
+        paper,
+        [],
+        generator=generator,
+        conversation_id="conversation-1",
     )
 
     assert pipeline.selected_paper.abstract_scope == "metadata_only"
-    assert pipeline.known_method.classification == "to_verify"
-    assert "摘要/元数据未覆盖" in pipeline.known_method.source_scope
+    assert pipeline.selected_paper.abstract_excerpt is None
+
+
+def test_model_cannot_introduce_fact_or_unknown_scope() -> None:
+    paper = _paper()
+    payload = json.loads(_llm_pipeline_payload(paper, task_ids=["confirm-python-environment"]).text)
+    payload["known_method"]["classification"] = "fact"
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(json.dumps(payload, ensure_ascii=False))
+    )
+
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_reproduction_pipeline(
+            ResearchProfile(topic="Prompt learning"),
+            _plan(),
+            _bundle(paper),
+            paper,
+            [],
+            generator=generator,
+            conversation_id="conversation-1",
+        )
+
+    assert excinfo.value.stage == "invalid_output"
+
+
+def test_unavailable_provider_raises_instead_of_a_scaffold() -> None:
+    paper = _paper()
+
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_reproduction_pipeline(
+            ResearchProfile(topic="Prompt learning"),
+            _plan(),
+            _bundle(paper),
+            paper,
+            [],
+            generator=FakeArtifactGenerator(ArtifactLlmOutcome.unavailable()),
+            conversation_id="conversation-1",
+        )
+
+    assert excinfo.value.stage == "provider_unavailable"
 
 
 def test_pipeline_links_user_experiment_evidence_only_by_task_id() -> None:
@@ -161,8 +296,18 @@ def test_pipeline_links_user_experiment_evidence_only_by_task_id() -> None:
         provenance_note="Unverified user text.",
     )
 
+    generator = FakeArtifactGenerator(
+        _llm_pipeline_payload(paper, task_ids=["compare-python-baseline"])
+    )
+
     pipeline = build_reproduction_pipeline(
-        ResearchProfile(topic="Prompt learning"), _plan(), _bundle(paper), paper, [experiment]
+        ResearchProfile(topic="Prompt learning"),
+        _plan(),
+        _bundle(paper),
+        paper,
+        [experiment],
+        generator=generator,
+        conversation_id="conversation-1",
     )
     task = next(task for task in pipeline.tasks if task.task_id == "compare-python-baseline")
 

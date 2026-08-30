@@ -11,6 +11,7 @@ import {
   type ReproductionPipelineItem,
 } from "@/lib/api/research";
 import { ClassificationBadge } from "./ClassificationBadge";
+import { GenerationFailure, isGenerationFailure } from "./generationUi";
 
 type SavedPaper = ConversationEvidenceBundle["papers"][number] & {
   bundleId: string;
@@ -24,13 +25,14 @@ export function ReproductionPipelinePanel({
 }: {
   conversationId: string;
   evidenceVersion: number;
-  onPipelineSaved?: () => void;
+  onPipelineSaved?: (pipeline: ReproductionPipeline) => void;
 }) {
   const [bundles, setBundles] = useState<ConversationEvidenceBundle[]>([]);
   const [selected, setSelected] = useState("");
   const [pipeline, setPipeline] = useState<ReproductionPipeline | null>(null);
   const [linkedTaskIds, setLinkedTaskIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -69,14 +71,16 @@ export function ReproductionPipelinePanel({
     if (!paper) return;
     setBusy(true);
     setError(null);
+    setFailure(false);
     try {
       const savedPipeline = await createReproductionPipeline(conversationId, {
           evidence_bundle_id: paper.bundleId,
           paper_url: paper.url,
         });
       setPipeline(savedPipeline);
-      onPipelineSaved?.();
+      onPipelineSaved?.(savedPipeline);
     } catch (cause) {
+      setFailure(isGenerationFailure(cause));
       setError(cause instanceof Error ? cause.message : "无法生成复现方案。");
     } finally {
       setBusy(false);
@@ -135,7 +139,17 @@ export function ReproductionPipelinePanel({
       >
         {busy ? "生成中…" : "生成复现方案"}
       </button>
-      {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
+      {error &&
+        (failure ? (
+          <GenerationFailure
+            error={error}
+            busy={busy}
+            hasLastSuccess={pipeline !== null}
+            onRetry={() => void generate()}
+          />
+        ) : (
+          <p role="alert" className="text-sm text-red-700 dark:text-red-300">{error}</p>
+        ))}
       {pipeline && (
         <div className="space-y-3 border-t pt-3">
           <p className="font-medium">{pipeline.selected_paper.title}</p>

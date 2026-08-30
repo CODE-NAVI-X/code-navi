@@ -9,7 +9,6 @@ import {
   FlaskConical,
   Search,
   Target,
-  Users,
 } from "lucide-react";
 
 import type { ResearchProfile, ResearchReadiness } from "@/lib/api/research";
@@ -89,7 +88,6 @@ export function ResearchProfilePanel({
         <div className="mt-4 space-y-2">
           <ProfileItem icon={<Compass className="h-4 w-4" />} label="研究主题" value={profile.topic} />
           <ProfileItem icon={<Target className="h-4 w-4" />} label="研究动机" value={profile.motivation} />
-          <ProfileItem icon={<Users className="h-4 w-4" />} label="对象与场景" value={profile.context} />
           <ProfileItem icon={<FlaskConical className="h-4 w-4" />} label="方法路径" value={joinValues(profile.methods)} />
           <ProfileItem icon={<Database className="h-4 w-4" />} label="数据需求" value={profile.data_requirements} />
           <ProfileItem icon={<FileOutput className="h-4 w-4" />} label="预期产出" value={profile.expected_output} />

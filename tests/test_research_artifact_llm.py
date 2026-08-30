@@ -20,6 +20,7 @@ from code_navi.research.research_artifact_llm import (
     ArtifactLlmOutcome,
     RuntimeResearchArtifactGenerator,
 )
+from code_navi.research.research_generation import ResearchGenerationError
 from code_navi.research.schemas import AcademicPaperResult, EvidenceStatement
 from kernel.core import ContentBlock, Message, ProviderCapabilities, ProviderResult
 
@@ -158,7 +159,7 @@ def test_evidence_scoped_model_difficulty_keeps_a_saved_evidence_reference() -> 
     assert analysis.items[0].evidence_refs[0].bundle_id == bundle.bundle_id
 
 
-def test_invalid_model_fact_claim_falls_back_to_rules() -> None:
+def test_model_fact_claim_is_rejected_as_invalid_output() -> None:
     generator = FakeArtifactGenerator(
         ArtifactLlmOutcome.generated(
             '{"title":"不安全","information_scope":"profile_and_plan_only",'
@@ -169,28 +170,29 @@ def test_invalid_model_fact_claim_falls_back_to_rules() -> None:
         )
     )
 
-    analysis = build_topic_difficulty_analysis(
-        _profile(),
-        plan=None,
-        evidence_bundles=[],
-        generator=generator,
-        conversation_id="conv-test",
-    )
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_topic_difficulty_analysis(
+            _profile(),
+            plan=None,
+            evidence_bundles=[],
+            generator=generator,
+            conversation_id="conv-test",
+        )
 
-    assert analysis.generation_mode == "rules_fallback"
-    assert all(item.content != "模型声称得到结果" for item in analysis.items)
+    assert excinfo.value.stage == "invalid_output"
 
 
-def test_unavailable_model_keeps_rules_difficulty_analysis() -> None:
-    analysis = build_topic_difficulty_analysis(
-        _profile(),
-        plan=None,
-        evidence_bundles=[],
-        generator=FakeArtifactGenerator(ArtifactLlmOutcome.unavailable()),
-        conversation_id="conv-test",
-    )
+def test_unavailable_provider_raises_generation_error_without_rules_advice() -> None:
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_topic_difficulty_analysis(
+            _profile(),
+            plan=None,
+            evidence_bundles=[],
+            generator=FakeArtifactGenerator(ArtifactLlmOutcome.unavailable()),
+            conversation_id="conv-test",
+        )
 
-    assert analysis.generation_mode == "rules"
+    assert excinfo.value.stage == "provider_unavailable"
 
 
 class FakeDeepSeekProvider:
@@ -299,17 +301,17 @@ def test_experiment_design_uses_validated_model_suggestions_after_plan_exists() 
     )
 
 
-def test_failed_experiment_design_model_uses_rules_fallback() -> None:
+def test_invalid_experiment_design_output_raises_instead_of_rules_fallback() -> None:
     profile = _profile()
-    design = build_experiment_design(
-        profile,
-        plan=build_conversation_research_plan(profile, ready_for_plan=True),
-        generator=FakeArtifactGenerator(ArtifactLlmOutcome.generated("not-json")),
-        conversation_id="conv-test",
-    )
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_experiment_design(
+            profile,
+            plan=build_conversation_research_plan(profile, ready_for_plan=True),
+            generator=FakeArtifactGenerator(ArtifactLlmOutcome.generated("not-json")),
+            conversation_id="conv-test",
+        )
 
-    assert design is not None
-    assert design.generation_mode == "rules_fallback"
+    assert excinfo.value.stage == "invalid_output"
 
 
 def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
@@ -320,9 +322,19 @@ def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
             json.dumps(
                 {
                     "title": "反馈策略实验草案",
+                    "directory_tree": ["README.md", "src/", "src/data.py"],
+                    "dependencies": ["Python 3.11+（未安装）"],
+                    "files": [
+                        {"path": "README.md", "content": "# 仅预览；替换 TODO 前不要运行。"},
+                        {
+                            "path": "src/data.py",
+                            "content": "def load_data():\n    # TODO: 确认许可\n    return []\n",
+                        },
+                    ],
+                    "run_instructions": ["先人工确认 README 中的 TODO。"],
                     "assumptions": ["默认使用合成数据。"],
                     "to_verify_items": ["真实数据许可待确认。"],
-                    "provenance_note": "模型只个性化说明，代码文件来自服务端固定模板。",
+                    "provenance_note": "模型基于已确认画像生成预览；不写文件、不执行。",
                 },
                 ensure_ascii=False,
             )
@@ -338,25 +350,36 @@ def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
 
     assert draft.generation_mode == "llm"
     assert generator.calls == ["experiment_code_draft"]
-    assert any(item.path == "requirements.txt" for item in draft.files)
+    assert any(item.path == "src/data.py" for item in draft.files)
+    assert "不执行" in draft.provenance_note
+    assert "TODO" in "\n".join(item.content for item in draft.files)
 
 
-def test_model_cannot_replace_server_owned_code_templates() -> None:
+def test_code_draft_blocks_secret_or_execution_primitives() -> None:
     profile = _profile()
-    draft = build_experiment_code_draft(
-        profile,
-        plan=build_conversation_research_plan(profile, ready_for_plan=True),
-        generator=FakeArtifactGenerator(
-            ArtifactLlmOutcome.generated(json.dumps({
-                "title": "unsafe",
-                "files": [{"path": "src/data.py", "content": "api_key = 'secret'"}],
-                "assumptions": ["x"],
-                "to_verify_items": ["x"],
-                "provenance_note": "x",
-            }))
-        ),
-        conversation_id="conv-test",
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "title": "unsafe",
+                    "directory_tree": ["src/data.py"],
+                    "dependencies": [],
+                    "files": [{"path": "src/data.py", "content": "api_key = 'secret'"}],
+                    "run_instructions": ["run it"],
+                    "assumptions": ["x"],
+                    "to_verify_items": ["x"],
+                    "provenance_note": "x",
+                }
+            )
+        )
     )
 
-    assert draft.generation_mode == "rules_fallback"
-    assert "api_key" not in "\n".join(item.content.casefold() for item in draft.files)
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_experiment_code_draft(
+            profile,
+            plan=build_conversation_research_plan(profile, ready_for_plan=True),
+            generator=generator,
+            conversation_id="conv-test",
+        )
+
+    assert excinfo.value.stage == "invalid_output"
