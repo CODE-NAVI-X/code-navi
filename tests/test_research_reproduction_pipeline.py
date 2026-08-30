@@ -177,6 +177,7 @@ def test_reproduction_panel_preserves_the_selected_evidence_bundle_and_contract_
     )
 
     assert "selectionKey" in source
+    assert "paper.paper_id" in source
     assert "item.selectionKey === selected" in source
     assert "value={paper.selectionKey}" in source
     for label in (
@@ -189,3 +190,14 @@ def test_reproduction_panel_preserves_the_selected_evidence_bundle_and_contract_
         "两周 MVP",
     ):
         assert label in source
+
+
+def test_reproduction_panel_refreshes_saved_evidence_and_experiment_links() -> None:
+    source = Path("frontend/components/research/ReproductionPipelinePanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "evidenceVersion" in source
+    assert "listExperimentEvidenceBundles" in source
+    assert "linkedTaskIds" in source
+    assert "已关联用户实验记录" in source

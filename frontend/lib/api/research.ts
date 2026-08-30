@@ -287,18 +287,22 @@ export interface ResearchSearchPlan {
 }
 
 export interface AcademicPaperResult {
+  paper_id: string | null;
   title: string;
   authors: string[];
   year: number | null;
   source_name: string;
   url: string;
   identifier: string | null;
+  doi: string | null;
+  arxiv_id: string | null;
   abstract_excerpt: string | null;
   information_scope: "metadata_and_abstract_only";
   full_text_available: false;
   metadata_evidence: EvidenceStatement[];
   supporting_snippets: EvidenceStatement[];
   relevance: EvidenceStatement;
+  paper_kind: EvidenceStatement | null;
   verification: EvidenceStatement;
 }
 

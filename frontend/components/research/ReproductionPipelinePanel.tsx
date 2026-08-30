@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   createReproductionPipeline,
+  listExperimentEvidenceBundles,
   listReproductionPipelines,
   listResearchEvidence,
   type ConversationEvidenceBundle,
@@ -16,29 +17,51 @@ type SavedPaper = ConversationEvidenceBundle["papers"][number] & {
   selectionKey: string;
 };
 
-export function ReproductionPipelinePanel({ conversationId }: { conversationId: string }) {
+export function ReproductionPipelinePanel({
+  conversationId,
+  evidenceVersion,
+  onPipelineSaved,
+}: {
+  conversationId: string;
+  evidenceVersion: number;
+  onPipelineSaved?: () => void;
+}) {
   const [bundles, setBundles] = useState<ConversationEvidenceBundle[]>([]);
   const [selected, setSelected] = useState("");
   const [pipeline, setPipeline] = useState<ReproductionPipeline | null>(null);
+  const [linkedTaskIds, setLinkedTaskIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void Promise.all([listResearchEvidence(conversationId), listReproductionPipelines(conversationId)])
-      .then(([savedBundles, savedPipelines]) => {
+    void Promise.all([
+      listResearchEvidence(conversationId),
+      listReproductionPipelines(conversationId),
+      listExperimentEvidenceBundles(conversationId),
+    ])
+      .then(([savedBundles, savedPipelines, experimentBundles]) => {
         setBundles(savedBundles);
         setPipeline(savedPipelines[0] ?? null);
+        setLinkedTaskIds(
+          [...new Set(
+            experimentBundles.flatMap((bundle) => [
+              bundle.experiment_name,
+              bundle.goal,
+              ...bundle.items,
+            ].flatMap((item) => item.related_plan_item ? [item.related_plan_item] : [])),
+          )],
+        );
       })
       .catch((cause: unknown) =>
         setError(cause instanceof Error ? cause.message : "无法恢复复现方案。"),
       );
-  }, [conversationId]);
+  }, [conversationId, evidenceVersion]);
 
   const papers: SavedPaper[] = bundles.flatMap((bundle) =>
     bundle.papers.map((paper, index) => ({
       ...paper,
       bundleId: bundle.bundle_id,
-      selectionKey: `${bundle.bundle_id}:${index}`,
+      selectionKey: `${bundle.bundle_id}:${paper.paper_id ?? paper.url ?? index}`,
     })),
   );
   const generate = async () => {
@@ -47,12 +70,12 @@ export function ReproductionPipelinePanel({ conversationId }: { conversationId: 
     setBusy(true);
     setError(null);
     try {
-      setPipeline(
-        await createReproductionPipeline(conversationId, {
+      const savedPipeline = await createReproductionPipeline(conversationId, {
           evidence_bundle_id: paper.bundleId,
           paper_url: paper.url,
-        }),
-      );
+        });
+      setPipeline(savedPipeline);
+      onPipelineSaved?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法生成复现方案。");
     } finally {
@@ -142,7 +165,9 @@ export function ReproductionPipelinePanel({ conversationId }: { conversationId: 
             <p className="font-medium">Python 学习任务（不执行代码）</p>
             {pipeline.tasks.map((task) => (
               <p key={task.task_id} className="text-xs">
-                {task.title} · {task.status === "evidence_linked" ? "已关联用户实验记录" : "待用户记录"}
+                {task.title} · {linkedTaskIds.includes(task.task_id) || task.status === "evidence_linked"
+                  ? "已关联用户实验记录（未核验）"
+                  : "待用户记录"}
               </p>
             ))}
           </div>

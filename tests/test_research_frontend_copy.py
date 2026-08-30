@@ -15,6 +15,10 @@ PAPER_DRAFT_REVIEW = Path("frontend/components/research/PaperDraftReviewPanel.ts
 REPRODUCTION_EVALUATION = Path(
     "frontend/components/research/ReproductionEvaluationPanel.tsx"
 )
+ACADEMIC_SEARCH = Path("frontend/components/research/AcademicSearchPanel.tsx")
+EXPERIMENT_EVIDENCE = Path("frontend/components/research/ExperimentEvidencePanel.tsx")
+REPRODUCTION_PIPELINE = Path("frontend/components/research/ReproductionPipelinePanel.tsx")
+WORKFLOW = Path("frontend/components/research/ResearchWorkflowNav.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -214,8 +218,8 @@ def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -
     api_source = API.read_text(encoding="utf-8")
 
     assert "ReproductionEvaluationPanel" in workspace_source
-    assert "论文复现项目评估" in workspace_source
-    assert "我确认运行五维项目评估" in panel_source
+    assert "证据完整度评估" in workspace_source
+    assert "我确认运行证据完整度评估" in panel_source
     assert "不可评估" in panel_source
     assert "查看评分依据" in panel_source
     assert "复现改进任务" in panel_source
@@ -225,3 +229,39 @@ def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -
     assert "不代表复现成功或论文质量" in workspace_source
     assert "/reproduction-evaluations" in api_source
     assert "/reproduction-improvement-tasks/" in api_source
+
+
+def test_research_downstream_refreshes_only_from_saved_contracts() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    search_source = ACADEMIC_SEARCH.read_text(encoding="utf-8")
+    pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
+    experiment_source = EXPERIMENT_EVIDENCE.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "onEvidenceSaved" in search_source
+    assert "evidenceVersion" in workspace_source
+    assert "evidenceVersion" in pipeline_source
+    assert "paper_id" in api_source
+    assert "listReproductionPipelines" in experiment_source
+    assert "related_plan_item" in experiment_source
+    assert "不代表实验正确、完成或复现成功" in experiment_source
+    assert "来源范围：{item.source_scope}" in experiment_source
+
+
+def test_research_workflow_uses_the_five_step_primary_path() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    workflow_source = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "当前阶段" in workflow_source
+    assert "当前缺失信息" in workflow_source
+    assert "唯一下一步" in workflow_source
+    for label in (
+        "研究需求",
+        "检索计划",
+        "保存原始论文",
+        "复现方案",
+        "证据边界与下一步任务",
+    ):
+        assert label in workflow_source
+    assert "PaperDraftReviewPanel" in workspace_source
+    assert "ResearchMindMapPanel" in workspace_source

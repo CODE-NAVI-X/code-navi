@@ -39,6 +39,7 @@ class ReadyGenerator:
                 profile_patch=ResearchProfilePatch(
                     topic="Prompt learning",
                     research_questions=["Which prompt helps?"],
+                    context="A course comparison exercise",
                     methods=["baseline comparison"],
                 ),
                 recommended_action="prepare_search",

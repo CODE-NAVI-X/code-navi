@@ -41,7 +41,7 @@ const statusCopy: Record<
     className: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
   },
   checklist_complete: {
-    label: "清单项完整",
+    label: "记录项完整，仍待人工判断",
     className:
       "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
   },
@@ -247,7 +247,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
               Reproduction evaluation
             </p>
-            <h2 className="mt-1 text-sm font-bold">五维复现项目评估</h2>
+            <h2 className="mt-1 text-sm font-bold">五维证据完整度评估</h2>
           </div>
         </div>
         <button
@@ -263,7 +263,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
           ) : (
             <ShieldCheck className="h-3.5 w-3.5" />
           )}
-          {latest ? "基于当前记录重新评估" : "我确认运行五维项目评估"}
+          {latest ? "基于当前记录重新评估" : "我确认运行证据完整度评估"}
         </button>
       </div>
 

@@ -36,7 +36,13 @@ function searchErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "检索过程中发生未知错误。";
 }
 
-export function AcademicSearchPanel({ conversationId }: { conversationId: string }) {
+export function AcademicSearchPanel({
+  conversationId,
+  onEvidenceSaved,
+}: {
+  conversationId: string;
+  onEvidenceSaved?: () => void;
+}) {
   const [plan, setPlan] = useState<ResearchSearchPlan | null>(null);
   const [query, setQuery] = useState("");
   const [bundle, setBundle] = useState<ConversationEvidenceBundle | null>(null);
@@ -81,6 +87,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
       setBundle(await searchResearchEvidence(conversationId, query.trim(), selectedSources));
       setSelectedPaperUrls([]);
       setSavedNoteId(null);
+      onEvidenceSaved?.();
     } catch (requestError) {
       setError(searchErrorMessage(requestError));
     } finally {
@@ -100,6 +107,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
         selectedPaperUrls,
       );
       setSavedNoteId(saved.notebook_item_id);
+      onEvidenceSaved?.();
     } catch (requestError) {
       setError(searchErrorMessage(requestError));
     } finally {
