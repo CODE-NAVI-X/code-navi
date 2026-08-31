@@ -26,6 +26,7 @@ import {
   type ReferenceDraftPackage,
   type SelectedCitation,
 } from "@/lib/api/research";
+import { ClassificationBadge } from "./ClassificationBadge";
 
 const sectionOptions = ["引言", "相关工作", "方法", "实验", "讨论", "结论"];
 
@@ -229,12 +230,12 @@ function PanelIntroduction() {
         <Quote className="h-4 w-4 text-cyan-700 dark:text-cyan-300" />
         <div>
           <p className="font-semibold">受限证据引用与完整性检查</p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
+          <p className="mt-0.5 text-sm text-slate-500">
             仅使用当前会话已保存且由你明确选择的来源；章节映射与参考文献草案需要作者或导师核对。
           </p>
         </div>
       </div>
-      <p className="mt-2 text-[10px] leading-5 text-slate-600 dark:text-zinc-400">
+      <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-400">
         不会自动联网、补造元数据、选择文献、插入或改写原稿。检查结果也不代表引用正确或论文可以投稿。
       </p>
     </>
@@ -325,7 +326,7 @@ function CandidateSelector(props: CandidateSelectorProps) {
         type="button"
         onClick={props.onAdd}
         disabled={props.busy || !props.chosenId}
-        className="mt-2 inline-flex items-center gap-1 rounded-lg border border-cyan-300 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-800 disabled:opacity-50 dark:border-cyan-800 dark:text-cyan-300"
+        className="mt-2 inline-flex min-h-10 items-center gap-1 rounded-lg border border-cyan-300 px-3 py-2 text-sm font-semibold text-cyan-800 disabled:opacity-50 dark:border-cyan-800 dark:text-cyan-300"
       >
         {props.busy ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -349,7 +350,7 @@ function CandidateSummary({ candidate }: { candidate: CitationCandidate }) {
   return (
     <span className="min-w-0 flex-1">
       <span className="font-semibold">{candidate.paper_title}</span>
-      <span className="mt-1 block text-[10px] text-slate-500">
+      <span className="mt-1 block text-sm text-slate-500">
         {metadata} · {scope}
       </span>
       <a
@@ -357,7 +358,7 @@ function CandidateSummary({ candidate }: { candidate: CitationCandidate }) {
         target="_blank"
         rel="noreferrer"
         onClick={(event) => event.stopPropagation()}
-        className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 underline dark:text-sky-300"
+        className="mt-1 inline-flex min-h-10 items-center gap-1 text-sm font-semibold text-sky-700 underline dark:text-sky-300"
       >
         查看已保存来源 <ExternalLink className="h-3 w-3" />
       </a>
@@ -386,15 +387,17 @@ function SelectedCitationList({
             <code>{item.citation_placeholder}</code> → {item.target_document} /{" "}
             {item.target_section} / {item.paragraph_anchor}
           </p>
-          <p className="mt-1 text-[10px] text-slate-500">
-            {item.citation.paper_title} · {item.citation.abstract_scope}
+          <p className="mt-1 text-sm text-slate-500">
+            {item.citation.paper_title} ·{" "}
+            <ClassificationBadge classification={item.reference_entry.classification} /> ·{" "}
+            {item.citation.abstract_scope}
           </p>
           {item.reference_entry.to_verify_items.length > 0 && (
-            <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+            <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
               待核对：{item.reference_entry.to_verify_items.join("；")}
             </p>
           )}
-          <div className="mt-1 flex flex-wrap gap-3 text-[10px]">
+          <div className="mt-1 flex flex-wrap gap-3 text-sm">
             {item.status === "inserted" ? (
               <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
                 <CheckCircle2 className="h-3 w-3" /> 已由用户标记为人工插入
@@ -442,7 +445,7 @@ function CitationQualityPanel({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-semibold">引用完整性与来源—章节映射</p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
+          <p className="mt-0.5 text-sm text-slate-500">
             仅在你点击后检查当前选择；刷新只恢复历史结果，不会自动重跑。
           </p>
         </div>
@@ -450,7 +453,7 @@ function CitationQualityPanel({
           type="button"
           onClick={onRun}
           disabled={checking || busy}
-          className="inline-flex items-center gap-1 rounded-lg bg-sky-700 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+          className="inline-flex min-h-10 items-center gap-1 rounded-lg bg-sky-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           {checking ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -461,7 +464,7 @@ function CitationQualityPanel({
         </button>
       </div>
       {check && stale && (
-        <p className="mt-2 text-[10px] text-amber-700 dark:text-amber-300">
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">
           引用选择或人工插入状态已变化；下方是历史结果，请重新运行检查。
         </p>
       )}
@@ -500,7 +503,7 @@ function CitationQualityResult({ check }: { check: CitationQualityCheck }) {
       <IssueList title="重复选择" issues={check.duplicate_selections} />
       <IssueList title="元数据与信息范围缺口" issues={check.metadata_gaps} />
       <IssueList title="作者/导师核验清单" issues={check.author_verification_items} />
-      <p className="rounded bg-amber-50 p-2 text-[10px] leading-5 text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+      <p className="rounded bg-amber-50 p-2 text-sm leading-6 text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
         {check.boundary_note}
       </p>
     </div>
@@ -510,7 +513,7 @@ function CitationQualityResult({ check }: { check: CitationQualityCheck }) {
 function CoverageDetails({ check }: { check: CitationQualityCheck }) {
   return (
     <>
-      <p className="text-[10px] text-slate-500">
+      <p className="text-sm text-slate-500">
         该百分比只表示六个核心章节中已有多少章节建立来源映射，不代表这些章节必须引用，也不代表证据充分。
       </p>
       <div className="space-y-2">
@@ -520,15 +523,16 @@ function CoverageDetails({ check }: { check: CitationQualityCheck }) {
             className="rounded border border-sky-100 p-2 dark:border-sky-950"
           >
             <p className="font-semibold">
-              {item.target_section} · {item.source_titles.length} 个来源
+              {item.target_section} · {item.source_titles.length} 个来源 ·{" "}
+              <ClassificationBadge classification={item.classification} />
             </p>
-            <p className="mt-1 text-[10px] text-slate-500">
+            <p className="mt-1 text-sm text-slate-500">
               {item.source_titles.join("；")} · 信息范围：
               {item.information_scopes.join(" / ")}
             </p>
-            <p className="mt-1 text-[10px] text-slate-500">依据：{item.basis}</p>
+            <p className="mt-1 text-sm text-slate-500">依据：{item.basis}</p>
             {item.to_verify_items.length > 0 && (
-              <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
                 待核对：{item.to_verify_items.join("；")}
               </p>
             )}
@@ -536,7 +540,7 @@ function CoverageDetails({ check }: { check: CitationQualityCheck }) {
         ))}
       </div>
       {check.unmapped_core_sections.length > 0 && (
-        <p className="text-[10px] text-slate-500">
+        <p className="text-sm text-slate-500">
           尚无来源映射（不等于必须补引用）：
           {check.unmapped_core_sections.join("、")}
         </p>
@@ -552,7 +556,7 @@ function IssueList({ title, issues }: { title: string; issues: CitationQualityIs
       <summary className="cursor-pointer font-semibold">
         {title}（{issues.length}）
       </summary>
-      <ul className="mt-2 space-y-1 text-[10px] leading-5">
+      <ul className="mt-2 space-y-1 text-sm leading-6">
         {issues.map((issue, index) => (
           <li
             key={
@@ -563,7 +567,7 @@ function IssueList({ title, issues }: { title: string; issues: CitationQualityIs
               String(index)
             }
           >
-            {issue.message}
+            <ClassificationBadge classification={issue.classification} /> {issue.message}
             <span className="block text-slate-500">依据：{issue.basis}</span>
           </li>
         ))}
@@ -584,7 +588,7 @@ function ReferenceDraftList({
   return (
     <details className="mt-3" open>
       <summary className="cursor-pointer font-semibold">可核验参考文献草案（{referencePackage.entries.length}）</summary>
-      <p className="mt-2 text-[10px] leading-5 text-amber-700 dark:text-amber-300">
+      <p className="mt-2 text-sm leading-6 text-amber-700 dark:text-amber-300">
         {referencePackage.boundary_note}
       </p>
       {referencePackage.empty_state_message && (
@@ -606,9 +610,9 @@ function ReferenceDraftList({
         {referencePackage.entries.map((reference) => (
           <li
             key={reference.selected_citation_id}
-            className="rounded bg-white/80 p-2 text-[11px] leading-5 dark:bg-zinc-950/70"
+          className="rounded bg-white/80 p-2 text-sm leading-6 dark:bg-zinc-950/70"
           >
-            <p className="text-[10px] text-amber-700 dark:text-amber-300">
+            <p className="text-sm text-amber-700 dark:text-amber-300">
               {reference.format_notice}
             </p>
             <p>{reference.display_text}</p>
@@ -620,9 +624,10 @@ function ReferenceDraftList({
             >
               查看原始来源 <ExternalLink className="h-3 w-3" />
             </a>
-            <p className="mt-1 text-[10px] text-slate-500">
+            <p className="mt-1 text-sm text-slate-500">
+              <ClassificationBadge classification={reference.classification} />
               {reference.to_verify_items.length
-                ? "待核对：" + reference.to_verify_items.join("；")
+                ? " · 待核对：" + reference.to_verify_items.join("；")
                 : ""}
             </p>
           </li>
@@ -634,7 +639,7 @@ function ReferenceDraftList({
           <ul className="mt-1 list-disc space-y-1 pl-4 text-amber-800 dark:text-amber-200">
             {referencePackage.verification_items.map((item) => (
               <li key={item.selected_citation_id}>
-                {item.missing_fields.join("；")}
+                {item.missing_fields.join("；")} · <ClassificationBadge classification={item.classification} />
               </li>
             ))}
           </ul>
@@ -647,7 +652,7 @@ function ReferenceDraftList({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded bg-slate-50 p-2 dark:bg-zinc-900">
-      <p className="text-[10px] text-slate-500">{label}</p>
+      <p className="text-sm text-slate-500">{label}</p>
       <p className="mt-0.5 font-semibold">{value}</p>
     </div>
   );

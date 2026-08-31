@@ -63,9 +63,13 @@ def test_difficulty_uses_validated_model_wording_without_changing_fact_boundary(
     generator = FakeArtifactGenerator(
         ArtifactLlmOutcome.generated(
             '{"title":"个性化难点","information_scope":"profile_and_plan_only",'
+            '"core_judgment":"画像已能支撑方向判断，实验设置仍需确认。",'
             '"items":[{"area":"方法难点","content":"建议先固定即时与延迟反馈的比较条件。",'
             '"classification":"inference","basis":"已确认研究问题和对比实验方法。",'
-            '"source_scope":"profile_and_plan_only"}],'
+            '"source_scope":"profile_and_plan_only",'
+            '"relevance":"决定对比实验是否可比。",'
+            '"suggested_action":"先写下一组固定的比较条件。"}],'
+            '"next_action":"先固定比较条件，再生成研究计划。",'
             '"provenance_note":"模型根据已确认画像提出建议，仍需验证。"}'
         )
     )
@@ -123,6 +127,8 @@ def test_evidence_scoped_model_difficulty_keeps_a_saved_evidence_reference() -> 
                 {
                     "title": "证据关联难点",
                     "information_scope": "metadata_and_abstract_only",
+                    "core_judgment": "证据范围足以支持方向判断，但方法细节仍需核验。",
+                    "next_action": "围绕已保存摘要先固定一条核验清单。",
                     "items": [
                         {
                             "area": "方法难点",
@@ -130,6 +136,8 @@ def test_evidence_scoped_model_difficulty_keeps_a_saved_evidence_reference() -> 
                             "classification": "inference",
                             "basis": "所选论文摘要",
                             "source_scope": "metadata_and_abstract_only",
+                            "relevance": "决定复现任务的模型模块边界。",
+                            "suggested_action": "先记录待核验的方法条件。",
                             "evidence_refs": [
                                 {
                                     "bundle_id": bundle.bundle_id,
@@ -235,6 +243,8 @@ def test_selected_paper_reference_remains_allowed_after_context_paper_limit() ->
                 {
                     "title": "选中论文难点",
                     "information_scope": "metadata_and_abstract_only",
+                    "core_judgment": "选中论文与当前研究问题对口，摘要外细节待核验。",
+                    "next_action": "核对摘要范围后再生成复现方案。",
                     "items": [
                         {
                             "area": "方法难点",
@@ -242,6 +252,8 @@ def test_selected_paper_reference_remains_allowed_after_context_paper_limit() ->
                             "classification": "inference",
                             "basis": "选中论文摘要",
                             "source_scope": "metadata_and_abstract_only",
+                            "relevance": "决定复现方案的可行性边界。",
+                            "suggested_action": "把方法细节列入正文核验清单。",
                             "evidence_refs": [selected_ref.model_dump(mode="json")],
                         }
                     ],

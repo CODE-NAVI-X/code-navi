@@ -89,6 +89,8 @@ def _plan_json() -> str:
         "content": "模型建议先确认一个可观察结果。",
         "classification": "inference",
         "basis": "已确认科研画像。",
+        "relevance": "与当前研究问题直接相关。",
+        "suggested_action": "先在元数据范围核对来源。",
     }
     return __import__("json").dumps(
         {
@@ -100,12 +102,16 @@ def _plan_json() -> str:
                     "content": "数据范围待核验。",
                     "classification": "to_verify",
                     "basis": "画像未覆盖。",
+                    "relevance": "决定实验可行性。",
+                    "suggested_action": "确认数据来源后再安排实验。",
                 }
             ],
             "two_week_mvp_plan": [entry],
             "risks_and_mitigations": [{"risk": entry, "mitigation": entry}],
             "suggested_search_keywords": ["研究主题"],
             "pending_items": [],
+            "core_judgment": "画像已达到计划准入条件；数据条件仍需核验。",
+            "next_action": "由用户主动发起受限检索并保存论文。",
             "provenance_note": "模型生成。",
         },
         ensure_ascii=False,

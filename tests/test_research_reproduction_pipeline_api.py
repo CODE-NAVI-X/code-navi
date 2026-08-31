@@ -112,6 +112,15 @@ def test_pipeline_requires_a_saved_selected_paper_and_restores_without_search() 
                     "paper_url": "https://example.test/missing",
                 },
             )
+            conditions = client.put(
+                f"/api/v1/research/conversations/{conversation_id}/reproduction-conditions",
+                json={
+                    "hardware": "8 核 CPU",
+                    "available_time": "两周",
+                    "reproduction_goal": "核对训练流程与指标记录",
+                },
+            )
+            assert conditions.status_code == 200
             created = client.post(
                 f"/api/v1/research/conversations/{conversation_id}/reproduction-pipelines",
                 json={

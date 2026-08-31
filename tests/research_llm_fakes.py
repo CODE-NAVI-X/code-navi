@@ -41,12 +41,22 @@ def _entry(content: str, classification: str = "inference") -> dict[str, str]:
     return {"content": content, "classification": classification, "basis": "模型基于已保存上下文。"}
 
 
+def _contract_entry(content: str, classification: str = "inference") -> dict[str, str]:
+    """Plan entry that satisfies the checkpoint-3 evidence contract."""
+    return {
+        **_entry(content, classification),
+        "relevance": "与当前已确认研究问题直接相关。",
+        "suggested_action": "先核对来源范围，再执行下一步。",
+    }
+
+
 def _topic(context: dict[str, object], conversation_id: str) -> str:
     scope = str(context.get("evidence_scope") or "profile_and_plan_only")
     return json.dumps(
         {
             "title": "模型难点分析",
             "information_scope": scope,
+            "core_judgment": "当前画像已覆盖研究问题，实验设置与数据条件仍是主要缺口。",
             "items": [
                 {
                     "area": "方法难点",
@@ -54,6 +64,8 @@ def _topic(context: dict[str, object], conversation_id: str) -> str:
                     "classification": "inference",
                     "basis": "已确认研究问题。",
                     "source_scope": "profile_and_plan_only",
+                    "relevance": "决定两周 MVP 能否给出可信比较。",
+                    "suggested_action": "在检索文献后固定一条对照实验设计。",
                 },
                 {
                     "area": "数据难点",
@@ -61,8 +73,11 @@ def _topic(context: dict[str, object], conversation_id: str) -> str:
                     "classification": "to_verify",
                     "basis": "当前画像未验证数据条件。",
                     "source_scope": "profile_and_plan_only",
+                    "relevance": "影响全部训练与评估步骤的可行性。",
+                    "suggested_action": "先确认数据来源和许可，再安排实验。",
                 },
             ],
+            "next_action": "补充数据条件后生成研究计划。",
             "provenance_note": "模型基于已确认画像生成。",
         },
         ensure_ascii=False,
@@ -80,15 +95,23 @@ def _paper_analysis(context: dict[str, object], conversation_id: str) -> str:
             "paper_url": str(paper.get("url") or ""),
             "information_scope": scope,
             "abstract_available": abstract,
+            "core_judgment": "该论文与当前研究问题直接相关，但当前来源范围外的细节仍待核验。",
             "items": [
                 {
                     "area": "方法难点",
-                    "content": "方法定义与对照条件需核验。",
+                    "content": (
+                        f"需结合论文《{paper.get('title') or '选中论文'}》"
+                        "核验方法定义与对照条件。"
+                    ),
                     "classification": "to_verify",
                     "basis": "仅元数据和摘要范围。",
                     "source_scope": scope,
+                    "relevance": "决定当前复现任务的模型模块设计。",
+                    "suggested_action": "先在元数据范围记录待核验的方法条件。",
                 }
             ],
+            "summary": "当前来源范围已覆盖问题定位；方法细节与实验设置仍需正文核验。",
+            "next_action": "核对可复现部分后再决定是否读取正文。",
             "provenance_note": (
                 "模型基于已保存论文正文片段生成。"
                 if full_text
@@ -164,6 +187,8 @@ def _reproduction(context: dict[str, object], conversation_id: str) -> str:
             "evidence_links": [],
         }
 
+    # 用户条件不进入模型载荷：模型不能引入 fact；builder 会在校验后把
+    # user_provided_conditions 的用户事实与验收条件占位补进 resources/goal。
     return json.dumps(
         {
             "schema_version": "reproduction-pipeline.v1",
@@ -189,6 +214,11 @@ def _reproduction(context: dict[str, object], conversation_id: str) -> str:
             "resources": [item("设备与时间待确认。")],
             "risks": [item("摘要不足以证明可复现性。")],
             "ethics": [item("数据治理与伦理待确认。")],
+            "acceptance_criteria": [
+                item(
+                    "以论文原始基线为验收参照；数据划分、超参数与 Accuracy 数值保持待核验。"
+                )
+            ],
             "confirmation_items": [item("确认边界后再人工实验。")],
             "tasks": [task("confirm-python-environment"), task("compare-python-baseline")],
             "two_week_mvp": [item("两周 MVP 范围待确认。", "inference")],
@@ -347,19 +377,23 @@ def _research_mindmap(context: dict[str, object], conversation_id: str) -> str:
 def _research_plan(context: dict[str, object], conversation_id: str) -> str:
     return json.dumps(
         {
-            "research_title": _entry("模型生成的研究题目。"),
-            "research_goal": _entry("模型生成的研究目标。"),
-            "candidate_methods_or_baselines": [_entry("模型生成的候选方法。")],
-            "suggested_datasets_or_metrics": [_entry("数据与指标待核验。", "to_verify")],
-            "two_week_mvp_plan": [_entry("模型生成的两周验证步骤。")],
+            "research_title": _contract_entry("模型生成的研究题目。"),
+            "research_goal": _contract_entry("模型生成的研究目标。"),
+            "candidate_methods_or_baselines": [_contract_entry("模型生成的候选方法。")],
+            "suggested_datasets_or_metrics": [
+                _contract_entry("数据与指标待核验。", "to_verify")
+            ],
+            "two_week_mvp_plan": [_contract_entry("模型生成的两周验证步骤。")],
             "risks_and_mitigations": [
                 {
-                    "risk": _entry("模型生成的风险。", "to_verify"),
-                    "mitigation": _entry("模型生成的规避建议."),
+                    "risk": _contract_entry("模型生成的风险。", "to_verify"),
+                    "mitigation": _contract_entry("模型生成的规避建议."),
                 }
             ],
             "suggested_search_keywords": ["模型生成关键词"],
             "pending_items": [],
+            "core_judgment": "画像已达到计划准入条件；数据条件仍需核验。",
+            "next_action": "由用户主动发起受限检索并保存论文。",
             "provenance_note": "模型生成。",
         },
         ensure_ascii=False,

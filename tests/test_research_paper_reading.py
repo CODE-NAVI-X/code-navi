@@ -159,6 +159,7 @@ def test_paper_analysis_passes_read_text_to_generator_and_marks_scope() -> None:
                 "paper_url": paper.url,
                 "information_scope": "full_text_user_triggered",
                 "abstract_available": True,
+                "core_judgment": "正文片段足以支撑实验设置的判断。",
                 "items": [{
                     "area": "实验",
                     "content": "正文明确描述了 Cora 评估设置。",
@@ -167,7 +168,11 @@ def test_paper_analysis_passes_read_text_to_generator_and_marks_scope() -> None:
                     "source_scope": "full_text_user_triggered",
                     "chapter_key": "experiments",
                     "chapter_order": 4,
+                    "relevance": "直接决定复现的评估流程。",
+                    "suggested_action": "按正文设置搭建评估脚本。",
                 }],
+                "summary": "正文已覆盖实验设置；其余章节仍待阅读。",
+                "next_action": "继续核对方法章节后生成复现方案。",
                 "provenance_note": "模型基于正文片段生成。",
             }, ensure_ascii=False))
 

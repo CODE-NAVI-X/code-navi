@@ -62,20 +62,20 @@ function DimensionCard({
     <article className="rounded-2xl border border-slate-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">
+          <p className="text-base font-bold text-slate-900 dark:text-zinc-100">
             {dimension.label}
           </p>
-          <p className="mt-1 text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
+          <p className="mt-1 text-sm font-semibold text-slate-500 dark:text-zinc-400">
             {dimension.score === null ? "未评分 / 20" : `${dimension.score} / 20`}
           </p>
         </div>
-        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${status.className}`}>
+        <span className={`rounded-full px-2 py-1 text-sm font-bold ${status.className}`}>
           {status.label}
         </span>
       </div>
 
       {dimension.issues.length > 0 && (
-        <ul className="mt-3 space-y-1 text-[11px] leading-5 text-rose-700 dark:text-rose-300">
+        <ul className="mt-3 space-y-1 text-sm leading-6 text-rose-700 dark:text-rose-300">
           {dimension.issues.map((issue) => (
             <li key={issue} className="flex gap-1.5">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -85,13 +85,13 @@ function DimensionCard({
         </ul>
       )}
 
-      <div className="mt-3 rounded-xl bg-slate-50 p-2.5 text-[10px] leading-5 text-slate-600 dark:bg-zinc-900 dark:text-zinc-400">
+      <div className="mt-3 rounded-xl bg-slate-50 p-2.5 text-sm leading-6 text-slate-600 dark:bg-zinc-900 dark:text-zinc-400">
         <p className="font-semibold text-slate-700 dark:text-zinc-300">事实边界</p>
         <p>{dimension.fact_boundary}</p>
       </div>
 
       <details className="mt-2 rounded-xl border border-slate-200 dark:border-zinc-800">
-        <summary className="cursor-pointer px-2.5 py-2 text-[11px] font-semibold text-slate-700 dark:text-zinc-300">
+        <summary className="min-h-10 cursor-pointer px-2.5 py-2 text-sm font-semibold text-slate-700 dark:text-zinc-300">
           查看评分依据（{dimension.evidence.length} 条）
         </summary>
         <div className="space-y-2 border-t border-slate-200 p-2.5 dark:border-zinc-800">
@@ -99,7 +99,7 @@ function DimensionCard({
             dimension.evidence.map((item, index) => (
               <div
                 key={`${item.source_type}-${item.source_id ?? index}-${index}`}
-                className="rounded-lg bg-slate-50 p-2 text-[10px] leading-5 dark:bg-zinc-900"
+                className="rounded-lg bg-slate-50 p-2 text-sm leading-6 dark:bg-zinc-900"
               >
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="font-semibold">{item.label}</span>
@@ -111,7 +111,7 @@ function DimensionCard({
               </div>
             ))
           ) : (
-            <p className="text-[10px] text-slate-500">当前没有足以评分的保存证据。</p>
+            <p className="text-sm text-slate-500">当前没有足以评分的保存证据。</p>
           )}
         </div>
       </details>
@@ -138,7 +138,7 @@ function TaskActions({
           type="button"
           disabled={busy}
           onClick={() => onUpdate(task, "accepted")}
-          className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-50"
+          className="inline-flex min-h-10 items-center gap-1 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
         >
           <Check className="h-3.5 w-3.5" /> 接受任务
         </button>
@@ -147,7 +147,7 @@ function TaskActions({
           type="button"
           disabled={busy}
           onClick={() => onUpdate(task, "completed")}
-          className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-50"
+          className="inline-flex min-h-10 items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
         >
           <CheckCircle2 className="h-3.5 w-3.5" /> 标记为已完成
         </button>
@@ -156,7 +156,7 @@ function TaskActions({
         type="button"
         disabled={busy}
         onClick={() => onUpdate(task, "skipped")}
-        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
+        className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
       >
         <SkipForward className="h-3.5 w-3.5" /> 跳过
       </button>
@@ -241,7 +241,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
             <ClipboardList className="h-4 w-4" />
           </span>
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
+            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
               Reproduction evaluation
             </p>
             <h2 className="mt-1 text-sm font-bold">五维证据完整度评估</h2>
@@ -251,7 +251,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
           type="button"
           disabled={creating}
           onClick={() => void createEvaluation()}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
         >
           {creating ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -264,7 +264,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
         </button>
       </div>
 
-      <p className="mt-3 text-[11px] leading-5 text-slate-600 dark:text-zinc-400">
+      <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-400">
         只读取当前会话已经保存的画像、论文选择、复现 Pipeline 和实验文本。不会联网、读取全文、执行代码或修改论文；评分只表示记录与证据完整度。
       </p>
       {error && (
@@ -289,7 +289,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
           <div className="rounded-2xl bg-slate-950 p-4 text-white dark:bg-zinc-950">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">
+              <p className="text-sm uppercase tracking-[0.18em] text-slate-400">
                   Evidence completeness
                 </p>
                 <p className="mt-1 text-2xl font-black">
@@ -299,7 +299,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
                   </span>
                 </p>
               </div>
-              <p className="max-w-xl text-[10px] leading-5 text-slate-300">
+              <p className="max-w-xl text-sm leading-6 text-slate-300">
                 {latest.score_summary.display}
               </p>
             </div>
@@ -309,7 +309,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-300">
+            <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-300">
               <span>已选论文 {latest.selected_paper_count}</span>
               <span>·</span>
               <span>实验记录 {latest.experiment_record_count}</span>
@@ -321,7 +321,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
           </div>
 
           {latest.pipeline_contract_status === "unavailable" && (
-            <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+            <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
               <FileWarning className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
                 当前会话尚未生成复现方案，因此“复现路径与可执行性”保持不可评估。请先选择已保存论文并主动生成 Pipeline；评价模块不会用普通研究计划冒充复现方案。
@@ -336,8 +336,8 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
           </div>
 
           <section className="rounded-2xl border border-indigo-200 p-3 dark:border-indigo-900/70">
-            <h3 className="text-xs font-bold">复现改进任务</h3>
-            <p className="mt-1 text-[10px] leading-5 text-slate-500 dark:text-zinc-400">
+            <h3 className="text-base font-bold">复现改进任务</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-zinc-400">
               任务来自本次评估的证据缺口；系统不会自动执行，也不会自动认定任务已经完成。
             </p>
             {latest.improvement_tasks.length ? (
@@ -348,12 +348,12 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
                     className="rounded-xl bg-slate-50 p-3 dark:bg-zinc-950/60"
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <p className="text-[11px] font-bold">{task.title}</p>
-                      <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-semibold text-slate-600 dark:bg-zinc-900 dark:text-zinc-300">
+                      <p className="text-base font-bold">{task.title}</p>
+                      <span className="shrink-0 rounded-full bg-white px-2 py-1 text-sm font-semibold text-slate-600 dark:bg-zinc-900 dark:text-zinc-300">
                         {taskStatusCopy[task.status]}
                       </span>
                     </div>
-                    <p className="mt-1 text-[11px] leading-5 text-slate-600 dark:text-zinc-400">
+                    <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-zinc-400">
                       {task.description}
                     </p>
                     <TaskActions
@@ -365,11 +365,11 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
                 ))}
               </div>
             ) : (
-              <p className="mt-3 text-[11px] text-slate-500">本次评估没有生成改进任务。</p>
+              <p className="mt-3 text-sm text-slate-500">本次评估没有生成改进任务。</p>
             )}
           </section>
 
-          <p className="rounded-xl bg-slate-50 p-3 text-[10px] leading-5 text-slate-500 dark:bg-zinc-950/60 dark:text-zinc-400">
+          <p className="rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-500 dark:bg-zinc-950/60 dark:text-zinc-400">
             {latest.boundary_note}
           </p>
         </div>

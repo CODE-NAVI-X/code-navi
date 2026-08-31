@@ -166,7 +166,7 @@ export function ProviderStatusCard() {
       <div className="app-card absolute right-0 z-30 mt-2 max-h-[calc(100vh-7rem)] w-[min(25rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl p-4 shadow-xl">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-zinc-400">Model connection</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-zinc-400">Model connection</p>
             <h2 className="mt-1 text-sm font-bold">科研模型连接</h2>
           </div>
           <button type="button" onClick={() => void refresh()} disabled={loading || testing || saving} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-50 dark:hover:bg-zinc-800" aria-label="刷新模型状态">
@@ -237,7 +237,7 @@ export function ProviderStatusCard() {
               {saving || testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               {saving ? "正在安全保存…" : testing ? "正在验证真实连接…" : "保存并测试连接"}
             </button>
-            <p className="text-[10px] leading-4 text-slate-500 dark:text-zinc-400">仅允许从本机打开此入口。Key 通过本机接口写入当前项目 Git 已忽略的配置文件，不进入对话、数据库或 localStorage；保存成功后输入框会立即清空。</p>
+        <p className="text-sm leading-6 text-slate-500 dark:text-zinc-400">仅允许从本机打开此入口。Key 通过本机接口写入当前项目 Git 已忽略的配置文件，不进入对话、数据库或 localStorage；保存成功后输入框会立即清空。</p>
           </form>
         )}
 
@@ -247,7 +247,7 @@ export function ProviderStatusCard() {
           <div className={`mt-3 rounded-xl border p-3 text-xs leading-5 ${testResult.connected ? "border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300" : "border-rose-200 text-rose-700 dark:border-rose-900 dark:text-rose-300"}`}>
             <p className="font-semibold">{testResult.message}</p>
             <p>耗时：{testResult.latency_ms} ms</p>
-            {testResult.run_id && <p className="break-all font-mono text-[10px]">Run ID：{testResult.run_id}</p>}
+{testResult.run_id && <p className="break-all font-mono text-xs">Run ID：{testResult.run_id}</p>}
           </div>
         )}
 

@@ -202,6 +202,11 @@ class ResearchPlanEntry(BaseModel):
     content: str = Field(min_length=1, max_length=1000)
     classification: PlanClassification
     basis: str = Field(min_length=1, max_length=1000)
+    # Evidence-contract fields (checkpoint 3): every recommendation must say
+    # why it matters to the current research question and what to do next.
+    # Optional so previously stored plans still restore without migration.
+    relevance: str | None = Field(default=None, max_length=1000)
+    suggested_action: str | None = Field(default=None, max_length=1000)
 
 
 class ResearchPlanRisk(BaseModel):
@@ -227,6 +232,9 @@ class ConversationResearchPlan(BaseModel):
     risks_and_mitigations: list[ResearchPlanRisk] = Field(min_length=1)
     suggested_search_keywords: list[str] = Field(min_length=1, max_length=8)
     pending_items: list[ResearchPlanEntry] = Field(default_factory=list)
+    # Evidence contract: top-line verdict and a single highlighted next action.
+    core_judgment: str | None = Field(default=None, max_length=1000)
+    next_action: str | None = Field(default=None, max_length=1000)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules"] = "rules"
     run_id: str | None = None
@@ -321,6 +329,9 @@ class ResearchAnalysisItem(BaseModel):
     # validated against the bounded sections supplied to the model.
     chapter_key: str | None = Field(default=None, max_length=50)
     chapter_order: int | None = Field(default=None, ge=1, le=6)
+    # Evidence-contract fields (checkpoint 3); optional for stored legacy data.
+    relevance: str | None = Field(default=None, max_length=1000)
+    suggested_action: str | None = Field(default=None, max_length=1000)
     evidence_refs: list[EvidenceReference] = Field(default_factory=list, max_length=8)
 
 
@@ -334,6 +345,10 @@ class TopicDifficultyAnalysis(BaseModel):
     information_scope: Literal[
         "profile_and_plan_only", "metadata_and_abstract_only", "full_text_user_triggered"
     ]
+    # One-sentence verdict on top plus a single highlighted next action
+    # (evidence contract).  Optional so stored legacy analyses still restore.
+    core_judgment: str | None = Field(default=None, max_length=1000)
+    next_action: str | None = Field(default=None, max_length=1000)
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
@@ -377,6 +392,11 @@ class PaperAnalysis(BaseModel):
         "metadata_and_abstract_only", "full_text_user_triggered"
     ] = "metadata_and_abstract_only"
     abstract_available: bool
+    # Evidence contract: one-sentence verdict, closing summary and a single
+    # highlighted next action.  Optional so stored legacy analyses still load.
+    core_judgment: str | None = Field(default=None, max_length=1000)
+    summary: str | None = Field(default=None, max_length=2000)
+    next_action: str | None = Field(default=None, max_length=1000)
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
@@ -603,6 +623,7 @@ class ResearchConversationResponse(BaseModel):
     paper_analysis: PaperAnalysis | None = None
     topic_difficulty_analysis: TopicDifficultyAnalysis | None = None
     experiment_design: ExperimentDesign | None = None
+    reproduction_conditions: ReproductionConditions | None = None
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
     recommended_action: Literal[
@@ -824,6 +845,87 @@ class ReproductionTask(BaseModel):
     evidence_links: list[ReproductionTaskEvidenceLink] = Field(default_factory=list, max_length=30)
 
 
+class ReproductionConditions(BaseModel):
+    """User-provided reproduction environment, time and goal (checkpoint 4).
+
+    Everything here comes from the user, never from model assumptions; the
+    pipeline generation refuses to run until the key conditions are filled.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["reproduction-conditions.v1"] = "reproduction-conditions.v1"
+    hardware: str | None = Field(default=None, max_length=500)
+    vram: str | None = Field(default=None, max_length=500)
+    operating_system: str | None = Field(default=None, max_length=500)
+    python_environment: str | None = Field(default=None, max_length=500)
+    available_time: str | None = Field(default=None, max_length=500)
+    reproduction_goal: str | None = Field(default=None, max_length=1000)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ReadingReport(BaseModel):
+    """The user's own reading summary of a saved paper (checkpoint 5).
+
+    Stored verbatim as user-submitted text; it is never merged into the
+    paper-analysis facts and never treated as the paper's own content.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["reading-report.v1"] = "reading-report.v1"
+    report_id: str = Field(min_length=8, max_length=64)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=1000)
+    content: str = Field(min_length=1, max_length=8000)
+    source_scope: Literal["user_submitted_text_unverified"] = (
+        "user_submitted_text_unverified"
+    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ReadingReportInput(BaseModel):
+    """Request body for submitting a reading report."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    paper_url: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=1000)
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class ReproductionConditionsInput(BaseModel):
+    """Request body for saving user reproduction conditions."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    hardware: str | None = Field(default=None, max_length=500)
+    vram: str | None = Field(default=None, max_length=500)
+    operating_system: str | None = Field(default=None, max_length=500)
+    python_environment: str | None = Field(default=None, max_length=500)
+    available_time: str | None = Field(default=None, max_length=500)
+    reproduction_goal: str | None = Field(default=None, max_length=1000)
+
+
+_REQUIRED_CONDITION_KEYS: tuple[tuple[str, str], ...] = (
+    ("hardware", "硬件（GPU/CPU）"),
+    ("available_time", "可用时间"),
+    ("reproduction_goal", "复现目标"),
+)
+
+
+def missing_required_reproduction_conditions(
+    conditions: ReproductionConditions | None,
+) -> list[str]:
+    """Labels of key conditions the user still has to provide."""
+    missing: list[str] = []
+    for key, label in _REQUIRED_CONDITION_KEYS:
+        value = getattr(conditions, key) if conditions is not None else None
+        if not (value or "").strip():
+            missing.append(label)
+    return missing
+
+
 class ReproductionPipeline(BaseModel):
     """Restorable rules-only plan for a user-selected saved research paper."""
 
@@ -844,6 +946,7 @@ class ReproductionPipeline(BaseModel):
     resources: list[ReproductionPipelineItem]
     risks: list[ReproductionPipelineItem]
     ethics: list[ReproductionPipelineItem]
+    acceptance_criteria: list[ReproductionPipelineItem] = Field(default_factory=list, max_length=12)
     confirmation_items: list[ReproductionPipelineItem]
     tasks: list[ReproductionTask]
     two_week_mvp: list[ReproductionPipelineItem]

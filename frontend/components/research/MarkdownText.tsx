@@ -38,7 +38,7 @@ function renderInline(text: string): ReactNode[] {
 /** Render a deliberately small, HTML-free Markdown subset for model replies. */
 export function MarkdownText({ content }: { content: string }) {
   return (
-    <div className="space-y-2 text-sm leading-7">
+    <div className="space-y-3 text-base leading-7">
       {content.split(/\r?\n/).map((rawLine, index) => {
         const line = rawLine.trim();
         if (!line) return <div key={index} className="h-1" aria-hidden="true" />;

@@ -47,15 +47,20 @@ def _paper_analysis_payload(*, url: str, abstract: bool) -> str:
             "title": "模型难点分析",
             "paper_url": url,
             "abstract_available": abstract,
+            "core_judgment": "该论文与当前研究问题相关，但当前来源范围外细节待核验。",
             "items": [
                 {
                     "area": "方法难点",
-                    "content": "方法定义与对照条件需核验。",
+                    "content": "需核验该论文 (paper) 的方法定义与对照条件，来源范围外保持待核验。",
                     "classification": "to_verify",
                     "basis": "仅元数据和摘要范围。",
                     "source_scope": "metadata_and_abstract_only",
+                    "relevance": "决定复现任务的模型模块边界。",
+                    "suggested_action": "先记录待核验的方法条件。",
                 }
             ],
+            "summary": "当前来源范围已覆盖问题定位；方法细节仍需正文核验。",
+            "next_action": "核对可复现部分后再决定是否读取正文。",
             "provenance_note": "模型基于已保存元数据/摘要生成。",
         },
         ensure_ascii=False,
@@ -211,6 +216,8 @@ def test_topic_difficulty_analysis_marks_unverified_feasibility_as_to_verify() -
                 {
                     "title": "RAG 评测难点",
                     "information_scope": "profile_and_plan_only",
+                    "core_judgment": "对照条件与数据许可是当前评测可行性的主要缺口。",
+                    "next_action": "先确认检索日志许可，再固定对照条件。",
                     "items": [
                         {
                             "area": "方法难点",
@@ -218,6 +225,8 @@ def test_topic_difficulty_analysis_marks_unverified_feasibility_as_to_verify() -
                             "classification": "inference",
                             "basis": "已确认研究问题和方法。",
                             "source_scope": "profile_and_plan_only",
+                            "relevance": "决定评测结论是否可比。",
+                            "suggested_action": "先固定一组对照条件。",
                         },
                         {
                             "area": "数据难点",
@@ -225,6 +234,8 @@ def test_topic_difficulty_analysis_marks_unverified_feasibility_as_to_verify() -
                             "classification": "to_verify",
                             "basis": "当前画像未验证数据条件。",
                             "source_scope": "profile_and_plan_only",
+                            "relevance": "影响评测数据能否合法使用。",
+                            "suggested_action": "先确认许可再安排数据采集。",
                         },
                     ],
                     "provenance_note": "模型基于已确认画像生成。",

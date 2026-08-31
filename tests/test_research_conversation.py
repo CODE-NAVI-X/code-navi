@@ -728,9 +728,13 @@ def test_difficulty_personalization_requires_explicit_endpoint(
     generator = StaticArtifactGenerator(
         ArtifactLlmOutcome.generated(
             '{"title":"个性化难点","information_scope":"profile_and_plan_only",'
+            '"core_judgment":"当前画像尚不完整，需要先收窄研究问题。",'
             '"items":[{"area":"问题边界","content":"需要先收窄问题。",'
             '"classification":"to_verify","basis":"当前画像尚不完整。",'
-            '"source_scope":"profile_and_plan_only"}],'
+            '"source_scope":"profile_and_plan_only",'
+            '"relevance":"问题边界决定检索与实验范围。",'
+            '"suggested_action":"先补充一个可比较的研究问题。"}],'
+            '"next_action":"补充研究问题后生成研究计划。",'
             '"provenance_note":"用户显式触发的个性化建议。"}',
             run_id="run-artifact",
             event_count=3,
@@ -999,6 +1003,47 @@ def test_rebuilt_service_restores_confirmed_context_for_the_next_run() -> None:
     assert payload["confirmed_learning_context"]["topic"] == "已确认主题"
 
 
+def test_confirmed_context_creates_a_learning_background_opening_summary() -> None:
+    provenance = ConfirmedContextProvenance(
+        transfer_id="transfer-opening-summary",
+        source_module="learning",
+        source_object=ContextSourceObject(type="notebook_item", id="note-opening"),
+        source_scope_id="learning-session-opening",
+        target_module="research",
+        topic="学习困难预测",
+        summary="已确认的学习背景：用户比较关注公开课程数据中的学习困难预测。",
+        selected_content=[],
+        confirmed_at=datetime.now(UTC),
+    )
+
+    with SessionLocal() as db:
+        created = ResearchConversationService().create_from_confirmed_context(provenance, db)
+
+    opening = created.messages[-1]
+    assert opening.role == "assistant"
+    assert "学习背景开场总结" in opening.content
+    assert provenance.summary in opening.content
+    assert "不会自动成为研究结论" in opening.content
+
+
+def test_entry_branch_choice_does_not_become_a_confirmed_research_topic(
+    client: TestClient,
+) -> None:
+    created = client.post("/api/v1/research/conversations", json={})
+    conversation_id = created.json()["conversation_id"]
+
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/messages",
+        json={"message": "已有研究兴趣：我想围绕一个主题继续研究"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["profile"]["topic"] is None
+    assert body["recommended_action"] == "continue_dialogue"
+    assert "正式题目" in body["next_question"]
+
+
 def test_context_assembler_reuses_summary_boundary_without_resummarizing_covered_messages() -> None:
     class RecordingCompactor(ConversationCompactor):
         def __init__(self) -> None:
@@ -1235,5 +1280,125 @@ def test_runtime_generator_rejects_blank_profile_patch_before_persistence() -> N
 
 def test_missing_conversation_returns_404(client: TestClient) -> None:
     response = client.get("/api/v1/research/conversations/missing")
+
+    assert response.status_code == 404
+
+
+def _failed_outcome() -> ConversationDecisionOutcome:
+    return ConversationDecisionOutcome(
+        status="failed",
+        reason="fake provider exploded",
+    )
+
+
+def test_retry_failed_reply_regenerates_without_duplicating_user_message(
+    client: TestClient,
+) -> None:
+    fake = FakeDecisionGenerator(
+        [
+            _failed_outcome(),
+            ConversationDecisionOutcome.generated(
+                _decision(
+                    reply="重试后由模型生成的回复。",
+                    intent="clarify",
+                    profile_patch=ResearchProfilePatch(topic="图神经网络复现"),
+                ),
+                run_id="run-retry-success",
+                event_count=5,
+            ),
+        ]
+    )
+    _conversation_service.decision_generator = fake
+
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想研究图神经网络复现"},
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+    failed_body = created.json()
+    assert failed_body["messages"][-1]["generation_mode"] == "rules_fallback"
+
+    retried = client.post(f"/api/v1/research/conversations/{conversation_id}/messages/retry-last")
+
+    assert retried.status_code == 200
+    body = retried.json()
+    messages = body["messages"]
+    assert [m["role"] for m in messages].count("user") == 1
+    assert all(m["generation_mode"] != "rules_fallback" for m in messages)
+    assert messages[-1]["content"] == "重试后由模型生成的回复。"
+    assert messages[-1]["generation_mode"] == "agent"
+    assert messages[-1]["run_id"] == "run-retry-success"
+    assert body["profile"]["topic"] == "图神经网络复现"
+
+
+def test_retry_without_failed_reply_is_rejected(client: TestClient) -> None:
+    fake = FakeDecisionGenerator(
+        [
+            ConversationDecisionOutcome.generated(
+                _decision(reply="正常回复。"),
+                run_id="run-ok",
+                event_count=2,
+            )
+        ]
+    )
+    _conversation_service.decision_generator = fake
+
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想研究教育人工智能"},
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+
+    retried = client.post(f"/api/v1/research/conversations/{conversation_id}/messages/retry-last")
+
+    assert retried.status_code == 409
+    assert "没有可重试" in retried.json()["detail"]
+
+
+def test_retry_failure_keeps_user_message_and_last_success(client: TestClient) -> None:
+    fake = FakeDecisionGenerator(
+        [
+            ConversationDecisionOutcome.generated(
+                _decision(reply="第一次成功回复。"),
+                run_id="run-first-ok",
+                event_count=3,
+            ),
+            _failed_outcome(),
+            _failed_outcome(),
+        ]
+    )
+    _conversation_service.decision_generator = fake
+
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想研究教育人工智能"},
+    )
+    conversation_id = created.json()["conversation_id"]
+    failed_send = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/messages",
+        json={"message": "补充一些约束条件"},
+    )
+    assert failed_send.status_code == 200
+    before = failed_send.json()
+    assert before["messages"][-1]["generation_mode"] == "rules_fallback"
+    user_count_before = [m["role"] for m in before["messages"]].count("user")
+
+    retried = client.post(f"/api/v1/research/conversations/{conversation_id}/messages/retry-last")
+
+    assert retried.status_code == 422
+    detail = retried.json()["detail"]
+    assert detail["code"] == "research_generation_failed"
+
+    restored = client.get(f"/api/v1/research/conversations/{conversation_id}")
+    after = restored.json()
+    assert [m["role"] for m in after["messages"]].count("user") == user_count_before
+    assert after["messages"][-1]["generation_mode"] == "rules_fallback"
+    assert any(m["content"] == "第一次成功回复。" for m in after["messages"])
+
+
+def test_retry_missing_conversation_returns_404(client: TestClient) -> None:
+    response = client.post("/api/v1/research/conversations/missing/messages/retry-last")
 
     assert response.status_code == 404

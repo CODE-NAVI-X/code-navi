@@ -39,10 +39,12 @@ import {
   type ResearchConversationResponse,
   type PaperAnalysis,
   type SelectedResearchPaper as PersistedSelectedResearchPaper,
+  retryResearchReply,
   sendResearchMessage,
 } from "@/lib/api/research";
 
 import { MarkdownText } from "./MarkdownText";
+import { GenerationFailure } from "./generationUi";
 import { AcademicSearchPanel } from "./AcademicSearchPanel";
 import { ProviderStatusCard } from "./ProviderStatusCard";
 import { ResearchProfilePanel } from "./ResearchProfilePanel";
@@ -90,6 +92,19 @@ function restoreSelectedPaper(paper: PersistedSelectedResearchPaper): SelectedRe
   };
 }
 
+const RESEARCH_ENTRY_BRANCHES = [
+  {
+    label: "已有研究兴趣",
+    description: "我想围绕一个主题继续研究",
+    message: "已有研究兴趣：我想围绕一个主题继续研究",
+  },
+  {
+    label: "需要推荐方向",
+    description: "我还没有明确研究主题",
+    message: "需要推荐方向：我还没有明确研究主题",
+  },
+] as const;
+
 function friendlyError(error: unknown): string {
   if (error instanceof ResearchApiError) {
     if (error.status === 0) return error.message;
@@ -132,8 +147,17 @@ function ProcessingDetails({ message }: { message: ResearchConversationMessage }
   );
 }
 
-function MessageItem({ message }: { message: ResearchConversationMessage }) {
+function MessageItem({
+  message,
+  busy,
+  onRetry,
+}: {
+  message: ResearchConversationMessage;
+  busy: boolean;
+  onRetry: () => void;
+}) {
   const isUser = message.role === "user";
+  const isReplyFailure = !isUser && message.generation_mode === "rules_fallback";
   return (
     <article className={`flex min-w-0 gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
@@ -141,15 +165,29 @@ function MessageItem({ message }: { message: ResearchConversationMessage }) {
           <Sparkles className="h-4 w-4" />
         </div>
       )}
-      <div className={isUser ? "min-w-0 max-w-[86%] sm:max-w-[76%]" : "min-w-0 flex-1"}>
+      <div className={isUser ? "min-w-0 max-w-[86%] sm:max-w-[76%]" : "min-w-0 max-w-[46rem] flex-1"}>
         <div
           className={
             isUser
-              ? "rounded-2xl rounded-br-md bg-slate-900 px-4 py-3 text-sm leading-7 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900"
-              : "px-1 py-1 text-slate-800 dark:text-zinc-200"
+              ? "rounded-2xl rounded-br-md bg-slate-900 px-4 py-3 text-base leading-7 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900"
+              : "px-1 py-1 text-base leading-7 text-slate-800 dark:text-zinc-200"
           }
         >
-          {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownText content={messageContent(message)} />}
+          {isUser ? (
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          ) : isReplyFailure ? (
+            <div>
+              {busy && <p className="text-sm font-medium text-slate-500 dark:text-zinc-400">本轮回复重试中…</p>}
+              <GenerationFailure
+                error="本轮模型没有生成科研回复；你发送的内容和之前的结果都保留不变。"
+                busy={busy}
+                hasLastSuccess={false}
+                onRetry={onRetry}
+              />
+            </div>
+          ) : (
+            <MarkdownText content={messageContent(message)} />
+          )}
         </div>
         {!isUser && message.next_question && (
           <div className="app-card-subtle mt-3 break-words rounded-xl px-4 py-3 text-sm font-medium leading-6 text-slate-800 dark:text-zinc-200">
@@ -246,6 +284,7 @@ export function ResearchConversation() {
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<RequestPhase>("initializing");
   const [error, setError] = useState<string | null>(null);
+  const [retryingMessageId, setRetryingMessageId] = useState<string | null>(null);
   const [failedMessage, setFailedMessage] = useState<string | null>(null);
   const startedRef = useRef(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -304,6 +343,24 @@ export function ResearchConversation() {
     setEvidenceVersion((current) => current + 1);
     setWorkflowStage(stage);
   }, []);
+
+  const retryLastReply = useCallback(
+    async (message: ResearchConversationMessage) => {
+      if (!conversation || phase !== "idle") return;
+      setRetryingMessageId(message.message_id);
+      setError(null);
+      setPhase("thinking");
+      try {
+        setConversation(await retryResearchReply(conversation.conversation_id));
+      } catch (requestError) {
+        setError(friendlyError(requestError));
+      } finally {
+        setRetryingMessageId(null);
+        setPhase("idle");
+      }
+    },
+    [conversation, phase],
+  );
 
   const analyzeSelectedPaper = useCallback(async (paper: SelectedResearchPaper, paperPdfUrl?: string) => {
     if (!conversation) return;
@@ -446,7 +503,10 @@ export function ResearchConversation() {
   }
 
   const disabled = phase !== "idle";
-  const latestAssistant = [...conversation.messages].reverse().find((message) => message.role === "assistant");
+  const latestAssistant = [...conversation.messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.generation_mode !== "rules_fallback");
+  const showEntryBranches = !conversation.profile.topic && conversation.messages.length <= 2;
 
   return (
     <main className="min-h-screen bg-[var(--app-surface)] text-slate-900 dark:text-zinc-100">
@@ -482,7 +542,8 @@ export function ResearchConversation() {
 
         {conversation.context_provenance && (
           <aside className="mb-4 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100">
-            <p className="font-semibold">本会话来自已确认的 Learning 上下文</p>
+            <p className="font-semibold">学习背景开场总结</p>
+            <p className="mt-1">本会话来自已确认的 Learning 上下文。你已在 Learning 中查看、修改并确认它；它不会自动成为研究结论。</p>
             <p className="mt-1 leading-6">
               主题：{conversation.context_provenance.topic} · 来源记录：
               <span className="font-mono text-xs">
@@ -519,7 +580,6 @@ export function ResearchConversation() {
         <ResearchWorkflowNav
           conversation={conversation}
           currentStage={workflowStage}
-          selectedPaperTitle={selectedPaperTitle}
         />
 
         <div className="min-w-0 space-y-7">
@@ -532,7 +592,12 @@ export function ResearchConversation() {
           <section className="min-w-0 overflow-hidden">
             <div className="max-h-[calc(100vh-13rem)] min-h-[520px] space-y-7 overflow-y-auto px-4 py-6 sm:px-7" aria-label="科研对话消息">
               {conversation.messages.map((message) => (
-                <MessageItem key={message.message_id} message={message} />
+                <MessageItem
+                  key={message.message_id}
+                  message={message}
+                  busy={retryingMessageId === message.message_id}
+                  onRetry={() => void retryLastReply(message)}
+                />
               ))}
               {phase === "thinking" && <ThinkingMessage />}
               <div ref={endRef} />
@@ -552,7 +617,27 @@ export function ResearchConversation() {
               </div>
             )}
 
-            {latestAssistant?.suggested_answers.length ? (
+            {showEntryBranches && (
+              <div className="mx-4 mb-3 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/20 sm:mx-7" aria-label="研究入口分支">
+                <p className="text-base font-semibold text-indigo-950 dark:text-indigo-100">先选择进入方式</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {RESEARCH_ENTRY_BRANCHES.map((branch) => (
+                    <button
+                      key={branch.label}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => void send(branch.message)}
+                      className="app-button-secondary min-h-12 rounded-xl px-3 py-2 text-left text-sm leading-6 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800"
+                    >
+                      <span className="block font-semibold">{branch.label}</span>
+                      <span className="block text-sm text-slate-600 dark:text-zinc-400">{branch.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!showEntryBranches && latestAssistant?.suggested_answers.length ? (
               <div className="flex max-w-full gap-2 overflow-x-auto px-4 pb-3 sm:flex-wrap sm:px-7">
                 {latestAssistant.suggested_answers.map((answer) => (
                   <button
@@ -579,7 +664,7 @@ export function ResearchConversation() {
                   maxLength={4000}
                   placeholder="继续描述你的想法、纠正当前理解，或直接选择上方建议…"
                   aria-label="科研对话输入"
-                  className="max-h-40 min-h-14 min-w-0 w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-slate-400 disabled:opacity-60 dark:placeholder:text-zinc-600"
+                  className="max-h-40 min-h-14 min-w-0 w-full resize-none bg-transparent px-2 py-1 text-base leading-7 outline-none placeholder:text-slate-400 disabled:opacity-60 dark:placeholder:text-zinc-600"
                 />
                 <div className="flex items-center justify-between gap-3 px-1">
                   <p className="text-xs text-slate-500 dark:text-zinc-400">Enter 发送 · Shift + Enter 换行</p>
@@ -714,6 +799,12 @@ export function ResearchConversation() {
               <ReproductionPipelinePanel
                 conversationId={conversation.conversation_id}
                 evidenceVersion={evidenceVersion}
+                conditions={conversation.reproduction_conditions ?? null}
+                onConditionsSaved={(updated) =>
+                  setConversation((current) =>
+                    current ? { ...current, reproduction_conditions: updated } : current,
+                  )
+                }
                 onPipelineSaved={(pipeline) => {
                   setSelectedPaperTitle(pipeline.selected_paper.title);
                   refreshDownstream(3);

@@ -40,11 +40,35 @@ export interface ResearchPlanEntry {
   content: string;
   classification: ResearchPlanClassification;
   basis: string;
+  /** Checkpoint-3 evidence contract; absent in plans stored before it. */
+  relevance?: string | null;
+  suggested_action?: string | null;
 }
 
 export interface ResearchPlanRisk {
   risk: ResearchPlanEntry;
   mitigation: ResearchPlanEntry;
+}
+
+export interface ReadingReport {
+  schema_version: "reading-report.v1";
+  report_id: string;
+  paper_url: string;
+  title: string;
+  content: string;
+  source_scope: "user_submitted_text_unverified";
+  created_at: string;
+}
+
+export interface ReproductionConditions {
+  schema_version: "reproduction-conditions.v1";
+  hardware?: string | null;
+  vram?: string | null;
+  operating_system?: string | null;
+  python_environment?: string | null;
+  available_time?: string | null;
+  reproduction_goal?: string | null;
+  updated_at: string;
 }
 
 export interface ConversationResearchPlan {
@@ -57,10 +81,21 @@ export interface ConversationResearchPlan {
   risks_and_mitigations: ResearchPlanRisk[];
   suggested_search_keywords: string[];
   pending_items: ResearchPlanEntry[];
+  core_judgment?: string | null;
+  next_action?: string | null;
   provenance_note: string;
   generation_mode: "llm" | "rules";
   run_id: string | null;
   event_count: number;
+}
+
+export interface ReproductionConditionsInput {
+  hardware?: string | null;
+  vram?: string | null;
+  operating_system?: string | null;
+  python_environment?: string | null;
+  available_time?: string | null;
+  reproduction_goal?: string | null;
 }
 
 export type ResearchMindMapNodeStatus =
@@ -140,6 +175,8 @@ export interface ResearchAnalysisItem {
   section_key: string;
   chapter_key?: string | null;
   chapter_order?: number | null;
+  relevance?: string | null;
+  suggested_action?: string | null;
   evidence_refs: EvidenceReference[];
 }
 
@@ -147,6 +184,8 @@ export interface TopicDifficultyAnalysis {
   schema_version: "topic-difficulty-analysis.v1";
   title: string;
   information_scope: "profile_and_plan_only" | "metadata_and_abstract_only" | "full_text_user_triggered";
+  core_judgment?: string | null;
+  next_action?: string | null;
   items: ResearchAnalysisItem[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
@@ -160,6 +199,9 @@ export interface PaperAnalysis {
   paper_url: string;
   information_scope: "metadata_and_abstract_only" | "full_text_user_triggered";
   abstract_available: boolean;
+  core_judgment?: string | null;
+  summary?: string | null;
+  next_action?: string | null;
   items: ResearchAnalysisItem[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
@@ -372,6 +414,7 @@ export interface ResearchConversationResponse {
   selected_paper: SelectedResearchPaper | null;
   paper_analysis: PaperAnalysis | null;
   topic_difficulty_analysis: TopicDifficultyAnalysis;
+  reproduction_conditions?: ReproductionConditions | null;
   experiment_design: ExperimentDesign | null;
   reply: string;
   generation_mode: GenerationMode;
@@ -653,6 +696,7 @@ export interface ReproductionPipeline {
   resources: ReproductionPipelineItem[];
   risks: ReproductionPipelineItem[];
   ethics: ReproductionPipelineItem[];
+  acceptance_criteria?: ReproductionPipelineItem[];
   confirmation_items: ReproductionPipelineItem[];
   tasks: Array<{
     task_id: string;
@@ -854,9 +898,15 @@ export class ResearchApiError extends Error {
     public readonly status: number,
     message: string,
     public readonly stage?: string,
+    public readonly missing?: string[],
   ) {
     super(message);
     this.name = "ResearchApiError";
+  }
+
+  /** True when key reproduction conditions are absent (HTTP 409 gate). */
+  get isConditionsMissing(): boolean {
+    return this.status === 409 && (this.missing?.length ?? 0) > 0;
   }
 
   /** True when the model failed to generate advice; the UI should offer a retry. */
@@ -907,6 +957,45 @@ export async function sendResearchMessage(
     MODEL_TURN_TIMEOUT_MS,
   );
   return validateConversationResponse(data);
+}
+
+export async function retryResearchReply(
+  conversationId: string,
+): Promise<ResearchConversationResponse> {
+  const data = await request<unknown>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/messages/retry-last`,
+    { method: "POST" },
+    MODEL_TURN_TIMEOUT_MS,
+  );
+  return validateConversationResponse(data);
+}
+
+export async function saveReproductionConditions(
+  conversationId: string,
+  conditions: ReproductionConditionsInput,
+): Promise<ResearchConversationResponse> {
+  return request<ResearchConversationResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-conditions`,
+    { method: "PUT", body: JSON.stringify(conditions) },
+  );
+}
+
+export async function saveReadingReport(
+  conversationId: string,
+  input: { paper_url: string; title: string; content: string },
+): Promise<ReadingReport[]> {
+  return request<ReadingReport[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reading-reports`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function listReadingReports(
+  conversationId: string,
+): Promise<ReadingReport[]> {
+  return request<ReadingReport[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reading-reports`,
+  );
 }
 
 export async function getResearchProviderStatus(): Promise<ProviderStatusResponse> {
@@ -1302,6 +1391,7 @@ async function request<T>(
       response.status,
       info.message ?? `科研服务请求失败（HTTP ${response.status}）。`,
       info.stage,
+      info.missing,
     );
   }
   try {
@@ -1314,6 +1404,7 @@ async function request<T>(
 interface ErrorInfo {
   message: string | null;
   stage?: string;
+  missing?: string[];
 }
 
 async function errorInfo(response: Response): Promise<ErrorInfo> {
@@ -1325,10 +1416,13 @@ async function errorInfo(response: Response): Promise<ErrorInfo> {
     const detail = (body as { detail?: unknown }).detail;
     if (typeof detail === "string") return { message: detail };
     if (detail && typeof detail === "object" && !Array.isArray(detail)) {
-      const info = detail as { message?: unknown; stage?: unknown };
+      const info = detail as { message?: unknown; stage?: unknown; missing?: unknown };
       return {
         message: typeof info.message === "string" ? info.message : null,
         stage: typeof info.stage === "string" ? info.stage : undefined,
+        missing: Array.isArray(info.missing)
+          ? info.missing.filter((item): item is string => typeof item === "string")
+          : undefined,
       };
     }
     if (Array.isArray(detail)) {
