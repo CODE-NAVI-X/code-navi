@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -112,3 +113,39 @@ def test_legacy_structure_exercise_api_returns_list_and_grade(
 
     assert submitted.status_code == 200
     assert submitted.json()["verdict"] == "accepted"
+
+
+def test_structure_evaluate_and_chat_return_disabled_without_provider(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "code_navi.practice.router.create_ai_service",
+        lambda _settings: SimpleNamespace(
+            evaluator=None,
+            tutor=None,
+            message="AI 功能未启用",
+        ),
+    )
+    listed = client.get("/api/v1/practice/structure-exercises").json()
+    exercise_id = listed["exercises"][0]["id"]
+    exercise = next(item for item in DEFAULT_EXERCISES if item.id == exercise_id)
+    answer = (
+        [list(level.answer_sequence) for level in exercise.levels]
+        if exercise.levels
+        else list(exercise.answer_sequence)
+    )
+
+    evaluated = client.post(
+        f"/api/v1/practice/structure-exercises/{exercise_id}/evaluate",
+        json={"answer": answer},
+    )
+    chatted = client.post(
+        f"/api/v1/practice/structure-exercises/{exercise_id}/chat",
+        json={"question": "为什么？", "history": []},
+    )
+
+    assert evaluated.status_code == 200
+    assert evaluated.json()["ai"]["status"] == "disabled"
+    assert chatted.status_code == 200
+    assert chatted.json()["ai"]["reply"]

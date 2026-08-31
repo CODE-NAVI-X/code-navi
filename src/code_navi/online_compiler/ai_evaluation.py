@@ -14,6 +14,7 @@ from .agents import (
     guided_code_tutor_agent,
     practice_set_planner_agent,
     problem_import_organizer_agent,
+    structure_answer_reviewer_agent,
 )
 from .evaluation import AiFeedback, RuleAssessment, parse_ai_feedback
 from .piston import ExecutionResult
@@ -35,6 +36,15 @@ class AiEvaluator(Protocol):
         learner_id: str | None,
     ) -> AiFeedback:
         """Return validated feedback without changing the rule assessment."""
+
+    def evaluate_structure_answer(
+        self,
+        exercise: dict[str, object],
+        answer: object,
+        rule_results: list[dict[str, object]],
+        learner_id: str | None,
+    ) -> AiFeedback:
+        """Return validated feedback for a static structure/framework answer."""
 
 
 class AiTutor(Protocol):
@@ -111,6 +121,43 @@ class KernelAiEvaluator:
             return parse_ai_feedback(runtime_result.output_text)
         except Exception as exc:
             raise AiEvaluationError("AI feedback is temporarily unavailable") from exc
+
+    def evaluate_structure_answer(
+        self,
+        exercise: dict[str, object],
+        answer: object,
+        rule_results: list[dict[str, object]],
+        learner_id: str | None,
+    ) -> AiFeedback:
+        """Review a static structure answer and return validated feedback."""
+        prompt = json.dumps(
+            {
+                "exercise": exercise,
+                "studentAnswer": answer,
+                "ruleResults": rule_results,
+                "instruction": (
+                    "只做静态结构/框架评析；不得声称执行过模型或训练代码；"
+                    "不得输出完整标准答案。"
+                ),
+            },
+            ensure_ascii=False,
+        )
+        try:
+            runtime_result = self.runtime.run(
+                structure_answer_reviewer_agent,
+                RuntimeRequest(
+                    prompt,
+                    session_id=learner_id,
+                    run_id=f"structure-evaluation-{uuid4()}",
+                    metadata={"mode": "structure_practice"},
+                ),
+            )
+            if runtime_result.output_text is None:
+                raise ValueError("AI response did not contain text")
+            feedback = parse_ai_feedback(runtime_result.output_text)
+            return _sanitize_structure_feedback(feedback)
+        except Exception as exc:
+            raise AiEvaluationError("AI structure feedback is temporarily unavailable") from exc
 
     def chat(
         self,
@@ -268,6 +315,24 @@ def _looks_like_complete_solution(reply: str) -> bool:
         elif " = " in stripped and not stripped.startswith(("例如", "假设")):
             code_like += 1
     return code_like >= 3
+
+
+def _sanitize_structure_feedback(feedback: AiFeedback) -> AiFeedback:
+    """Replace obvious answer leaks in structure feedback with a safe prompt."""
+    if "```" in feedback.explanation or _looks_like_complete_solution(feedback.explanation):
+        return AiFeedback(
+            explanation=(
+                "我不能直接给出完整正确顺序或可提交代码。"
+                "请先说明你当前对结构顺序或关键模块的理解，我再帮你定位下一步。"
+            ),
+            suggestions=(
+                "先解释你判断当前顺序或模块的理由。",
+                "指出你觉得最不确定的一步。",
+                "检查是否混淆了整体框架与局部细节。",
+            ),
+            quality=feedback.quality,
+        )
+    return feedback
 
 
 def _apply_organizer_suggestions(
