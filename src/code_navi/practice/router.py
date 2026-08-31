@@ -26,6 +26,7 @@ from .schemas import (
     ExplainSymbolResponse,
     PracticeSetGenerateRequest,
     PracticeSetResponse,
+    StructureCatalogResponse,
 )
 from .service import (
     ExplainOnlyJudgingError,
@@ -35,10 +36,16 @@ from .service import (
     UploadNotFoundError,
     UploadValidationError,
 )
+from .structure_practice import (
+    StructureExerciseNotFoundError,
+    StructureExerciseValidationError,
+    StructurePracticeService,
+)
 
 router = APIRouter(prefix="/api/v1/practice", tags=["Practice"])
 
 _practice_service = PracticeSetService()
+_structure_practice = StructurePracticeService()
 _db_dependency = Depends(get_db)
 _opt_principal_dep = Depends(get_optional_principal)
 
@@ -77,6 +84,38 @@ async def get_practice_set(
         return _practice_service.get_set(db, set_id, owned_ids=owned_ids)
     except PracticeSetNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/structure-exercises", status_code=200)
+async def list_structure_exercises() -> dict:
+    """Return the frontend-compatible structure exercise catalogue."""
+    return _structure_practice.list_exercises()
+
+
+@router.post("/structure-exercises/{exercise_id}/submit", status_code=200)
+async def submit_structure_exercise(exercise_id: str, payload: dict) -> dict:
+    """Grade a structure exercise using deterministic rules."""
+    if "answer" not in payload:
+        raise HTTPException(status_code=400, detail="answer is required")
+    level = payload.get("level")
+    if level is not None and not isinstance(level, int):
+        raise HTTPException(status_code=400, detail="level must be an integer")
+    try:
+        return _structure_practice.submit(exercise_id, payload["answer"], level=level)
+    except StructureExerciseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StructureExerciseValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/structure-catalog",
+    response_model=StructureCatalogResponse,
+    status_code=200,
+)
+async def list_structure_catalog() -> StructureCatalogResponse:
+    """Return read-only topics and public exercise summaries for static practice."""
+    return _practice_service.list_structure_catalog()
 
 
 @router.post(
