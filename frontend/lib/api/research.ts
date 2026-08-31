@@ -165,8 +165,15 @@ export interface EvidenceReference {
   evidence_summary: string | null;
 }
 
+export type AreaCode =
+  | "research_goal"
+  | "research_motivation"
+  | "method_difficulty"
+  | "data_practice_difficulty";
+
 export interface ResearchAnalysisItem {
   area: string;
+  area_code?: AreaCode | null;
   content: string;
   classification: AnalysisClassification;
   basis: string;
@@ -175,6 +182,7 @@ export interface ResearchAnalysisItem {
   section_key: string;
   chapter_key?: string | null;
   chapter_order?: number | null;
+  capability_note?: string | null;
   relevance?: string | null;
   suggested_action?: string | null;
   evidence_refs: EvidenceReference[];
@@ -335,10 +343,43 @@ export function researchPaperLinks(paper: {
   };
 }
 
+export type TaskType =
+  | "classification"
+  | "regression"
+  | "clustering"
+  | "retrieval"
+  | "generation"
+  | "other";
+
+export interface MetricSpec {
+  name: string;
+  definition: string;
+  formula?: string | null;
+  higher_is_better: boolean;
+  applies_to_task_type: TaskType[];
+  source: "standard_catalog" | "model_suggested";
+  to_verify: boolean;
+}
+
+export interface DatasetRef {
+  name: string;
+  url?: string | null;
+  license_note?: string | null;
+  to_verify: boolean;
+}
+
+export interface GenerateExperimentDesignRequest {
+  user_confirmed: true;
+  task_type_override?: TaskType | null;
+}
+
 export interface ExperimentDesign {
   schema_version: "experiment-design.v1";
+  task_type: TaskType;
   hypothesis: ResearchPlanEntry;
   variables: ResearchPlanEntry[];
+  metric_specs?: MetricSpec[];
+  dataset_refs?: DatasetRef[];
   data_sources: ResearchPlanEntry[];
   baselines: ResearchPlanEntry[];
   metrics: ResearchPlanEntry[];
@@ -1162,10 +1203,15 @@ export async function generateResearchMindMap(
 
 export async function generateExperimentDesign(
   conversationId: string,
+  taskTypeOverride?: TaskType | null,
 ): Promise<ExperimentDesign> {
+  const body: GenerateExperimentDesignRequest = { user_confirmed: true };
+  if (taskTypeOverride) {
+    body.task_type_override = taskTypeOverride;
+  }
   return request<ExperimentDesign>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-design`,
-    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+    { method: "POST", body: JSON.stringify(body) },
     PAPER_ARTIFACT_TIMEOUT_MS,
   );
 }

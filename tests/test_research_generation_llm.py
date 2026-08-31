@@ -365,3 +365,45 @@ def test_model_cannot_promote_to_verify_to_fact_via_router(client: TestClient) -
 
     assert response.status_code == 422
     assert response.json()["detail"]["stage"] == "invalid_output"
+
+
+def test_router_topic_difficulty_analysis_v2_normalizes_area_code(client: TestClient) -> None:
+    _conversation_service.artifact_generator = StaticArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            '{"title":"v2分析","information_scope":"profile_and_plan_only",'
+            '"core_judgment":"需要聚焦方法与实操。","next_action":"开展方案设计。",'
+            '"items":[{"area":"算法模型难点","content":"1) 步骤一；2) 步骤二",'
+            '"classification":"inference","basis":"方法推断",'
+            '"source_scope":"profile_and_plan_only","relevance":"相关性说明","suggested_action":"行动建议"}],'
+            '"provenance_note":"模型生成"}'
+        )
+    )
+    conversation_id = _ready_conversation(client)
+
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/topic-difficulty-analysis",
+        json={"user_confirmed": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"][0]["area_code"] == "method_difficulty"
+    assert data["items"][0]["classification"] == "inference"
+
+
+def test_router_experiment_design_v2_task_type_override(client: TestClient) -> None:
+    generator = ContextAwareArtifactGenerator()
+    _conversation_service.artifact_generator = generator
+    conversation_id = _ready_conversation(client)
+
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/experiment-design",
+        json={"user_confirmed": True, "task_type_override": "retrieval"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_type"] == "retrieval"
+    context = generator.contexts[0]
+    assert context["task_type"] == "retrieval"
+    assert any("retrieval" in str(line) for line in context["writing_guidance"])

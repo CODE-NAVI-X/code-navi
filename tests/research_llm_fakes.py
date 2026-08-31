@@ -124,10 +124,31 @@ def _paper_analysis(context: dict[str, object], conversation_id: str) -> str:
 
 def _experiment(context: dict[str, object], conversation_id: str) -> str:
     verify = {"content": "样本量与许可待确认。", "classification": "to_verify", "basis": "约束。"}
+    task_type = str(context.get("task_type") or "other")
     return json.dumps(
         {
+            "task_type": task_type,
             "hypothesis": _entry("建议检验可观察差异。"),
             "variables": [_entry("预先固定自变量。")],
+            "metric_specs": [
+                {
+                    "name": "ACC",
+                    "definition": "预测正确的样本数占总样本数的比例。",
+                    "formula": "Accuracy = (TP + TN) / (TP + TN + FP + FN)",
+                    "higher_is_better": True,
+                    "applies_to_task_type": ["classification"],
+                    "source": "standard_catalog",
+                    "to_verify": False,
+                }
+            ],
+            "dataset_refs": [
+                {
+                    "name": "示例公开数据集",
+                    "url": "https://example.org/dataset",
+                    "license_note": "MIT",
+                    "to_verify": False,
+                }
+            ],
             "data_sources": [verify],
             "baselines": [_entry("候选基线。")],
             "metrics": [verify],

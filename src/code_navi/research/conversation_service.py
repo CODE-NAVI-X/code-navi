@@ -91,6 +91,7 @@ from .conversation_schemas import (
     SubmissionProfile,
     SubmissionProfileInput,
     SubmissionReadinessCheck,
+    TaskType,
     TopicDifficultyAnalysis,
     UnderstandingCheck,
     UpdateRevisionTaskRequest,
@@ -504,6 +505,7 @@ class ResearchConversationService:
             paper_analysis=paper_analysis,
             generator=self.artifact_generator,
             conversation_id=conversation.id,
+            context_provenance=conversation.context_provenance,
         )
         self._store_generated_artifact(
             conversation,
@@ -540,6 +542,8 @@ class ResearchConversationService:
         self,
         conversation_id: str,
         db: Session,
+        *,
+        task_type_override: TaskType | None = None,
     ) -> ExperimentDesign | None:
         """Generate a personalized experiment design after explicit confirmation."""
         conversation = self._get_model(conversation_id, db)
@@ -556,6 +560,7 @@ class ResearchConversationService:
             paper_analysis=paper_analysis,
             generator=self.artifact_generator,
             conversation_id=conversation.id,
+            task_type_override=task_type_override,
         )
         if design is not None:
             self._store_generated_artifact(

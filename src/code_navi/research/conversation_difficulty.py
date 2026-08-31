@@ -7,6 +7,7 @@ import re
 from collections.abc import Iterable
 
 from .conversation_schemas import (
+    AreaCode,
     ConversationEvidenceBundle,
     ConversationResearchPlan,
     EvidenceReference,
@@ -97,6 +98,71 @@ def _assert_paper_grounded(
         )
 
 
+def map_area_code(area: str) -> AreaCode | None:
+    """Deterministically map raw area text to one of 4 standardized area codes."""
+    normalized = (area or "").strip().lower()
+    if not normalized:
+        return None
+    # 1. method_difficulty
+    if any(k in normalized for k in ("方法", "算法", "method", "模型", "技术")):
+        return "method_difficulty"
+    # 2. data_practice_difficulty
+    if any(k in normalized for k in ("数据", "实操", "实验", "dataset", "样本")):
+        return "data_practice_difficulty"
+    # 3. research_motivation
+    if any(k in normalized for k in ("动机", "motivation", "背景", "意义")):
+        return "research_motivation"
+    # 4. research_goal
+    if any(k in normalized for k in ("目标", "goal", "方向", "问题", "边界")):
+        return "research_goal"
+    return None
+
+
+def _mastery_snapshot(context_provenance: object) -> dict[str, object] | None:
+    """Read the optional learning_mastery_snapshot block if it exists."""
+    if not isinstance(context_provenance, dict) or not context_provenance:
+        return None
+    mastery = context_provenance.get("learning_mastery_snapshot")
+    if isinstance(mastery, dict):
+        return mastery
+    return None
+
+
+def _mastery_sets(mastery: dict[str, object] | None) -> tuple[set[str], set[str]]:
+    if mastery is None:
+        return frozenset(), frozenset()
+    strong = {
+        value.casefold() for value in mastery.get("strong", []) if isinstance(value, str)
+    }
+    weak = {value.casefold() for value in mastery.get("weak", []) if isinstance(value, str)}
+    return strong, weak
+
+
+def _derive_capability_note(
+    item: ResearchAnalysisItem,
+    *,
+    mastery_snapshot: dict[str, object] | None,
+) -> str | None:
+    """Generate capability_note for method_difficulty when learning mastery exists."""
+    if mastery_snapshot is None:
+        return None
+    strong, weak = _mastery_sets(mastery_snapshot)
+    if not strong and not weak:
+        return None
+    searchable_text = f"{item.area} {item.content} {item.basis}".casefold()
+
+    # Prioritize weak matching (超出当前掌握范围)
+    matched_weak = [pt for pt in weak if pt and pt in searchable_text]
+    if matched_weak:
+        return f"超出当前掌握范围，涉及薄弱项：{', '.join(matched_weak)}"[:200]
+
+    matched_strong = [pt for pt in strong if pt and pt in searchable_text]
+    if matched_strong:
+        return f"贴合当前掌握范围，涉及已掌握知识点：{', '.join(matched_strong)}"[:200]
+
+    return None
+
+
 def build_topic_difficulty_analysis(
     profile: ResearchProfile,
     *,
@@ -105,6 +171,7 @@ def build_topic_difficulty_analysis(
     paper_analysis: PaperAnalysis | None = None,
     generator: ResearchArtifactGenerator | None = None,
     conversation_id: str | None = None,
+    context_provenance: dict[str, object] | None = None,
 ) -> TopicDifficultyAnalysis:
     """List research-design gaps without asserting external facts or paper results."""
     scope = (
@@ -128,6 +195,11 @@ def build_topic_difficulty_analysis(
         "selected_paper_analysis": (
             paper_analysis.model_dump(mode="json") if paper_analysis else None
         ),
+        "writing_guidance": [
+            "分析以「研究目标与动机」为主轴展开，紧密结合已确认目标与动机，不再设问对象与场景。",
+            "方法难点 (method_difficulty) 与数据实操难点 (data_practice_difficulty) 区条目"
+            "的 content 需详细深入，分步骤陈述（如 1) ... 2) ... 3) ...）。",
+        ],
         "source_boundary": {
             "allowed_classifications": ["inference", "to_verify"],
             "forbidden": [
@@ -144,7 +216,7 @@ def build_topic_difficulty_analysis(
             "items": [
                 {
                     "area": "string",
-                    "content": "string",
+                    "content": "string (方法和数据实操难点分步骤陈述，上限2000字符)",
                     "classification": "inference|to_verify",
                     "basis": "string",
                     "source_scope": "profile_and_plan_only|metadata_and_abstract_only",
@@ -180,7 +252,54 @@ def build_topic_difficulty_analysis(
             for item in paper_analysis.items:
                 for reference in item.evidence_refs:
                     allowed_refs[(reference.bundle_id, reference.paper_url)] = reference
-        _assert_model_analysis_boundary(enhanced.items, allowed_refs=allowed_refs)
+
+        # Check for ungrounded/unsaved evidence references to downgrade per contract §2.7:
+        # 引用了未保存 Evidence 的方向分析降级为「建议」并去掉证据声明；
+        # 在 provenance_note 追加说明。
+        # 红线：classification 与 area_code 语义不同，绝不改 classification。
+        has_downgraded_refs = False
+        mastery = _mastery_snapshot(context_provenance) if context_provenance else None
+
+        normalized_items: list[ResearchAnalysisItem] = []
+        for item in enhanced.items:
+            # 1. Normalize area_code from area
+            mapped_code = map_area_code(item.area)
+
+            # 2. Derive capability note for method_difficulty when mastery exists
+            cap_note = None
+            if mapped_code == "method_difficulty" and mastery is not None:
+                cap_note = _derive_capability_note(item, mastery_snapshot=mastery)
+
+            # 3. Handle evidence reference validation and downgrade
+            valid_refs = []
+            item_has_unsaved = False
+            for ref in item.evidence_refs:
+                ref_key = (ref.bundle_id, ref.paper_url)
+                if ref_key in allowed_refs:
+                    valid_refs.append(allowed_refs[ref_key])
+                else:
+                    item_has_unsaved = True
+
+            current_source_scope = item.source_scope
+            if item_has_unsaved:
+                has_downgraded_refs = True
+                # Downgrade to suggestion without invalid evidence citations
+                # If no valid references remain, downgrade source_scope to profile_and_plan_only
+                if not valid_refs and current_source_scope == "metadata_and_abstract_only":
+                    current_source_scope = "profile_and_plan_only"
+
+            normalized_items.append(
+                item.model_copy(
+                    update={
+                        "area_code": mapped_code,
+                        "capability_note": cap_note,
+                        "evidence_refs": valid_refs,
+                        "source_scope": current_source_scope,
+                    }
+                )
+            )
+
+        _assert_model_analysis_boundary(normalized_items, allowed_refs=allowed_refs)
         require_contract_fields(
             {
                 "core_judgment": enhanced.core_judgment,
@@ -188,7 +307,7 @@ def build_topic_difficulty_analysis(
             },
             kind="topic_difficulty_analysis",
         )
-        for topic_item in enhanced.items:
+        for topic_item in normalized_items:
             require_contract_fields(
                 {
                     "relevance": topic_item.relevance,
@@ -198,27 +317,18 @@ def build_topic_difficulty_analysis(
             )
         if enhanced.information_scope != scope:
             raise ValueError("model changed information scope")
-        enhanced = enhanced.model_copy(
-            update={
-                "items": [
-                    item.model_copy(
-                        update={
-                            "evidence_refs": [
-                                allowed_refs[(reference.bundle_id, reference.paper_url)]
-                                for reference in item.evidence_refs
-                            ]
-                        }
-                    )
-                    for item in enhanced.items
-                ]
-            }
-        )
+
+        provenance_note = _TOPIC_PROVENANCE
+        if has_downgraded_refs:
+            provenance_note += "；部分条目因引用未保存证据已降级为建议并移除无效证据引用。"
+
         return enhanced.model_copy(
             update={
+                "items": normalized_items,
                 "generation_mode": "llm",
                 "run_id": outcome.run_id,
                 "event_count": outcome.event_count,
-                "provenance_note": _TOPIC_PROVENANCE,
+                "provenance_note": provenance_note,
             }
         )
     except ResearchGenerationError:

@@ -41,6 +41,7 @@ from .conversation_schemas import (
     ExperimentCodeDraft,
     ExperimentDesign,
     ExperimentEvidenceBundle,
+    GenerateExperimentDesignRequest,
     GenerateResearchArtifactRequest,
     PaperAnalysis,
     PaperBlueprint,
@@ -818,13 +819,16 @@ def generate_topic_difficulty_analysis(
 )
 def generate_experiment_design(
     conversation_id: str,
-    request: GenerateResearchArtifactRequest,
+    request: GenerateExperimentDesignRequest,
     db: Session = _db_dependency,
 ) -> ExperimentDesign:
     """Run one audited experiment-design personalization after confirmation."""
-    del request
     try:
-        design = _conversation_service.generate_experiment_design(conversation_id, db)
+        design = _conversation_service.generate_experiment_design(
+            conversation_id,
+            db,
+            task_type_override=request.task_type_override,
+        )
         if design is None:
             raise HTTPException(
                 status_code=409,
