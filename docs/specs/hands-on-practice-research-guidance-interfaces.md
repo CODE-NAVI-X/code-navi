@@ -241,6 +241,13 @@ CodeFillSpec {
 }
 ```
 
+实现注记（PR-A，2026-08，实现即冻结的规则裁定）：
+
+1. `reproduction_entry.pipeline_status` 取该会话最新一条复现 pipeline 的任务状态投影：任一 task `evidence_linked` → `evidence_linked`，否则 `not_started`；无 pipeline 为 `null`。
+2. `evidence_trends` 关键词规则：对会话内已存 evidence bundle 的论文（按 URL 去重）标题做小写分词（`[a-z0-9]+`、长度 ≥3、去停用词），按命中论文数取 Top3（并列按字典序）；`paper_count` 为命中的去重论文数；每条最多 5 条 `evidence_refs`（按 bundle 时间与论文存储顺序取前 5）。
+3. `knowledge_points[].mastery` 恒为 `null`：§3.2 快照只存 strong/weak 列表、无数值，规则产物不得编造掌握度数值。
+4. `stage_summary.digest` 为快照 `summary` 原文归一空白后截断（≤1000 字符）。
+
 ### 2.2 `POST .../study-recommendations` — 为科研而学（规则，显式触发）
 
 请求：`{"user_confirmed": true}`；false 或缺省 → 409。
@@ -261,6 +268,13 @@ CodeFillSpec {
   "provenance_note": str                     # 说明规则来源与未调用模型
 }
 ```
+
+实现注记（PR-A，2026-08，实现即冻结的规则裁定）：
+
+1. 知识点提取：`methods`、`data_requirements`、`plan.suggested_datasets_or_metrics` 条目按中英文常见分隔符（`,` `，` `、` `;` `；` `。` `/` `|` 与换行）切分为短语，归一空白、丢弃长度 >128 字符的长句；大小写不敏感去重后按 methods → data_requirements → plan 顺序取前 6 条。plan 复用现有 `build_conversation_research_plan`（仅 `ready_for_plan` 时产出）；未就绪时仅从画像 `methods`/`data_requirements` 提取。
+2. `mastery_status` 对照：快照 `strong` 命中 → `mastered`、`weak` 命中 → `weak`、快照缺失或未命中 → `unknown`（大小写不敏感精确匹配）。
+3. `action` 规则：`mastered` → `practice_set`，payload `{"kind": "code_practice", "topic": <关键词>, "count": 5}`（可直接投 §1.2 生成网关）；`weak`/`unknown` → `learning_explain`，payload `{"knowledge_point": <关键词>}`（可直接投 `POST /api/v1/learning/explain`）。
+4. 错误码次序：会话不存在（含跨 owner）一律 404；会话存在且 `user_confirmed` 非 true 才 409。
 
 ### 2.3 `POST .../topic-difficulty-analysis` v2 — 温故知新重构
 
@@ -439,6 +453,12 @@ CodeFillSpec {
 - §1.4：规则判分、跨 owner 404、`explain_only` 409、`(attempt_id, item_id)` 幂等 upsert 已实现；LLM 静态评审与画像聚合留待真实 Provider 接线。
 - §1.5：`.py/.md` 解析、415/413/数据集 400 与结果持久化已实现。
 - §1.6：`symbol.code_excerpt` schema 已补齐；进程内 LRU≤256 缓存、规则回退与同 principal 限频已实现。
+
+### 5.2 P0-B 实现状态（PR-A，2026-08）
+
+- §2.1 `stage-briefing` 与 §2.2 `study-recommendations` 已实现（`src/code_navi/research/conversation_guidance.py`，独立模块避免与存量 `conversation_service.py` 大改冲突）；纯规则、不调模型、不联网；空态 200、显式触发 409、跨 owner 404 均有契约测试（`tests/test_research_guidance.py`）。
+- 规则裁定见 §2.1/§2.2 实现注记；`learning_mastery_snapshot`（§3.2）未落地前快照缺省走空态，读取侧已按原始 JSON 键预留，P1-B 落地后无需改动本端点。
+- §2.3–2.6 待 PR-B/PR-C（陈盛漳），不受本 PR 影响。
 
 ## 6. 评审变更记录（v2 自评审，2026-01）
 
