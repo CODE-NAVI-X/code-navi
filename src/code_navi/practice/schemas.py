@@ -304,6 +304,37 @@ class ExplainSymbolResponse(BaseModel):
     cached: bool
 
 
+class StructureCatalogTopic(BaseModel):
+    """Read-only topic summary for the static structure/framework catalogue."""
+
+    id: str
+    title: str
+    description: str
+    count: int
+
+
+class StructureCatalogExercise(BaseModel):
+    """Public summary of one static structure/framework code-fill exercise."""
+
+    id: str
+    topic_id: str
+    title: str
+    kind: Literal["structure_sequence", "framework_fill"]
+    objective: str
+    instruction: str
+    options: list[str] = Field(default_factory=list)
+    starter_code: str | None = None
+    hints: list[str] = Field(default_factory=list)
+
+
+class StructureCatalogResponse(BaseModel):
+    """Read-only catalogue payload for selecting structure/framework practice."""
+
+    schema_version: str
+    topics: list[StructureCatalogTopic]
+    exercises: list[StructureCatalogExercise]
+
+
 __all__ = [
     "CodeFillBlankSpec",
     "CodeFillGradeBlankAnswer",
@@ -326,4 +357,7 @@ __all__ = [
     "PracticeSetGenerateRequest",
     "PracticeSetKind",
     "PracticeSetResponse",
+    "StructureCatalogExercise",
+    "StructureCatalogResponse",
+    "StructureCatalogTopic",
 ]

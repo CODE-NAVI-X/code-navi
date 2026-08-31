@@ -57,6 +57,20 @@ from .schemas import (
     PracticeItem,
     PracticeSetGenerateRequest,
     PracticeSetResponse,
+    StructureCatalogExercise,
+    StructureCatalogResponse,
+    StructureCatalogTopic,
+)
+from .structure_catalog import (
+    EXERCISES as STRUCTURE_EXERCISES,
+)
+from .structure_catalog import (
+    TOPICS as STRUCTURE_TOPICS,
+)
+from .structure_catalog import (
+    StructureExercise,
+    exercises_for_topic,
+    topic_by_id,
 )
 
 _MOCK_PROVIDER_NAME = "mock"
@@ -121,6 +135,18 @@ class PracticeSetService:
     ) -> PracticeSetResponse:
         self._validate_basis(request)
         self._validate_upload_ids(request, db, owned_ids=owned_ids)
+        structure_exercises = (
+            self._structure_exercises_for_topic(request)
+            if request.kind == "code_practice"
+            else None
+        )
+        if structure_exercises:
+            return self._generate_structure_set(
+                request,
+                structure_exercises,
+                db,
+                owner_principal_id=owner_principal_id,
+            )
 
         knowledge_points = self._bound_knowledge_points(request)
         set_id = str(uuid4())
@@ -300,6 +326,167 @@ class PracticeSetService:
                 )
             )
             item.judge_secret = {"quiz_session_ref": set_id}
+
+    def list_structure_catalog(self) -> StructureCatalogResponse:
+        """Return topic and public exercise summaries for the static catalogue."""
+        topics = [
+            StructureCatalogTopic(
+                id=topic.id,
+                title=topic.title,
+                description=topic.description,
+                count=len(exercises_for_topic(topic.id)),
+            )
+            for topic in STRUCTURE_TOPICS
+        ]
+        exercises = [
+            StructureCatalogExercise(
+                id=exercise.id,
+                topic_id=exercise.topic_id,
+                title=exercise.title,
+                kind=(
+                    "structure_sequence"
+                    if exercise.blanks and exercise.blanks[0].step_no <= 1
+                    else "framework_fill"
+                ),
+                objective=exercise.objective,
+                instruction=exercise.instruction,
+                options=[blank.hint for blank in exercise.blanks],
+                starter_code=exercise.code_masked,
+                hints=[blank.hint for blank in exercise.blanks],
+            )
+            for exercise in STRUCTURE_EXERCISES
+        ]
+        return StructureCatalogResponse(
+            schema_version="structure-practice.v1",
+            topics=topics,
+            exercises=exercises,
+        )
+
+    def _generate_structure_set(
+        self,
+        request: PracticeSetGenerateRequest,
+        exercises: list[StructureExercise],
+        db: Session,
+        owner_principal_id: str | None,
+    ) -> PracticeSetResponse:
+        """Archive a static structure/framework code-fill set."""
+        set_id = str(uuid4())
+        knowledge_points = self._bound_knowledge_points(request)
+        selected = exercises[: request.count]
+        item_models: list[PracticeSetItemModel] = []
+        for position, exercise in enumerate(selected, start=1):
+            payload, judge_secret = self._structure_item_payload(exercise)
+            item_models.append(
+                PracticeSetItemModel(
+                    set_id=set_id,
+                    item_id=exercise.id,
+                    position=position,
+                    item_kind="code_fill",
+                    payload=payload,
+                    judge_secret=judge_secret,
+                    owner_principal_id=owner_principal_id,
+                )
+            )
+        set_model = PracticeSetModel(
+            set_id=set_id,
+            kind=request.kind,
+            context_snapshot={
+                "request": request.model_dump(mode="json"),
+                "coverage": knowledge_points,
+                "audit": None,
+                "effective_context": None,
+                "effective_topic": request.topic,
+            },
+            local_profile_id=None,
+            profile_id=request.profile_id,
+            generation_mode="rules_fallback",
+            provider_name="rules",
+            owner_principal_id=owner_principal_id,
+        )
+        set_model.items = item_models
+        db.add(set_model)
+        db.commit()
+        items = [
+            PracticeItem(
+                item_id=item.item_id,
+                position=item.position,
+                item_kind="code_fill",
+                knowledge_points=knowledge_points,
+                judging="llm_static",
+                payload=_public_payload(item.item_kind, item.payload),
+                grading_hint=None,
+            )
+            for item in item_models
+        ]
+        return PracticeSetResponse(
+            set_id=set_id,
+            kind=request.kind,
+            items=items,
+            coverage=knowledge_points,
+            generation_mode="rules_fallback",
+            provider_name="rules",
+            audit=None,
+            effective_context=None,
+            effective_topic=request.topic,
+        )
+
+    @staticmethod
+    def _structure_item_payload(
+        exercise: StructureExercise,
+    ) -> tuple[dict, dict]:
+        blanks = [
+            {
+                "blank_id": blank.blank_id,
+                "answer": blank.answer,
+                "alternate_answers": list(blank.alternate_answers),
+                "hint": blank.hint,
+                "step_no": blank.step_no,
+            }
+            for blank in exercise.blanks
+        ]
+        payload = {
+            "title": exercise.title,
+            "language": "python",
+            "complexity": "light",
+            "judge_mode": "llm_static",
+            "code_masked": exercise.code_masked,
+            "blanks": [
+                {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS}
+                for blank in blanks
+            ],
+            "steps": [
+                {
+                    "step_no": step.step_no,
+                    "title": step.title,
+                    "reason": step.reason,
+                    "sub_steps": list(step.sub_steps),
+                }
+                for step in exercise.steps
+            ],
+            "source": "generated",
+            "reference_code_hash": hashlib.sha256(
+                exercise.reference_code.encode("utf-8")
+            ).hexdigest(),
+        }
+        return payload, {"blanks": blanks, "reference_code": exercise.reference_code}
+
+    @staticmethod
+    def _structure_exercises_for_topic(
+        request: PracticeSetGenerateRequest,
+    ) -> list[StructureExercise] | None:
+        if not request.topic:
+            return None
+        topic = topic_by_id(request.topic) or topic_by_id(
+            request.topic.strip().lower().replace(" ", "-")
+        )
+        if topic is None:
+            topic = next(
+                (item for item in STRUCTURE_TOPICS if item.title == request.topic),
+                None,
+            )
+        if topic is None:
+            return None
+        return exercises_for_topic(topic.id)
 
     def _generate_code_fill_specs(
         self,
