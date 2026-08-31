@@ -52,8 +52,9 @@ from kernel.providers import MockProvider  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def fresh_tables() -> Generator[None, None, None]:
-    """Keep conversation tests isolated in the shared in-memory engine."""
+def fresh_tables(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Keep conversation tests isolated in the shared in-memory engine and mock provider."""
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
