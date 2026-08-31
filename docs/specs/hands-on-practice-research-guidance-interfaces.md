@@ -449,10 +449,10 @@ CodeFillSpec {
 
 ### 5.1 P1-A 实现状态
 
-- §1.2：mock 生成行为保持冻结；`upload_ids` 已接入 `practice_code_uploads` 存在性/owner 校验；mixed/concept 概念题双写 quiz 归档完成。
-- §1.4：规则判分、跨 owner 404、`explain_only` 409、`(attempt_id, item_id)` 幂等 upsert 已实现；LLM 静态评审与画像聚合留待真实 Provider 接线。
+- §1.2：mock 生成行为保持冻结；`upload_ids` 已接入 `practice_code_uploads` 存在性/owner 校验；mixed/concept 概念题双写 quiz 归档完成；真实 code_fill 生成通过 `CODE_NAVI_PRACTICE_PROVIDER` 显式启用，失败时 `generation_mode=rules_fallback`。
+- §1.4：规则判分、跨 owner 404、`explain_only` 409、`(attempt_id, item_id)` 幂等 upsert 与 LLM 静态评审已实现；`profile_id` 进入画像聚合仍待接线。
 - §1.5：`.py/.md` 解析、415/413/数据集 400 与结果持久化已实现。
-- §1.6：`symbol.code_excerpt` schema 已补齐；进程内 LRU≤256 缓存、规则回退与同 principal 限频已实现。
+- §1.6：`symbol.code_excerpt` schema 已补齐；进程内 LRU≤256 缓存、模型路径、规则回退与同 principal 限频已实现。
 
 ### 5.2 P0-B 实现状态（PR-A，2026-08）
 
