@@ -97,6 +97,41 @@ def test_no_experiment_record_keeps_execution_dimension_unscored(
     assert "不表示复现成功" in result["boundary_note"]
 
 
+def test_partial_experiment_evidence_scores_below_complete_case(
+    client: TestClient,
+) -> None:
+    """中间案例：只有一条失败记录时，执行证据应低于完整记录案例且仍非成功。"""
+    conversation_id = _conversation(client)
+
+    saved = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/experiment-evidence-bundles",
+        json={
+            "experiment_name": "部分记录",
+            "goal": "先核对训练能否启动",
+            "items": [
+                {
+                    "category": "failure_or_limitation",
+                    "content": "第一次训练因显存不足中断，未产生指标。",
+                    "classification": "fact",
+                }
+            ],
+        },
+    )
+    assert saved.status_code == 201
+
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/reproduction-evaluations",
+        json={"user_confirmed": True},
+    )
+    assert response.status_code == 201
+    result = response.json()
+    execution = _dimension(result, "execution_evidence")
+    assert execution["status"] != "not_evaluable"
+    summary = result["score_summary"]
+    assert summary["scored_maximum"] < 100
+    assert "不表示复现成功" in result["boundary_note"]
+
+
 def test_evaluation_persists_records_and_user_controlled_tasks(
     client: TestClient,
 ) -> None:

@@ -69,8 +69,12 @@ from .conversation_schemas import (
     PaperReadingSection,
     PaperReview,
     PaperRevision,
+    ReadingReport,
+    ReadingReportInput,
     ReferenceDraftPackage,
     ReferenceEntryDraft,
+    ReproductionConditions,
+    ReproductionConditionsInput,
     ReproductionPipeline,
     ResearchContextSummary,
     ResearchConversationDecision,
@@ -91,6 +95,7 @@ from .conversation_schemas import (
     UnderstandingCheck,
     UpdateRevisionTaskRequest,
     UpdateSelectedCitationRequest,
+    missing_required_reproduction_conditions,
 )
 from .conversation_submission import build_paper_export_package, build_submission_readiness
 from .conversation_understanding import (
@@ -136,6 +141,14 @@ class SelectedCitationNotFoundError(LookupError):
 
 class ReproductionPipelineNotFoundError(LookupError):
     """Raised when a Pipeline or its explicitly selected saved source is absent."""
+
+
+class ReproductionConditionsMissing(RuntimeError):
+    """The user has not provided the key reproduction conditions yet."""
+
+    def __init__(self, missing: list[str]) -> None:
+        super().__init__("; ".join(missing))
+        self.missing = missing
 
 
 class ConversationDecisionGenerator(Protocol):
@@ -209,18 +222,30 @@ class ResearchConversationService:
         if request.initial_message:
             self._process_message(conversation, request.initial_message, db)
         else:
-            welcome = self._welcome_decision(conversation.id)
-            welcome_mode = "agent" if welcome[1] else "rules"
+            welcome_decision, welcome_used_llm, welcome_run_id, welcome_events = (
+                self._welcome_decision(conversation.id)
+            )
+            welcome_mode = "agent" if welcome_used_llm else "rules"
+            if not welcome_decision.suggested_answers:
+                welcome_decision = welcome_decision.model_copy(
+                    update={
+                        "suggested_answers": [
+                            "已有研究兴趣：我想围绕一个主题继续研究",
+                            "需要推荐方向：我还没有明确研究主题",
+                            "我有项目背景，但还没有研究问题",
+                        ]
+                    }
+                )
             self._append_assistant(
                 conversation,
-                welcome[0],
+                welcome_decision,
                 generation_mode=welcome_mode,
-                run_id=welcome[2],
-                event_count=welcome[3],
+                run_id=welcome_run_id,
+                event_count=welcome_events,
             )
-            conversation.profile_data = _apply_decision(ResearchProfile(), welcome[0]).model_dump(
-                mode="json"
-            )
+            conversation.profile_data = _apply_decision(
+                ResearchProfile(), welcome_decision
+            ).model_dump(mode="json")
             db.commit()
             db.refresh(conversation)
         return self._to_response(conversation, db)
@@ -310,7 +335,10 @@ class ResearchConversationService:
             conversation,
             ResearchConversationDecision(
                 reply=(
-                    f"已接收并记录你确认的 Learning 上下文，当前研究主题是“{provenance.topic}”。"
+                    "学习背景开场总结\n"
+                    f"已确认主题：{provenance.topic}\n"
+                    f"学习摘要：{provenance.summary[:1000]}\n\n"
+                    "以上内容来自你在 Learning 中查看、修改并确认的背景，不会自动成为研究结论。"
                     "接下来可以在此基础上收敛研究问题；原始学习笔记不会被科研会话修改。"
                 ),
                 intent="clarify",
@@ -342,6 +370,104 @@ class ResearchConversationService:
         """Process one free-form user message and return the restorable state."""
         conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
         self._process_message(conversation, request.message, db)
+        return self._to_response(conversation, db)
+
+    def retry_last_reply(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchConversationResponse:
+        """Regenerate the latest failed model reply without re-asking the user.
+
+        The user message and every earlier success stay untouched; a failed
+        retry leaves the recorded ``rules_fallback`` message in place and raises
+        a structured generation error instead of storing rules prose.
+        """
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        messages = _messages(conversation)
+        failed_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if messages[index].role == "assistant"
+                and messages[index].generation_mode == "rules_fallback"
+            ),
+            None,
+        )
+        user_index = failed_index - 1 if failed_index is not None else -1
+        while user_index >= 0 and messages[user_index].role != "user":
+            user_index -= 1
+        if failed_index is None or user_index < 0:
+            raise ValueError("当前会话没有可重试的失败回复。")
+        user_message = messages[user_index].content
+        history = messages[:user_index]
+        confirmed_context = _confirmed_context(conversation)
+        persisted_summary = (
+            ResearchContextSummary.model_validate(conversation.context_summary_data)
+            if conversation.context_summary_data
+            else None
+        )
+        runtime_input = build_research_conversation_input(
+            profile,
+            user_message,
+            confirmed_context,
+        )
+        try:
+            context = self.context_assembler.assemble(
+                ResearchContextInput(
+                    history,
+                    research_conversation_agent.system_prompt,
+                    runtime_input,
+                    persisted_summary,
+                )
+            )
+        except Exception:
+            context = None
+        outcome = self.decision_generator.generate(
+            profile=profile,
+            conversation_history=(
+                context.conversation_history
+                if context is not None
+                else _kernel_conversation_history(history)
+            ),
+            user_message=user_message,
+            conversation_id=conversation.id,
+            confirmed_context=confirmed_context,
+            runtime_input=runtime_input,
+        )
+        if outcome.status != "generated" or outcome.decision is None:
+            stage = (
+                "provider_unavailable" if outcome.status == "unavailable" else "failed"
+            )
+            raise ResearchGenerationError(stage, outcome.reason or "retry failed")
+        decision = _enforce_runtime_decision(profile, history, user_message, outcome.decision)
+        conversation.profile_data = _apply_decision(profile, decision).model_dump(mode="json")
+        if context is not None and context.pending_summary is not None:
+            conversation.context_summary_data = context.pending_summary.model_dump(mode="json")
+        replacement = ResearchConversationMessage(
+            message_id=str(uuid.uuid4()),
+            role="assistant",
+            content=decision.reply,
+            created_at=datetime.now(UTC),
+            generation_mode="agent",
+            run_id=outcome.run_id,
+            event_count=outcome.event_count,
+            intent=decision.intent,
+            next_question=decision.next_question,
+            suggested_answers=decision.suggested_answers,
+            candidate_questions=decision.candidate_questions,
+            recommended_action=decision.recommended_action,
+        )
+        conversation.messages_data = [
+            *[message.model_dump(mode="json") for message in messages[:failed_index]],
+            replacement.model_dump(mode="json"),
+            *[message.model_dump(mode="json") for message in messages[failed_index + 1 :]],
+        ]
+        db.commit()
+        db.refresh(conversation)
         return self._to_response(conversation, db)
 
     def get(
@@ -727,6 +853,62 @@ class ResearchConversationService:
         self._get_model(conversation_id, db)
         return self._experiment_evidence_bundles(conversation_id, db)
 
+    def save_reproduction_conditions(
+        self,
+        conversation_id: str,
+        request: ReproductionConditionsInput,
+        db: Session,
+    ) -> ResearchConversationResponse:
+        """Store user-provided reproduction conditions as user-sourced facts."""
+        conversation = self._get_model(conversation_id, db)
+        conditions = ReproductionConditions(
+            **request.model_dump(),
+            updated_at=datetime.now(UTC),
+        )
+        stored = dict(conversation.generated_artifacts or {})
+        stored["reproduction_conditions"] = conditions.model_dump(mode="json")
+        conversation.generated_artifacts = stored
+        db.commit()
+        db.refresh(conversation)
+        return self._to_response(conversation, db)
+
+    def save_reading_report(
+        self,
+        conversation_id: str,
+        request: ReadingReportInput,
+        db: Session,
+    ) -> list[ReadingReport]:
+        """Store the user's own reading summary for one saved paper."""
+        conversation = self._get_model(conversation_id, db)
+        report = ReadingReport(
+            report_id=str(uuid.uuid4()),
+            paper_url=request.paper_url,
+            title=request.title,
+            content=request.content,
+            created_at=datetime.now(UTC),
+        )
+        stored = dict(conversation.generated_artifacts or {})
+        reports = stored.get("reading_reports")
+        reports_list = [dict(item) for item in reports] if isinstance(reports, list) else []
+        reports_list.append(report.model_dump(mode="json"))
+        stored["reading_reports"] = reports_list
+        conversation.generated_artifacts = stored
+        db.commit()
+        db.refresh(conversation)
+        return [ReadingReport.model_validate(item) for item in reports_list]
+
+    def list_reading_reports(
+        self,
+        conversation_id: str,
+        db: Session,
+    ) -> list[ReadingReport]:
+        """Restore the conversation's reading reports without reinterpreting them."""
+        conversation = self._get_model(conversation_id, db)
+        stored = dict(conversation.generated_artifacts or {})
+        reports = stored.get("reading_reports")
+        reports_list = reports if isinstance(reports, list) else []
+        return [ReadingReport.model_validate(item) for item in reports_list]
+
     def create_reproduction_pipeline(
         self,
         conversation_id: str,
@@ -750,6 +932,16 @@ class ResearchConversationService:
         if paper is None:
             raise ReproductionPipelineNotFoundError(request.paper_url)
         profile = ResearchProfile.model_validate(conversation.profile_data)
+        stored_artifacts = dict(conversation.generated_artifacts or {})
+        conditions_payload = stored_artifacts.get("reproduction_conditions")
+        conditions = (
+            ReproductionConditions.model_validate(conditions_payload)
+            if conditions_payload
+            else None
+        )
+        missing_conditions = missing_required_reproduction_conditions(conditions)
+        if missing_conditions:
+            raise ReproductionConditionsMissing(missing_conditions)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
             profile, ready_for_plan=readiness.can_prepare_search
@@ -792,6 +984,7 @@ class ResearchConversationService:
             pipeline_id=pipeline_id,
             created_at=created_at,
             paper_reading=paper_reading,
+            conditions=conditions,
         )
         db.add(
             ResearchReproductionPipelineModel(
@@ -1544,6 +1737,9 @@ class ResearchConversationService:
             selected_paper=selected_paper,
             paper_analysis=paper_analysis,
             topic_difficulty_analysis=topic_analysis,
+            reproduction_conditions=_stored_artifact(
+                ReproductionConditions, stored.get("reproduction_conditions")
+            ),
             experiment_design=experiment_design,
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
@@ -1836,6 +2032,8 @@ def _fallback_patch(
     messages: list[ResearchConversationMessage],
     message: str,
 ) -> ResearchProfilePatch:
+    if _is_research_entry_branch(message):
+        return ResearchProfilePatch()
     if (
         _requests_prepare_search(message)
         or _requests_profile_review(message)
@@ -1977,6 +2175,11 @@ def _fallback_patch(
         time_scope=time_scope,
         research_questions=research_questions,
     )
+
+
+def _is_research_entry_branch(message: str) -> bool:
+    normalized = message.replace(" ", "")
+    return normalized.startswith(("已有研究兴趣", "需要推荐方向"))
 
 
 def _first_capture(message: str, patterns: tuple[str, ...]) -> str | None:

@@ -48,8 +48,11 @@ from .conversation_schemas import (
     PaperExportPackage,
     PaperReview,
     PaperRevision,
+    ReadingReport,
+    ReadingReportInput,
     ReferenceDraftPackage,
     ReferenceEntryDraft,
+    ReproductionConditionsInput,
     ReproductionPipeline,
     ResearchConversationResponse,
     ResearchMindMap,
@@ -75,6 +78,7 @@ from .conversation_search_service import (
 from .conversation_service import (
     CitationSourceNotFoundError,
     ConversationNotFoundError,
+    ReproductionConditionsMissing,
     ReproductionPipelineNotFoundError,
     ResearchConversationService,
     SelectedCitationNotFoundError,
@@ -237,6 +241,35 @@ def send_conversation_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found.",
         ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/retry-last",
+    response_model=ResearchConversationResponse,
+)
+def retry_last_failed_reply(
+    conversation_id: str,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> ResearchConversationResponse:
+    """Regenerate the latest failed model reply; the user message is preserved."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_service.retry_last_reply(
+            conversation_id, db, owned_ids=owned_ids
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
 
 
 @router.get(
@@ -427,6 +460,55 @@ def list_conversation_evidence_bundles(
 
 
 @router.post(
+    "/conversations/{conversation_id}/reading-reports",
+    response_model=list[ReadingReport],
+    status_code=status.HTTP_201_CREATED,
+)
+def save_reading_report(
+    conversation_id: str,
+    request: ReadingReportInput,
+    db: Session = _db_dependency,
+) -> list[ReadingReport]:
+    """Store the user's own reading summary; it stays user-sourced."""
+    try:
+        return _conversation_service.save_reading_report(conversation_id, request, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/reading-reports",
+    response_model=list[ReadingReport],
+)
+def list_reading_reports(
+    conversation_id: str, db: Session = _db_dependency
+) -> list[ReadingReport]:
+    """Restore the conversation's reading reports verbatim."""
+    try:
+        return _conversation_service.list_reading_reports(conversation_id, db)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.put(
+    "/conversations/{conversation_id}/reproduction-conditions",
+    response_model=ResearchConversationResponse,
+)
+def save_reproduction_conditions(
+    conversation_id: str,
+    request: ReproductionConditionsInput,
+    db: Session = _db_dependency,
+) -> ResearchConversationResponse:
+    """Store user-provided hardware/time/goal conditions before planning."""
+    try:
+        return _conversation_service.save_reproduction_conditions(
+            conversation_id, request, db
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
     "/conversations/{conversation_id}/reproduction-pipelines",
     response_model=ReproductionPipeline,
     status_code=status.HTTP_201_CREATED,
@@ -439,6 +521,15 @@ def create_reproduction_pipeline(
     """Create a model-written plan from one user-selected already-saved paper."""
     try:
         return _conversation_service.create_reproduction_pipeline(conversation_id, request, db)
+    except ReproductionConditionsMissing as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "reproduction_conditions_missing",
+                "missing": error.missing,
+                "message": "请先补齐硬件、可用时间和复现目标，再生成复现方案。",
+            },
+        ) from error
     except ResearchGenerationError as error:
         _raise_generation_error(error)
     except ConversationNotFoundError as error:

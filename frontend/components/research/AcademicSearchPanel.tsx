@@ -11,6 +11,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+
+import { LiteratureHotspots } from "./LiteratureHotspots";
 import Link from "next/link";
 
 import {
@@ -90,6 +92,7 @@ export function AcademicSearchPanel({
   const [plan, setPlan] = useState<ResearchSearchPlan | null>(null);
   const [query, setQuery] = useState("");
   const [bundle, setBundle] = useState<ConversationEvidenceBundle | null>(null);
+  const [savedBundles, setSavedBundles] = useState<ConversationEvidenceBundle[]>([]);
   const [selectedSources, setSelectedSources] = useState<AcademicSourceId[]>([]);
   const [phase, setPhase] = useState<"planning" | "ready" | "searching">("planning");
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +112,9 @@ export function AcademicSearchPanel({
         return listResearchEvidence(conversationId);
       })
       .then((saved) => {
-        if (active && saved?.length) setBundle(saved[0]);
+        if (!active || !saved?.length) return;
+        setSavedBundles(saved);
+        setBundle(saved[0]);
       })
       .catch((requestError) => {
         if (!active) return;
@@ -219,7 +224,7 @@ export function AcademicSearchPanel({
               type="button"
               onClick={() => void runSearch()}
               disabled={!query.trim() || !selectedSources.length || phase === "searching"}
-                className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
+                className="app-button-primary inline-flex min-h-10 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
             >
               {phase === "searching" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               {phase === "searching"
@@ -230,14 +235,29 @@ export function AcademicSearchPanel({
         ) : null}
 
         {error && (
-          <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs leading-5 text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/20 dark:text-rose-300">
+          <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/20 dark:text-rose-300">
             <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" /> {error}
           </div>
         )}
 
         {bundle && (
+          <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/40">
+            <summary className="min-h-10 cursor-pointer text-base font-semibold text-slate-800 dark:text-zinc-200">来源热点概览（仅聚合当前检索结果，可展开）</summary>
+            <div className="mt-3">
+              <LiteratureHotspots
+                bundles={(() => {
+                  const merged = new Map<string, ConversationEvidenceBundle>();
+                  [...savedBundles, bundle].forEach((item) => merged.set(item.bundle_id, item));
+                  return [...merged.values()];
+                })()}
+              />
+            </div>
+          </details>
+        )}
+
+        {bundle && (
           <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-zinc-800">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-zinc-400">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500 dark:text-zinc-400">
               <span>
                 找到 {bundle.papers.length} 条论文元数据
                 {bundle.cache_hit ? " · 来自本地缓存" : ""}
@@ -246,14 +266,14 @@ export function AcademicSearchPanel({
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
               {bundle.source_statuses.map((status) => (
-                <div key={status.source} className="rounded-xl border border-slate-200 p-2.5 text-xs dark:border-zinc-700">
+                <div key={status.source} className="rounded-xl border border-slate-200 p-2.5 text-sm dark:border-zinc-700">
                   <p className="flex items-center justify-between gap-2 font-semibold">
                     <span>{status.source}</span>
                     <span className={status.status === "success" ? "text-emerald-600" : "text-amber-600"}>
                       {status.status}
                     </span>
                   </p>
-                  <p className="mt-1 text-[11px] text-slate-500 dark:text-zinc-400">
+                  <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
                     {status.duration_ms} ms{status.reason ? ` · ${status.reason}` : ""}
                   </p>
                 </div>
@@ -277,7 +297,7 @@ export function AcademicSearchPanel({
                   <p className="mt-1 text-sm text-slate-600 dark:text-zinc-300">
                     {[paper.authors.slice(0, 4).join("、"), paper.year, paper.source_name].filter(Boolean).join(" · ")}
                   </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-semibold">
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-sm font-semibold">
                     <span className="rounded-full bg-sky-50 px-2 py-1 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">平台：{paper.source_name}</span>
                     <span className="rounded-full bg-violet-50 px-2 py-1 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">证据：{paper.abstract_excerpt ? "摘要级" : "元数据级"}</span>
                     <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300">摘要：{paper.abstract_excerpt ? "可用" : "不可用"}</span>
@@ -293,7 +313,7 @@ export function AcademicSearchPanel({
                 </article>
               ))
             ) : (
-              <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-zinc-950 dark:text-zinc-400">
+              <p className="rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-600 dark:bg-zinc-950 dark:text-zinc-400">
                 本次没有可展示的论文。{bundle.failure_reasons.join("；") || "可以调整检索词后重试。"}
               </p>
             )}
@@ -303,14 +323,14 @@ export function AcademicSearchPanel({
                   type="button"
                   onClick={() => void saveSelectedEvidence()}
                   disabled={!selectedPaperUrls.length || savingNote}
-                  className="app-button-primary inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
+                  className="app-button-primary inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {savingNote ? <Loader2 className="h-4 w-4 animate-spin" /> : savedNoteId ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
                   {savedNoteId ? "已保存为研究笔记" : `保存所选证据到 Notebook（${selectedPaperUrls.length}）`}
                 </button>
-                <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-zinc-400">保存内容包括研究主题、问题、所选 Evidence 来源和下一步建议，并保留当前 Research Conversation。</p>
+                <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-zinc-400">保存内容包括研究主题、问题、所选 Evidence 来源和下一步建议，并保留当前 Research Conversation。</p>
                 {savedNoteId && (
-                  <Link href="/learning#research-notes" className="app-button-secondary mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition hover:bg-slate-50 dark:hover:bg-zinc-800">
+                  <Link href="/learning#research-notes" className="app-button-secondary mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold transition hover:bg-slate-50 dark:hover:bg-zinc-800">
                     <BookOpenCheck className="h-4 w-4" /> 返回学习笔记查看
                   </Link>
                 )}

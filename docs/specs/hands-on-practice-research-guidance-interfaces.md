@@ -212,6 +212,11 @@ CodeFillSpec {
 
 全部端点挂现有 research router，沿用会话 404、准备度 409 语义。破坏性字段变更一律 additive：新增字段 + 旧字段投影保留，前端迁移完成后下线旧字段。两处例外：§2.5 论文蓝图（唯一非 additive 变更，豁免理由见该节）；§2.6 复现评估（已落库，改用 payload `schema_version` 版本化共存）。
 
+**架构哲学与边界注记**：
+1. **\"全 LLM + 结构化失败\"仅适用 v1 存量端点**：存量科研会话、计划、难点、实验设计、代码草案、论文蓝图等采用全 LLM 生成，失败时返回显式结构化错误，不以伪造的规则正文替代模型输出。
+2. **P0-B 新增引导端点保持纯规则**：§2.1 `stage-briefing` 与 §2.2 `study-recommendations` 等端点保持确定性规则运算，绝不调用模型。
+3. **事实与证据红线**：模型只许产出 `inference` 与 `to_verify` 标签，不得自造 `fact` 事实分类；`evidence_linked` 仅代表存在实验记录证据，绝不表示复现成功。
+
 ### 2.1 `GET .../stage-briefing` — 科研首屏阶段总结（规则）
 
 六步闭环第 5→6 步的衔接接口。无 body；`?include_evidence_trends=true` 可选。
@@ -349,6 +354,42 @@ CodeFillSpec {
 1. 五段结构写入 paper-blueprint system prompt；指标目录以白名单注入 experiment-design prompt；
 2. 模型输出统一过 reducer：越界字段丢弃（温故知新条目例外——无法归入四区的降级为无 `area_code` 的普通建议文本，见 §2.3）；未命中目录指标降级 `to_verify`；引用了未保存 Evidence 的方向分析降级为"建议"并去掉证据声明；
 3. 所有产物 `provenance_note` 必须写明 规则/模型/降级 来源与边界（沿用现有边界语义）。
+
+### 2.8 `POST .../messages/retry-last` — 对话回复重试（检查点 2）
+
+请求：无 body。
+
+处理：当上一轮模型生成由于网络、Provider 异常或输出解析校验失败中断时，保持用户输入的消息文本与会话上下文不变，仅重发并重试该轮模型回复。若最新一条消息非 assistant 失败记录，返回 HTTP 409。
+
+响应：返回更新后的 `ResearchConversationResponse`。
+
+### 2.9 `PUT .../reproduction-conditions` — 复现条件收集与 409 门控（检查点 4）
+
+请求：
+```text
+{
+  "hardware_environment": str ≤500,     # GPU/CPU/内存配置
+  "time_budget": str ≤200,               # 预期耗时/可用周期
+  "reproduction_goal": str ≤500          # 精度验证/性能复现/全量重跑
+}
+```
+
+处理：将用户提供的客观运行先决条件作为用户事实（`fact`）记录在 `generated_artifacts.reproduction_conditions` 中。下游 `POST .../reproduction-pipelines` 在生成复现规划前必须校验此条件集合已完整填报，若缺失直接返回 HTTP 409 `reproduction_conditions_missing` 阻止未约束的方案生成。
+
+响应：返回包含已持久化条件的 `ResearchConversationResponse`。
+
+### 2.10 `POST/GET .../reading-reports` — 论文精读与阅读报告（检查点 5）
+
+`POST .../reading-reports` 请求：
+```text
+{
+  "paper_url": str,
+  "title": str ≤200,
+  "content": str ≤8000
+}
+```
+
+处理：允许学生对已存入文献库的论文提交个人阅读笔记与报告摘要。报告作为用户第一手事实证据归档入会话，不被模型二次加工或改写，可作为后续复现规划与导图生成的事实输入。`GET .../reading-reports` 原样按存储顺序返回报告列表。
 
 ## 3. 学习端上下文协议（夏俊杰）
 

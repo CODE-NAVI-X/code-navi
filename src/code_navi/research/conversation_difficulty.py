@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 
 from .conversation_schemas import (
@@ -17,7 +18,11 @@ from .conversation_schemas import (
 )
 from .conversation_understanding import section_key_for_area
 from .research_artifact_llm import ResearchArtifactGenerator
-from .research_generation import ResearchGenerationError, require_generated_artifact
+from .research_generation import (
+    ResearchGenerationError,
+    require_contract_fields,
+    require_generated_artifact,
+)
 from .schemas import AcademicPaperResult
 
 _TOPIC_PROVENANCE = (
@@ -32,6 +37,64 @@ _PAPER_METADATA_PROVENANCE = (
     "本分析由模型仅基于用户选中的已保存论文元数据和来源摘要生成；"
     "不下载全文，也不把待核验项当作事实。"
 )
+
+_LATIN_TOKEN = re.compile(r"[a-z][a-z0-9_-]{2,}")
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _lexical_tokens(text: str) -> set[str]:
+    """Deterministic tokens for cheap grounding checks (latin words + CJK bigrams)."""
+    lowered = (text or "").lower()
+    tokens = set(_LATIN_TOKEN.findall(lowered))
+    cjk = _CJK_CHAR.findall(lowered)
+    tokens.update(
+        f"{first}{second}" for first, second in zip(cjk, cjk[1:], strict=False)
+    )
+    return tokens
+
+
+def _assert_paper_grounded(
+    items: Iterable[ResearchAnalysisItem],
+    *,
+    paper: AcademicPaperResult,
+    paper_reading: object | None,
+) -> None:
+    """Reject analysis items with no lexical tie to the saved paper material.
+
+    An item is grounded when it cites an EvidenceReference or shares at least
+    one token with the paper title, abstract excerpt or the bounded reading
+    text.  Fully generic prose that could describe any paper is an
+    ``invalid_output`` failure, matching the negative list in the agent prompt.
+    """
+    materials = " ".join(
+        part
+        for part in (
+            paper.title,
+            paper.abstract_excerpt or "",
+            getattr(paper_reading, "text_excerpt", "") or "",
+            " ".join(
+                section.text
+                for section in (getattr(paper_reading, "sections", None) or [])
+            ),
+        )
+        if part
+    )
+    material_tokens = _lexical_tokens(materials)
+    ungrounded: list[str] = []
+    for item in items:
+        if item.evidence_refs:
+            continue
+        item_tokens = _lexical_tokens(
+            " ".join((item.area, item.content, item.basis))
+        )
+        if not item_tokens & material_tokens:
+            ungrounded.append(item.area)
+    if ungrounded:
+        raise ResearchGenerationError(
+            "invalid_output",
+            "paper_analysis: items not grounded in the saved paper material: "
+            + ", ".join(ungrounded),
+        )
 
 
 def build_topic_difficulty_analysis(
@@ -76,6 +139,8 @@ def build_topic_difficulty_analysis(
         "required_json_shape": {
             "title": "string",
             "information_scope": scope,
+            "core_judgment": "string",
+            "next_action": "string",
             "items": [
                 {
                     "area": "string",
@@ -83,6 +148,8 @@ def build_topic_difficulty_analysis(
                     "classification": "inference|to_verify",
                     "basis": "string",
                     "source_scope": "profile_and_plan_only|metadata_and_abstract_only",
+                    "relevance": "string",
+                    "suggested_action": "string",
                     "evidence_refs": [
                         {
                             "bundle_id": "saved bundle id",
@@ -114,6 +181,21 @@ def build_topic_difficulty_analysis(
                 for reference in item.evidence_refs:
                     allowed_refs[(reference.bundle_id, reference.paper_url)] = reference
         _assert_model_analysis_boundary(enhanced.items, allowed_refs=allowed_refs)
+        require_contract_fields(
+            {
+                "core_judgment": enhanced.core_judgment,
+                "next_action": enhanced.next_action,
+            },
+            kind="topic_difficulty_analysis",
+        )
+        for topic_item in enhanced.items:
+            require_contract_fields(
+                {
+                    "relevance": topic_item.relevance,
+                    "suggested_action": topic_item.suggested_action,
+                },
+                kind="topic_difficulty_analysis item",
+            )
         if enhanced.information_scope != scope:
             raise ValueError("model changed information scope")
         enhanced = enhanced.model_copy(
@@ -181,6 +263,12 @@ def build_paper_analysis(
             "research_context": research_context or {},
             "writing_guidance": [
                 "优先回答这篇论文如何帮助当前研究目标或复现任务，不要写成泛泛的领域综述。",
+                "输出顶部给出 core_judgment：一句话说明该论文对当前研究问题的"
+                "价值与主要缺口，不超过两句。",
+                "每条分析项必须填写 relevance（与当前研究问题的关系）和"
+                "suggested_action（一个可执行下一步）。",
+                "结尾给出 summary：概括已覆盖的章节或范围与仍未核验的部分，不使用空洞的鼓励话术。",
+                "给出唯一的 next_action；不要一次罗列多个并列建议。",
                 "只提出与论文方法、数据、实验或复现限制直接相关的 3 至 6 条建议，"
                 "避免重复同义内容。",
                 "每条建议都要说明正文或摘要中的依据；正文未覆盖的细节保持 to_verify。",
@@ -210,6 +298,7 @@ def build_paper_analysis(
                 "paper_url": "string",
                 "information_scope": "metadata_and_abstract_only|full_text_user_triggered",
                 "abstract_available": "boolean",
+                "core_judgment": "string",
                 "items": [
                     {
                         "area": "string",
@@ -219,8 +308,12 @@ def build_paper_analysis(
                         "source_scope": "metadata_and_abstract_only|full_text_user_triggered",
                         "chapter_key": "string|null",
                         "chapter_order": "integer|null",
+                        "relevance": "string",
+                        "suggested_action": "string",
                     }
                 ],
+                "summary": "string",
+                "next_action": "string",
                 "provenance_note": "string",
             },
         },
@@ -263,6 +356,25 @@ def build_paper_analysis(
                         for item in enhanced.items
                     ]
                 }
+            )
+        _assert_paper_grounded(
+            enhanced.items, paper=paper, paper_reading=paper_reading
+        )
+        require_contract_fields(
+            {
+                "core_judgment": enhanced.core_judgment,
+                "summary": enhanced.summary,
+                "next_action": enhanced.next_action,
+            },
+            kind="paper_analysis",
+        )
+        for analysis_item in enhanced.items:
+            require_contract_fields(
+                {
+                    "relevance": analysis_item.relevance,
+                    "suggested_action": analysis_item.suggested_action,
+                },
+                kind="paper_analysis item",
             )
         return enhanced.model_copy(
             update={

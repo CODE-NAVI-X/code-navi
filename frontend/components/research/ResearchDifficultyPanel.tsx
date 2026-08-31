@@ -77,12 +77,22 @@ export function ResearchDifficultyPanel({
             {current.information_scope === "metadata_and_abstract_only" ? "已有元数据/摘要" : "科研画像与规则计划"}。
           </p>
           <div className="mt-4 rounded-xl border border-slate-200/80 bg-slate-50/70 p-5 text-base leading-8 dark:border-zinc-800 dark:bg-zinc-950/40" aria-label="方向难点分析正文">
+            {current.core_judgment && (
+              <p className="mb-3 font-semibold text-slate-900 dark:text-zinc-100">核心判断：{current.core_judgment}</p>
+            )}
             {current.items.map((item) => (
-              <p key={`${item.area}:${item.content}`} className="whitespace-pre-wrap text-slate-700 dark:text-zinc-300">
-                <span className="font-semibold text-slate-900 dark:text-zinc-100">{item.area}：</span>
-                {item.content}
-              </p>
+              <div key={`${item.area}:${item.content}`} className="mb-3 last:mb-0">
+                <p className="whitespace-pre-wrap text-slate-700 dark:text-zinc-300">
+                  <span className="font-semibold text-slate-900 dark:text-zinc-100">{item.area}：</span>
+                  {item.content}
+                </p>
+                {item.relevance && <p className="mt-1 text-slate-700 dark:text-zinc-300">与当前研究问题的关系：{item.relevance}</p>}
+                {item.suggested_action && <p className="mt-1 text-slate-700 dark:text-zinc-300">建议下一步：{item.suggested_action}</p>}
+              </div>
             ))}
+            {current.next_action && (
+              <p className="mt-3 font-semibold text-slate-900 dark:text-zinc-100">唯一下一步：{current.next_action}</p>
+            )}
           </div>
           <div className="mt-4 space-y-3 text-sm leading-6 text-slate-600 dark:text-zinc-400">
             {current.items.map((item) => (

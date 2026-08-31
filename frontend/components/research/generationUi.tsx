@@ -7,6 +7,7 @@ import { ResearchApiError } from "@/lib/api/research";
 export const GENERATION_MODE_LABELS: Record<string, string> = {
   llm: "模型生成",
   rules: "基础规则",
+  rules_fallback: "模型生成失败",
 };
 
 export function generationModeLabel(mode: string): string {
@@ -26,7 +27,7 @@ export function GenerationFailure({
   error: string;
   busy: boolean;
   hasLastSuccess: boolean;
-  onRetry: () => void;
+  onRetry?: () => void;
 }) {
   return (
     <div
@@ -42,15 +43,17 @@ export function GenerationFailure({
           ? "已保留并继续展示上一次成功生成的结果；可重试生成最新内容。"
           : "本次未生成科研建议，请重试。"}
       </p>
-      <button
-        type="button"
-        onClick={onRetry}
-        disabled={busy}
-        className="app-button-secondary mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50"
-      >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-        重试生成
-      </button>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={busy}
+          className="app-button-secondary mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+          重试生成
+        </button>
+      )}
     </div>
   );
 }

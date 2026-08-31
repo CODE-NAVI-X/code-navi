@@ -14,6 +14,7 @@ import {
   type PaperBlueprint,
   type ReproductionPipeline,
 } from "@/lib/api/research";
+import { ClassificationBadge } from "./ClassificationBadge";
 import { GenerationFailure, isGenerationFailure } from "./generationUi";
 
 const categoryLabels: Array<{ value: ExperimentEvidenceCategory; label: string }> = [
@@ -34,6 +35,10 @@ const classificationLabels: Record<AnalysisClassification, string> = {
   inference: "建议/推断",
   to_verify: "待验证",
 };
+
+function EntryLabel({ classification }: { classification: AnalysisClassification }) {
+  return <ClassificationBadge classification={classification} />;
+}
 
 export function ExperimentEvidencePanel({
   conversationId,
@@ -122,41 +127,41 @@ export function ExperimentEvidencePanel({
     <section className="app-card rounded-2xl p-4">
       <div className="flex items-center gap-3">
         <span className="rounded-xl bg-slate-100 p-2 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300"><ClipboardCheck className="h-4 w-4" /></span>
-        <div><p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-zinc-400">Experiment evidence</p><h2 className="mt-1 text-sm font-bold">实验结果证据包</h2></div>
+        <div><p className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-zinc-400">Experiment evidence</p><h2 className="mt-1 text-lg font-bold">实验结果证据包</h2></div>
       </div>
-      <p className="mt-3 text-[11px] leading-5 text-slate-600 dark:text-zinc-400">仅保存你主动粘贴的文本、表格文本或图表说明。不会读取文件、运行代码或联网；“事实”表示你的报告，系统不会将其当作已独立复核结论。</p>
+      <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-400">仅保存你主动粘贴的文本、表格文本或图表说明。不会读取文件、运行代码或联网；“事实”表示你的报告，系统不会将其当作已独立复核结论。</p>
       <div className="mt-3 grid gap-2">
-        <input value={experimentName} onChange={(event) => setExperimentName(event.target.value)} maxLength={500} placeholder="实验名称" aria-label="实验名称" className="app-input rounded-lg px-2 py-1.5 text-xs" />
-        <input value={goal} onChange={(event) => setGoal(event.target.value)} maxLength={1000} placeholder="实验目标" aria-label="实验目标" className="app-input rounded-lg px-2 py-1.5 text-xs" />
+        <input value={experimentName} onChange={(event) => setExperimentName(event.target.value)} maxLength={500} placeholder="实验名称" aria-label="实验名称" className="app-input min-h-10 rounded-lg px-2 py-1.5 text-sm" />
+        <input value={goal} onChange={(event) => setGoal(event.target.value)} maxLength={1000} placeholder="实验目标" aria-label="实验目标" className="app-input min-h-10 rounded-lg px-2 py-1.5 text-sm" />
         <div className="grid grid-cols-2 gap-2">
-          <select value={category} onChange={(event) => setCategory(event.target.value as ExperimentEvidenceCategory)} aria-label="证据类别" className="app-input rounded-lg px-2 py-1.5 text-[11px]">{categoryLabels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
-          <select value={classification} onChange={(event) => setClassification(event.target.value as AnalysisClassification)} aria-label="证据分类" className="app-input rounded-lg px-2 py-1.5 text-[11px]">{Object.entries(classificationLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+          <select value={category} onChange={(event) => setCategory(event.target.value as ExperimentEvidenceCategory)} aria-label="证据类别" className="app-input min-h-10 rounded-lg px-2 py-1.5 text-sm">{categoryLabels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          <select value={classification} onChange={(event) => setClassification(event.target.value as AnalysisClassification)} aria-label="证据分类" className="app-input min-h-10 rounded-lg px-2 py-1.5 text-sm">{Object.entries(classificationLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
         </div>
-        <label className="text-[11px] text-slate-600 dark:text-zinc-400">
+        <label className="text-sm text-slate-600 dark:text-zinc-400">
           关联复现任务（可选）
-          <select value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)} aria-label="关联复现任务" className="app-input mt-1 w-full rounded-lg px-2 py-1.5 text-[11px]">
+          <select value={selectedTaskId} onChange={(event) => setSelectedTaskId(event.target.value)} aria-label="关联复现任务" className="app-input mt-1 min-h-10 w-full rounded-lg px-2 py-1.5 text-sm">
             <option value="">不关联任务</option>
             {pipeline?.tasks.map((task) => <option key={task.task_id} value={task.task_id}>{task.title}</option>)}
           </select>
         </label>
-        <p className="text-[10px] leading-5 text-slate-500 dark:text-zinc-400">
+        <p className="text-sm leading-6 text-slate-500 dark:text-zinc-400">
           {pipeline
             ? "关联只表示存在相关用户实验记录，不代表实验正确、完成或复现成功。"
             : "请先从已保存论文主动生成复现方案；系统不会用普通研究计划补造关联任务。"}
         </p>
-        <textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={4000} rows={4} placeholder="例如：指标、数值、失败原因、表格文本或待确认条件…" aria-label="实验结果或证据内容" className="app-input resize-y rounded-lg px-2 py-1.5 text-xs leading-5" />
+        <textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={4000} rows={4} placeholder="例如：指标、数值、失败原因、表格文本或待确认条件…" aria-label="实验结果或证据内容" className="app-input resize-y rounded-lg px-2 py-1.5 text-sm leading-6" />
       </div>
-      <button type="button" onClick={() => void saveEvidence()} disabled={saving} className="app-button-secondary mt-2 inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}保存结果记录</button>
+      <button type="button" onClick={() => void saveEvidence()} disabled={saving} className="app-button-secondary mt-2 inline-flex min-h-10 items-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}保存结果记录</button>
       {error && <p role="alert" className="mt-2 whitespace-pre-wrap text-xs text-rose-600">{error}</p>}
-      {loading ? <p role="status" aria-live="polite" className="mt-3 text-[11px] text-slate-500">正在恢复已保存的实验结果…</p> : bundles.length ? <div className="mt-3 space-y-2">{bundles.map((bundle) => <details key={bundle.bundle_id} className="app-card-subtle rounded-lg p-2"><summary className="cursor-pointer text-xs font-semibold">{bundle.experiment_name.content} · {new Date(bundle.submitted_at).toLocaleString()}</summary><p className="mt-2 text-[11px]">实验目标：{bundle.goal.content}</p>{bundle.items.map((item, index) => <div key={`${item.category}-${index}`} className="mt-1"><p className="text-[11px]">{item.content}</p><p className="text-[10px] text-slate-500">来源范围：{item.source_scope} · 依据：{item.basis}</p></div>)}<p className="mt-2 text-[10px] text-slate-500">证据范围：{bundle.provenance_note}</p></details>)}</div> : <p className="mt-3 text-[11px] text-slate-500">尚未保存实验结果。没有结果时仍可生成“待补充”的论文蓝图。</p>}
-      <button type="button" onClick={() => void buildBlueprint()} disabled={buildingBlueprint} className="app-button-primary mt-4 inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50">{buildingBlueprint ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}我确认生成论文蓝图</button>
+      {loading ? <p role="status" aria-live="polite" className="mt-3 text-sm text-slate-500">正在恢复已保存的实验结果…</p> : bundles.length ? <div className="mt-3 space-y-2">{bundles.map((bundle) => <details key={bundle.bundle_id} className="app-card-subtle rounded-lg p-2"><summary className="min-h-10 cursor-pointer py-2 text-sm font-semibold">{bundle.experiment_name.content} · {new Date(bundle.submitted_at).toLocaleString()}</summary><p className="mt-2 text-base leading-7"><EntryLabel classification={bundle.goal.classification} />：{bundle.goal.content}</p>{bundle.items.map((item, index) => <div key={`${item.category}-${index}`} className="mt-1"><p className="text-base leading-7"><EntryLabel classification={item.classification} />：{item.content}</p><p className="text-sm text-slate-500">来源范围：{item.source_scope} · 依据：{item.basis}</p></div>)}<p className="mt-2 text-sm text-slate-500">证据范围：{bundle.provenance_note}</p></details>)}</div> : <p className="mt-3 text-sm text-slate-500">尚未保存实验结果。没有结果时仍可生成“待补充”的论文蓝图。</p>}
+      <button type="button" onClick={() => void buildBlueprint()} disabled={buildingBlueprint} className="app-button-primary mt-4 inline-flex min-h-10 items-center gap-1 rounded-xl px-3 py-2 text-sm font-bold disabled:opacity-50">{buildingBlueprint ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}我确认生成论文蓝图</button>
       {blueprintError &&
         (blueprintFailure ? (
           <GenerationFailure error={blueprintError} busy={buildingBlueprint} hasLastSuccess={blueprint !== null} onRetry={() => void buildBlueprint()} />
         ) : (
           <p role="alert" className="mt-2 text-sm text-rose-600">{blueprintError}</p>
         ))}
-      {blueprint && <div className="app-card-subtle mt-3 rounded-xl p-3 text-xs"><p className="font-bold">{blueprint.candidate_titles[0]?.content}</p><p className="mt-1 text-[11px]">投稿就绪度：{blueprint.submission_readiness.content}</p>{blueprint.sections.map((section) => <details key={section.section} className="mt-2 rounded-lg bg-slate-50 p-2 dark:bg-zinc-950/50"><summary className="cursor-pointer font-semibold">{section.section}：{section.writing_goal.content}</summary><p className="mt-1 text-[11px]">可用证据：{section.evidence_references.length ? section.evidence_references.map((reference) => reference.label).join("；") : "暂无"}</p><p className="mt-1 text-[11px]">待补充：{section.missing_evidence.map((item) => item.content).join("；") || "无"}</p></details>)}<p className="mt-2 text-[10px] text-slate-500">{blueprint.provenance_note}</p></div>}
+      {blueprint && <div className="app-card-subtle mt-3 rounded-xl p-3 text-base leading-7"><p className="font-bold">{blueprint.candidate_titles[0]?.content}</p><p className="mt-1 text-sm">投稿就绪度：<EntryLabel classification={blueprint.submission_readiness.classification} /> · {blueprint.submission_readiness.content}</p>{blueprint.sections.map((section) => <details key={section.section} className="mt-2 rounded-lg bg-slate-50 p-2 dark:bg-zinc-950/50"><summary className="min-h-10 cursor-pointer py-2 font-semibold">{section.section}：{section.writing_goal.content}</summary><p className="mt-1 text-sm">可用证据：{section.evidence_references.length ? section.evidence_references.map((reference) => reference.label).join("；") : "暂无"}</p><p className="mt-1 text-sm">待补充：{section.missing_evidence.map((item) => item.content).join("；") || "无"}</p></details>)}<p className="mt-2 text-sm text-slate-500">{blueprint.provenance_note}</p></div>}
     </section>
   );
 }

@@ -11,7 +11,9 @@ from .conversation_schemas import (
     ConversationResearchPlan,
     ExperimentEvidenceBundle,
     PaperReadingEvidence,
+    ReproductionConditions,
     ReproductionPipeline,
+    ReproductionPipelineItem,
     ReproductionSelectedPaper,
     ReproductionTask,
     ReproductionTaskEvidenceLink,
@@ -26,6 +28,7 @@ _ALLOWED_SCOPES = {
     "metadata_and_abstract_only",
     "full_text_user_triggered",
     "user_submitted_text_unverified",
+    "user_provided_conditions",
 }
 _TASK_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,98}$")
 
@@ -42,6 +45,7 @@ def build_reproduction_pipeline(
     pipeline_id: str | None = None,
     created_at: datetime | None = None,
     paper_reading: PaperReadingEvidence | None = None,
+    conditions: ReproductionConditions | None = None,
 ) -> ReproductionPipeline:
     """Create a model-written plan without granting it identity or evidence authority."""
     if generator is None:
@@ -68,7 +72,13 @@ def build_reproduction_pipeline(
                 item.model_dump(mode="json") for item in experiment_evidence
             ],
             "paper_reading": paper_reading.model_dump(mode="json") if paper_reading else None,
+            "user_conditions": conditions.model_dump(mode="json") if conditions else None,
             "writing_guidance": [
+                "用户提供的复现条件（user_conditions）是唯一硬件/时间/目标来源："
+                "把 hardware、available_time、reproduction_goal 等已提供内容写进 resources 和 "
+                "reproduction_goal，来源标注为 user_provided_conditions；"
+                "用户未提供的设备、数据规模或训练时长一律保持 to_verify，"
+                "不得假设 CUDA 或具体配置。",
                 "围绕当前选中的论文和用户研究目标，写一份可实际执行的专业复现方案，"
                 "不要只给关键词、短句或泛泛的任务清单。",
                 "每个 content 应写成连续的完整段落；至少说明目标、具体操作顺序、输入与输出、"
@@ -108,6 +118,7 @@ def build_reproduction_pipeline(
                     "resources",
                     "risks",
                     "ethics",
+                    "acceptance_criteria",
                     "confirmation_items",
                     "tasks",
                     "two_week_mvp",
@@ -152,6 +163,7 @@ def build_reproduction_pipeline(
                     "resources",
                     "risks",
                     "ethics",
+                    "acceptance_criteria",
                     "confirmation_items",
                     "tasks",
                     "two_week_mvp",
@@ -187,12 +199,40 @@ def build_reproduction_pipeline(
 
     now = created_at or datetime.now(UTC)
     identifier = pipeline_id or _stable_id(bundle.bundle_id, paper.url)
+    condition_items = _user_condition_items(conditions)
+    resources = [*condition_items, *generated.resources]
+    goal = generated.reproduction_goal
+    if conditions is not None and (conditions.reproduction_goal or "").strip():
+        goal = generated.reproduction_goal.model_copy(
+            update={
+                "content": conditions.reproduction_goal or "",
+                "classification": "fact",
+                "basis": "用户在复现条件中提供。",
+                "source_scope": "user_provided_conditions",
+            }
+        )
+    acceptance = generated.acceptance_criteria
+    if not acceptance:
+        acceptance = [
+            ReproductionPipelineItem(
+                content=(
+                    "验收条件尚未有来源覆盖：以论文原始基线为参照，"
+                    "数据划分、超参数与 Accuracy 数值均待正文或真实运行核验。"
+                ),
+                classification="to_verify",
+                basis="程序补充的待核验占位；模型未提供验收条件时不代替来源。",
+                source_scope="profile_and_plan_only",
+            )
+        ]
     return generated.model_copy(
         update={
             "pipeline_id": identifier,
             "conversation_id": bundle.conversation_id,
             "source_bundle_id": bundle.bundle_id,
             "selected_paper": _selected_paper(generated, paper),
+            "reproduction_goal": goal,
+            "resources": resources,
+            "acceptance_criteria": acceptance,
             "tasks": _attach_user_evidence(generated.tasks, experiment_evidence),
             "created_at": now,
             "generation_mode": "llm",
@@ -207,6 +247,32 @@ def build_reproduction_pipeline(
             ),
         }
     )
+
+
+def _user_condition_items(
+    conditions: ReproductionConditions | None,
+) -> list[ReproductionPipelineItem]:
+    """User-provided conditions enter the plan as user-sourced facts."""
+    if conditions is None:
+        return []
+    labels = (
+        ("硬件", conditions.hardware),
+        ("显存", conditions.vram),
+        ("操作系统", conditions.operating_system),
+        ("Python 环境", conditions.python_environment),
+        ("可用时间", conditions.available_time),
+    )
+    items = [
+        ReproductionPipelineItem(
+            content=f"{label}：{value}",
+            classification="fact",
+            basis="用户在复现条件中提供。",
+            source_scope="user_provided_conditions",
+        )
+        for label, value in labels
+        if (value or "").strip()
+    ]
+    return items
 
 
 def _selected_paper(

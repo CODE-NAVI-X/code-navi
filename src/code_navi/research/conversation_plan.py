@@ -9,7 +9,11 @@ from .conversation_schemas import (
     ResearchProfile,
 )
 from .research_artifact_llm import ResearchArtifactGenerator
-from .research_generation import ResearchGenerationError, require_generated_artifact
+from .research_generation import (
+    ResearchGenerationError,
+    require_contract_fields,
+    require_generated_artifact,
+)
 
 
 def build_conversation_research_plan(
@@ -83,6 +87,8 @@ def build_llm_research_plan(
                 "risks_and_mitigations": "ResearchPlanRisk[]",
                 "suggested_search_keywords": "string[]",
                 "pending_items": "ResearchPlanEntry[]",
+                "core_judgment": "string",
+                "next_action": "string",
                 "provenance_note": "string",
             },
         },
@@ -103,6 +109,21 @@ def build_llm_research_plan(
         ]
         if any(item.classification not in {"inference", "to_verify"} for item in entries):
             raise ValueError("research plan contains an unsupported classification")
+        require_contract_fields(
+            {
+                "core_judgment": plan.core_judgment,
+                "next_action": plan.next_action,
+            },
+            kind="research_plan",
+        )
+        for plan_entry in entries:
+            require_contract_fields(
+                {
+                    "relevance": plan_entry.relevance,
+                    "suggested_action": plan_entry.suggested_action,
+                },
+                kind="research_plan entry",
+            )
         return plan.model_copy(
             update={
                 "generation_mode": "llm",

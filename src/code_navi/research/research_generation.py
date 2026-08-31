@@ -32,3 +32,27 @@ def require_generated_artifact(outcome: ArtifactLlmOutcome, *, kind: str) -> str
             stage = "timeout"
         raise ResearchGenerationError(stage, f"{kind}: {detail}")
     return outcome.text
+    return outcome.text
+
+
+def require_contract_fields(
+    values: dict[str, str | None],
+    *,
+    kind: str,
+) -> None:
+    """Reject model output that skips the evidence-contract fields.
+
+    Every generated recommendation must state its relevance to the current
+    research question and one executable action; every analysis must carry a
+    one-sentence core judgment and a single highlighted next action.  Missing
+    fields are an ``invalid_output`` failure, never silently rendered prose.
+    """
+    missing = sorted(
+        name for name, value in values.items() if not (value or "").strip()
+    )
+    if missing:
+        raise ResearchGenerationError(
+            "invalid_output",
+            f"{kind}: model output missing evidence-contract fields: "
+            + ", ".join(missing),
+        )
