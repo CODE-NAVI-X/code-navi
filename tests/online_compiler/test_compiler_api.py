@@ -85,6 +85,27 @@ def test_compiler_api_execute_uses_main_fastapi_router() -> None:
     assert gateway.calls[0][0] == "print('hello')"
 
 
+def test_compiler_api_runtime_returns_unready_gracefully_when_gateway_offline() -> None:
+    from code_navi.online_compiler.piston import PistonUnavailableError
+
+    class OfflineGateway(FakePistonGateway):
+        def list_runtimes(self) -> tuple[RuntimeInfo, ...]:
+            raise PistonUnavailableError("piston down")
+
+    compiler = CompilerApplication(OfflineGateway(), Settings())
+    app.dependency_overrides[get_compiler_application] = lambda: compiler
+
+    try:
+        with TestClient(app) as client:
+            runtime = client.get("/api/v1/compiler/runtime")
+    finally:
+        app.dependency_overrides.pop(get_compiler_application, None)
+
+    assert runtime.status_code == 200
+    assert runtime.json()["ready"] is False
+    assert "执行服务暂时不可用" in runtime.json()["message"]
+
+
 def test_compiler_api_rejects_invalid_payload_without_gateway_call() -> None:
     gateway = FakePistonGateway()
     compiler = CompilerApplication(gateway, Settings())

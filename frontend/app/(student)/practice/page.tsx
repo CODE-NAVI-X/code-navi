@@ -403,7 +403,23 @@ function PracticeContent() {
         if (status.ai.status !== "ready") setEnableAi(false);
       })
       .catch((runtimeError: Error) => {
-        if (active) setError(runtimeError.message);
+        if (!active) return;
+        setRuntime({
+          ready: false,
+          language: "Python",
+          version: "3.12.0",
+          limits: {
+            wallTimeMs: 2000,
+            memoryBytes: 134217728,
+            sourceBytes: 65536,
+          },
+          message: runtimeError.message || "执行服务未连接",
+          ai: {
+            status: "disabled",
+            message: "执行服务离线",
+          },
+        });
+        setEnableAi(false);
       });
     void fetchCompilerRecords(learnerId)
       .then((items) => {
@@ -1476,6 +1492,9 @@ function RuntimeBadge({
   error: string | null;
 }) {
   const ready = runtime?.ready === true;
+  const label = ready
+    ? `${runtime.language} ${runtime.version}`
+    : runtime?.message ?? error ?? "连接运行环境";
   return (
     <div role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"} className="app-card rounded-2xl px-4 py-3 text-xs">
       <div className="flex items-center gap-2">
@@ -1485,7 +1504,7 @@ function RuntimeBadge({
           }`}
         />
         <span className="font-semibold text-slate-700 dark:text-zinc-200">
-          {ready ? `${runtime.language} ${runtime.version}` : error ?? "连接运行环境"}
+          {label}
         </span>
       </div>
       {runtime ? (

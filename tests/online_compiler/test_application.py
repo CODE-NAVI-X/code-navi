@@ -163,6 +163,36 @@ def test_runtime_status_exposes_pinned_runtime_and_limits() -> None:
     assert response.body["limits"]["wallTimeMs"] == 2_000
 
 
+def test_runtime_status_returns_unready_gracefully_when_piston_offline() -> None:
+    from code_navi.online_compiler.piston import PistonUnavailableError
+
+    class OfflinePistonGateway(FakePistonGateway):
+        def list_runtimes(self) -> tuple[RuntimeInfo, ...]:
+            raise PistonUnavailableError("Cannot reach Piston")
+
+    app = CompilerApplication(OfflinePistonGateway(), Settings())
+    response = app.runtime_status()
+
+    assert response.status_code == 200
+    assert response.body["ready"] is False
+    assert response.body["language"] == "Python"
+    assert response.body["version"] == "3.12.0"
+    assert response.body["message"] == "执行服务暂时不可用，请稍后重试。"
+
+
+def test_runtime_status_returns_unready_gracefully_when_runtime_missing() -> None:
+    class MissingRuntimePistonGateway(FakePistonGateway):
+        def list_runtimes(self) -> tuple[RuntimeInfo, ...]:
+            return ()
+
+    app = CompilerApplication(MissingRuntimePistonGateway(), Settings())
+    response = app.runtime_status()
+
+    assert response.status_code == 200
+    assert response.body["ready"] is False
+    assert response.body["message"] == "Python 运行时尚未安装"
+
+
 def test_execute_rejects_unsupported_language_before_gateway_call() -> None:
     gateway = FakePistonGateway()
     app = CompilerApplication(gateway, Settings())
