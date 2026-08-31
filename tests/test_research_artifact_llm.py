@@ -599,3 +599,326 @@ def test_code_draft_blocks_secret_or_execution_primitives() -> None:
         )
 
     assert excinfo.value.stage == "invalid_output"
+
+
+def test_topic_difficulty_analysis_v2_area_code_and_capability_note() -> None:
+    profile = _profile()
+    context_provenance = {
+        "learning_mastery_snapshot": {
+            "strong": ["注意力机制", "提示词工程"],
+            "weak": ["对比学习", "图神经网络"],
+        }
+    }
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "title": "方向难点分析 v2",
+                    "information_scope": "profile_and_plan_only",
+                    "core_judgment": "画像完整，需重点攻关对比学习与实验设计。",
+                    "next_action": "补齐实验对比方案。",
+                    "items": [
+                        {
+                            "area": "核心方法难点",
+                            "content": "1) 步骤一：设计对比学习目标；2) 步骤二：实施表征对比。",
+                            "classification": "inference",
+                            "basis": "模型与算法设计",
+                            "source_scope": "profile_and_plan_only",
+                            "relevance": "影响核心创新性。",
+                            "suggested_action": "先复查对比学习损失函数定义。",
+                        },
+                        {
+                            "area": "数据与实操难点",
+                            "content": "1) 数据预处理；2) 标注清洗。",
+                            "classification": "to_verify",
+                            "basis": "数据处理步骤",
+                            "source_scope": "profile_and_plan_only",
+                            "relevance": "影响数据质量。",
+                            "suggested_action": "核验样本标注一致性。",
+                        },
+                        {
+                            "area": "研究动机探讨",
+                            "content": "探索大语言模型在少样本下的泛化能力。",
+                            "classification": "inference",
+                            "basis": "动机背景",
+                            "source_scope": "profile_and_plan_only",
+                            "relevance": "立项必要性。",
+                            "suggested_action": "撰写引言。",
+                        },
+                        {
+                            "area": "未知探索分类",
+                            "content": "一些通用的建议文本。",
+                            "classification": "to_verify",
+                            "basis": "杂项说明",
+                            "source_scope": "profile_and_plan_only",
+                            "relevance": "辅助参考。",
+                            "suggested_action": "保留为一般参考建议。",
+                        },
+                    ],
+                    "provenance_note": "模型生成分析。",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    analysis = build_topic_difficulty_analysis(
+        profile,
+        plan=build_conversation_research_plan(profile, ready_for_plan=True),
+        evidence_bundles=[],
+        generator=generator,
+        conversation_id="conv-test",
+        context_provenance=context_provenance,
+    )
+
+    assert analysis.generation_mode == "llm"
+    assert len(analysis.items) == 4
+    # Check area_code normalization
+    assert analysis.items[0].area_code == "method_difficulty"
+    # Check capability_note derivation from mastery (matched weak '对比学习')
+    assert analysis.items[0].capability_note is not None
+    assert "超出当前掌握范围" in analysis.items[0].capability_note
+    assert "对比学习" in analysis.items[0].capability_note
+    # Reducer never mutates classification
+    assert analysis.items[0].classification == "inference"
+
+    assert analysis.items[1].area_code == "data_practice_difficulty"
+    assert analysis.items[1].classification == "to_verify"
+
+    assert analysis.items[2].area_code == "research_motivation"
+
+    # Unknown area falls back to area_code=None without losing item
+    assert analysis.items[3].area_code is None
+    assert analysis.items[3].content == "一些通用的建议文本。"
+
+
+def test_topic_difficulty_analysis_v2_downgrades_unsaved_evidence_refs() -> None:
+    profile = _profile()
+    paper = AcademicPaperResult(
+        title="Valid Paper",
+        authors=["Alice"],
+        year=2024,
+        source_name="arxiv",
+        url="https://arxiv.org/abs/2401.00001",
+        paper_id="2401.00001",
+        abstract_excerpt="Valid abstract excerpt.",
+        accessed_at=datetime(2026, 8, 7, tzinfo=UTC),
+        information_scope="metadata_and_abstract_only",
+        metadata_evidence=[],
+        supporting_snippets=[],
+        relevance=EvidenceStatement(
+            content="可能相关。", classification="inference", basis="关键词匹配"
+        ),
+        verification=EvidenceStatement(
+            content="需要核验。", classification="to_verify", basis="只有摘要"
+        ),
+        full_text_available=False,
+    )
+    bundle = ConversationEvidenceBundle(
+        bundle_id="b-valid",
+        conversation_id="conv-test",
+        round_index=1,
+        query="test query",
+        requested_sources=["arxiv"],
+        selected_tags=[],
+        allowed_sources=["arxiv"],
+        queried_sources=["arxiv"],
+        source_statuses=[],
+        searched_at=datetime(2026, 8, 7, tzinfo=UTC),
+        papers=[paper],
+        source_links=[paper.url],
+        failure_reasons=[],
+        provenance_note="saved.",
+    )
+
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "title": "方向难点分析未保存引用降级",
+                    "information_scope": "metadata_and_abstract_only",
+                    "core_judgment": "需核验引用来源。",
+                    "next_action": "清理未保存引用。",
+                    "items": [
+                        {
+                            "area": "方法难点",
+                            "content": "引用了未保存的外部论文。",
+                            "classification": "inference",
+                            "basis": "外部文献",
+                            "source_scope": "metadata_and_abstract_only",
+                            "relevance": "引用风险。",
+                            "suggested_action": "核实文献。",
+                            "evidence_refs": [
+                                {
+                                    "bundle_id": "unsaved-bundle",
+                                    "paper_url": "https://arxiv.org/abs/9999.99999",
+                                    "title": "Unsaved Fake Paper",
+                                    "source_name": "arxiv",
+                                    "year": 2025,
+                                    "evidence_level": "abstract",
+                                    "evidence_summary": "unsaved summary",
+                                }
+                            ],
+                        }
+                    ],
+                    "provenance_note": "原始提示",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    analysis = build_topic_difficulty_analysis(
+        profile,
+        plan=build_conversation_research_plan(profile, ready_for_plan=True),
+        evidence_bundles=[bundle],
+        generator=generator,
+        conversation_id="conv-test",
+    )
+
+    # Classification remains untouched
+    assert analysis.items[0].classification == "inference"
+    # Unsaved reference was stripped and downgraded
+    assert len(analysis.items[0].evidence_refs) == 0
+    assert analysis.items[0].source_scope == "profile_and_plan_only"
+    # Provenance note indicates the downgrade
+    assert "降级为建议并移除无效证据引用" in analysis.provenance_note
+
+
+def test_experiment_design_v2_metric_specs_and_dataset_refs() -> None:
+    profile = _profile()
+    hypothesis_entry = {
+        "content": "假设验证差异。",
+        "classification": "inference",
+        "basis": "画像。",
+    }
+    var_entry = {
+        "content": "学习率与 batch size。",
+        "classification": "inference",
+        "basis": "实验设定。",
+    }
+    baseline_entry = {
+        "content": "基准方法 A。",
+        "classification": "inference",
+        "basis": "文献。",
+    }
+    step_entry = {
+        "content": "步骤一：数据准备；步骤二：模型训练。",
+        "classification": "inference",
+        "basis": "流程。",
+    }
+    res_entry = {
+        "content": "单卡 A100。",
+        "classification": "to_verify",
+        "basis": "计算需求。",
+    }
+    risk_entry = {
+        "content": "过拟合风险。",
+        "classification": "inference",
+        "basis": "小样本。",
+    }
+    advisor_entry = {
+        "content": "确认评价指标。",
+        "classification": "to_verify",
+        "basis": "导师把关。",
+    }
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "task_type": "classification",
+                    "hypothesis": hypothesis_entry,
+                    "variables": [var_entry],
+                    "metric_specs": [
+                        {
+                            "name": "ACC",
+                            "definition": "模型预测准确率达到 92%",
+                            "formula": None,
+                            "higher_is_better": True,
+                            "applies_to_task_type": ["classification"],
+                            "source": "model_suggested",
+                            "to_verify": True,
+                        },
+                        {
+                            "name": "CustomLatencyScore",
+                            "definition": "端到端耗时评分约 25ms 且准确率 95%",
+                            "formula": "T_score = 1000 / Latency",
+                            "higher_is_better": True,
+                            "applies_to_task_type": ["classification"],
+                            "source": "model_suggested",
+                            "to_verify": False,
+                        },
+                    ],
+                    "dataset_refs": [
+                        {
+                            "name": "公开基准数据集",
+                            "url": "https://huggingface.co/datasets/example",
+                            "license_note": "CC-BY-4.0",
+                            "to_verify": False,
+                        },
+                        {
+                            "name": "内部未公开数据集",
+                            "url": None,
+                            "license_note": "待申请",
+                            "to_verify": False,
+                        },
+                    ],
+                    "baselines": [baseline_entry],
+                    "steps": [step_entry],
+                    "resources": [res_entry],
+                    "risks": [risk_entry],
+                    "advisor_confirmation_items": [advisor_entry],
+                    "provenance_note": "模型生成方案。",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    design = build_experiment_design(
+        profile,
+        plan=build_conversation_research_plan(profile, ready_for_plan=True),
+        generator=generator,
+        conversation_id="conv-test",
+        task_type_override="classification",
+    )
+
+    assert design is not None
+    assert design.task_type == "classification"
+
+    # Metric 1: 'ACC' matches standard catalog -> source=standard_catalog, definition backfilled
+    acc_metric = next(m for m in design.metric_specs if m.name == "ACC")
+    assert acc_metric.source == "standard_catalog"
+    assert acc_metric.to_verify is False
+    assert "Accuracy = (TP + TN)" in (acc_metric.formula or "")
+    assert acc_metric.definition == "预测正确的样本数占总样本数的比例。"
+
+    # Metric 2: 'CustomLatencyScore' not in catalog -> model_suggested, stripped numeric assertion
+    custom_metric = next(m for m in design.metric_specs if m.name == "CustomLatencyScore")
+    assert custom_metric.source == "model_suggested"
+    assert custom_metric.to_verify is True
+    # '约 25ms 且准确率 95%' numeric assertions should be stripped
+    assert "95%" not in custom_metric.definition
+    assert "25" not in custom_metric.definition
+
+    # Dataset 1: Has public https URL -> to_verify=False
+    public_dataset = next(d for d in design.dataset_refs if d.name == "公开基准数据集")
+    assert public_dataset.to_verify is False
+    assert public_dataset.url == "https://huggingface.co/datasets/example"
+
+    # Dataset 2: No public URL -> to_verify forced to True
+    internal_dataset = next(d for d in design.dataset_refs if d.name == "内部未公开数据集")
+    assert internal_dataset.to_verify is True
+
+    # Legacy fields projected correctly
+    assert len(design.metrics) == 2
+    assert any("ACC：" in m.content for m in design.metrics)
+    assert len(design.data_sources) == 2
+    assert any(
+        "https://huggingface.co/datasets/example" in ds.content for ds in design.data_sources
+    )
+    assert any(
+        ds.classification == "to_verify"
+        for ds in design.data_sources
+        if ds.content == "内部未公开数据集"
+    )
