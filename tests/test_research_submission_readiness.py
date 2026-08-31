@@ -20,6 +20,7 @@ from code_navi.research.conversation_agent import (  # noqa: E402
 from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.server import app  # noqa: E402
+from research_llm_fakes import ContextAwareArtifactGenerator  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +28,14 @@ def fresh_tables() -> Generator[None, None, None]:
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def restore_artifact_generator() -> Generator[None, None, None]:
+    original = _conversation_service.artifact_generator
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator()
+    yield
+    _conversation_service.artifact_generator = original
 
 
 @pytest.fixture

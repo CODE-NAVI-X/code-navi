@@ -20,6 +20,7 @@ ProfileField = Literal[
     "context",
     "methods",
     "data_requirements",
+    "metrics",
     "evidence_preferences",
     "time_scope",
     "constraints",
@@ -39,6 +40,7 @@ class ResearchProfile(BaseModel):
     context: str | None = Field(default=None, min_length=1, max_length=1000)
     methods: list[str] = Field(default_factory=list, max_length=12)
     data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    metrics: list[str] = Field(default_factory=list, max_length=8)
     evidence_preferences: list[str] = Field(default_factory=list, max_length=12)
     time_scope: str | None = Field(default=None, min_length=1, max_length=300)
     constraints: list[str] = Field(default_factory=list, max_length=12)
@@ -50,6 +52,7 @@ class ResearchProfile(BaseModel):
         "research_questions",
         "candidate_questions",
         "methods",
+        "metrics",
         "evidence_preferences",
         "constraints",
         "assumptions",
@@ -79,15 +82,17 @@ class ResearchProfilePatch(BaseModel):
     context: str | None = Field(default=None, min_length=1, max_length=1000)
     methods: list[str] | None = Field(default=None, max_length=12)
     data_requirements: str | None = Field(default=None, min_length=1, max_length=1000)
+    metrics: list[str] | None = Field(default=None, max_length=8)
     evidence_preferences: list[str] | None = Field(default=None, max_length=12)
     time_scope: str | None = Field(default=None, min_length=1, max_length=300)
     constraints: list[str] | None = Field(default=None, max_length=12)
     expected_output: str | None = Field(default=None, min_length=1, max_length=500)
-    clear_fields: list[ProfileField] = Field(default_factory=list, max_length=11)
+    clear_fields: list[ProfileField] = Field(default_factory=list, max_length=12)
 
     @field_validator(
         "research_questions",
         "methods",
+        "metrics",
         "evidence_preferences",
         "constraints",
     )
@@ -209,7 +214,7 @@ class ResearchPlanRisk(BaseModel):
 
 
 class ConversationResearchPlan(BaseModel):
-    """Offline, restorable plan derived only from an already validated profile."""
+    """Structured, restorable research plan generated from a validated profile."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -223,6 +228,9 @@ class ConversationResearchPlan(BaseModel):
     suggested_search_keywords: list[str] = Field(min_length=1, max_length=8)
     pending_items: list[ResearchPlanEntry] = Field(default_factory=list)
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
 
 
 class ResearchMindMapSource(BaseModel):
@@ -244,6 +252,9 @@ class ResearchMindMapNode(BaseModel):
     label: str = Field(min_length=1, max_length=500)
     status: MindMapNodeStatus
     detail: str = Field(min_length=1, max_length=1000)
+    # Program-controlled, deterministic link to a paper-analysis section. The
+    # model never produces this value; the builder assigns it from a fixed map.
+    section_key: str | None = Field(default=None, max_length=100)
     sources: list[ResearchMindMapSource] = Field(default_factory=list, max_length=6)
 
 
@@ -258,7 +269,7 @@ class ResearchMindMapEdge(BaseModel):
 
 
 class ResearchMindMap(BaseModel):
-    """Offline node-and-edge graph derived from a profile, plan, and saved evidence."""
+    """A traceable graph whose wording may be generated after a user request."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -266,6 +277,10 @@ class ResearchMindMap(BaseModel):
     root_node_id: str = Field(min_length=1, max_length=100)
     nodes: list[ResearchMindMapNode] = Field(min_length=1, max_length=40)
     edges: list[ResearchMindMapEdge] = Field(default_factory=list, max_length=80)
+    generation_mode: Literal["rules", "llm"] = "rules"
+    run_id: str | None = Field(default=None, max_length=200)
+    event_count: int = Field(default=0, ge=0, le=10000)
+    generated_at: datetime | None = None
     provenance_note: str = Field(min_length=1, max_length=1000)
 
 
@@ -295,7 +310,17 @@ class ResearchAnalysisItem(BaseModel):
     content: str = Field(min_length=1, max_length=1000)
     classification: AnalysisClassification
     basis: str = Field(min_length=1, max_length=1000)
-    source_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+    source_scope: Literal[
+        "profile_and_plan_only",
+        "metadata_and_abstract_only",
+        "full_text_user_triggered",
+    ]
+    # Program-derived from ``area`` by a deterministic map; never model-authored.
+    section_key: str = Field(default="", max_length=100)
+    # Optional paper chapter identity.  When chapter text is available this is
+    # validated against the bounded sections supplied to the model.
+    chapter_key: str | None = Field(default=None, max_length=50)
+    chapter_order: int | None = Field(default=None, ge=1, le=6)
     evidence_refs: list[EvidenceReference] = Field(default_factory=list, max_length=8)
 
 
@@ -306,7 +331,9 @@ class TopicDifficultyAnalysis(BaseModel):
 
     schema_version: Literal["topic-difficulty-analysis.v1"] = "topic-difficulty-analysis.v1"
     title: str = Field(min_length=1, max_length=500)
-    information_scope: Literal["profile_and_plan_only", "metadata_and_abstract_only"]
+    information_scope: Literal[
+        "profile_and_plan_only", "metadata_and_abstract_only", "full_text_user_triggered"
+    ]
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
@@ -314,21 +341,66 @@ class TopicDifficultyAnalysis(BaseModel):
     event_count: int = Field(default=0, ge=0)
 
 
+class PaperReadingSection(BaseModel):
+    """A recognized paper chapter within the bounded reading excerpt."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    key: str = Field(min_length=1, max_length=50)
+    title: str = Field(min_length=1, max_length=100)
+    order: int = Field(ge=1, le=6)
+    text: str = Field(max_length=8000)
+
+
+class PaperReadingEvidence(BaseModel):
+    """Provenance for a bounded, user-triggered public PDF read."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal["paper-reading.v1"] = "paper-reading.v1"
+    source_url: str = Field(min_length=1, max_length=2000)
+    page_count: int = Field(ge=1, le=10000)
+    pages_read: int = Field(ge=1, le=40)
+    text_excerpt: str = Field(min_length=1, max_length=48000)
+    sections: list[PaperReadingSection] = Field(default_factory=list, max_length=6)
+
+
 class PaperAnalysis(BaseModel):
-    """Metadata/abstract-only paper analysis returned for an explicitly selected paper."""
+    """Model analysis of a selected paper and optional bounded PDF text."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["paper-analysis.v1"] = "paper-analysis.v1"
     title: str = Field(min_length=1, max_length=1000)
     paper_url: str = Field(min_length=1, max_length=2000)
-    information_scope: Literal["metadata_and_abstract_only"] = "metadata_and_abstract_only"
+    information_scope: Literal[
+        "metadata_and_abstract_only", "full_text_user_triggered"
+    ] = "metadata_and_abstract_only"
     abstract_available: bool
     items: list[ResearchAnalysisItem] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
     run_id: str | None = None
     event_count: int = Field(default=0, ge=0)
+    paper_reading: PaperReadingEvidence | None = None
+
+
+class SelectedResearchPaper(BaseModel):
+    """Program-persisted identity for the user's current paper-analysis target."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    bundle_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=1000)
+    url: str = Field(min_length=1, max_length=2000)
+    authors: list[str] = Field(default_factory=list, max_length=100)
+    year: int | None = None
+    source_name: str = Field(min_length=1, max_length=200)
+    doi: str | None = Field(default=None, max_length=300)
+    arxiv_id: str | None = Field(default=None, max_length=100)
+    abstract_excerpt: str | None = Field(default=None, max_length=5000)
+    paper_kind: str | None = Field(default=None, max_length=1000)
+    abstract_available: bool
 
 
 class ExperimentDesign(BaseModel):
@@ -350,6 +422,90 @@ class ExperimentDesign(BaseModel):
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
     run_id: str | None = None
     event_count: int = Field(default=0, ge=0)
+
+
+UnderstandingCheckStatus = Literal[
+    "not_started",
+    "question_ready",
+    "answer_submitted",
+    "needs_explanation",
+    "partially_understood",
+    "understood",
+    "generation_failed",
+]
+
+UnderstandingSectionKey = Literal[
+    "research_question",
+    "core_method",
+    "dataset",
+    "to_verify",
+    "contribution",
+    "background",
+    "motivation",
+    "experiment",
+    "metrics",
+    "results",
+    "limitations",
+    "reproduction",
+    "other",
+]
+
+
+class CreateUnderstandingQuestionRequest(BaseModel):
+    """User explicitly requests one section-bound comprehension question."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    paper_url: str = Field(min_length=1, max_length=2000)
+    bundle_id: str = Field(min_length=1, max_length=100)
+    section_key: UnderstandingSectionKey
+
+
+class AssessUnderstandingRequest(BaseModel):
+    """User submits their own answer; the program never answers for them."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    check_id: str = Field(min_length=1, max_length=100)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    bundle_id: str = Field(min_length=1, max_length=100)
+    section_key: UnderstandingSectionKey
+    answer: str = Field(min_length=1, max_length=4000)
+
+
+class UnderstandingCheck(BaseModel):
+    """One evidence-bound comprehension check embedded in paper analysis.
+
+    Identity, ownership, status transitions and timestamps are program-controlled;
+    only ``question``, ``assessment``, ``explanation`` and ``example`` are
+    model-authored. ``status='understood'`` only means the local check passed —
+    it never implies the paper is correct, reproducible, or experimentally verified.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["understanding-check.v1"] = "understanding-check.v1"
+    check_id: str = Field(min_length=1, max_length=100)
+    conversation_id: str = Field(min_length=1, max_length=100)
+    paper_url: str = Field(min_length=1, max_length=2000)
+    bundle_id: str = Field(min_length=1, max_length=100)
+    section_key: UnderstandingSectionKey
+    question: str = Field(min_length=1, max_length=1000)
+    question_basis: str = Field(min_length=1, max_length=1000)
+    source_scope: Literal["metadata_only", "metadata_and_abstract_only"]
+    answer: str | None = Field(default=None, max_length=4000)
+    assessment: str | None = Field(default=None, max_length=2000)
+    missing_points: list[str] = Field(default_factory=list, max_length=12)
+    correct_points: list[str] = Field(default_factory=list, max_length=12)
+    explanation: str | None = Field(default=None, max_length=2000)
+    example: str | None = Field(default=None, max_length=2000)
+    recommended_next_action: str | None = Field(default=None, max_length=500)
+    status: UnderstandingCheckStatus = "not_started"
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "llm"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
 
 
 class ExperimentCodeDraftFile(BaseModel):
@@ -396,6 +552,7 @@ class AnalyzeConversationPaperRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     paper_url: str = Field(min_length=1, max_length=2000)
+    paper_pdf_url: str | None = Field(default=None, max_length=2000)
 
 
 class CreateResearchConversationRequest(BaseModel):
@@ -441,8 +598,10 @@ class ResearchConversationResponse(BaseModel):
     stage: Literal["exploring", "focusing", "ready_for_plan"]
     ready_for_plan: bool
     research_plan: ConversationResearchPlan | None = None
-    research_mindmap: ResearchMindMap
-    topic_difficulty_analysis: TopicDifficultyAnalysis
+    research_mindmap: ResearchMindMap | None = None
+    selected_paper: SelectedResearchPaper | None = None
+    paper_analysis: PaperAnalysis | None = None
+    topic_difficulty_analysis: TopicDifficultyAnalysis | None = None
     experiment_design: ExperimentDesign | None = None
     reply: str
     generation_mode: Literal["agent", "rules", "rules_fallback"]
@@ -619,7 +778,7 @@ class ReproductionPipelineItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    content: str = Field(min_length=1, max_length=2000)
+    content: str = Field(min_length=1, max_length=6000)
     classification: AnalysisClassification
     basis: str = Field(min_length=1, max_length=1000)
     source_scope: str = Field(min_length=1, max_length=300)
@@ -690,6 +849,10 @@ class ReproductionPipeline(BaseModel):
     two_week_mvp: list[ReproductionPipelineItem]
     created_at: datetime
     provenance_note: str = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
+    run_id: str | None = None
+    event_count: int = Field(default=0, ge=0)
+    paper_reading: PaperReadingEvidence | None = None
 
 
 class CreateReproductionPipelineRequest(BaseModel):
@@ -699,6 +862,7 @@ class CreateReproductionPipelineRequest(BaseModel):
 
     evidence_bundle_id: str = Field(min_length=1, max_length=64)
     paper_url: str = Field(min_length=1, max_length=2000)
+    paper_pdf_url: str | None = Field(default=None, max_length=2000)
 
 
 class PaperBlueprintReference(BaseModel):

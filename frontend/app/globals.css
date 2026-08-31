@@ -50,6 +50,9 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    /* Readable defaults; Tailwind size/leading utilities still take precedence. */
+    font-size: 16px;
+    line-height: 1.65;
   }
 
   :is(a, button, input, textarea, select):focus-visible {

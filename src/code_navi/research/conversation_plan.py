@@ -8,6 +8,8 @@ from .conversation_schemas import (
     ResearchPlanRisk,
     ResearchProfile,
 )
+from .research_artifact_llm import ResearchArtifactGenerator
+from .research_generation import ResearchGenerationError, require_generated_artifact
 
 
 def build_conversation_research_plan(
@@ -37,6 +39,87 @@ def build_conversation_research_plan(
             "其中所有条目都是推断建议或待验证项，不构成论文事实、实验结论或已验证的方法。"
         ),
     )
+
+
+def build_llm_research_plan(
+    profile: ResearchProfile,
+    *,
+    generator: ResearchArtifactGenerator | None,
+    conversation_id: str,
+    ready_for_plan: bool = True,
+) -> ConversationResearchPlan | None:
+    """Generate a user-visible plan through the shared audited LLM boundary."""
+    if not ready_for_plan:
+        return None
+    if generator is None:
+        raise ResearchGenerationError(
+            "provider_unavailable", "research_plan: generator is unavailable"
+        )
+    deterministic_context = build_conversation_research_plan(
+        profile, ready_for_plan=True
+    )
+    if deterministic_context is None:
+        return None
+    outcome = generator.generate(
+        kind="research_plan",
+        conversation_id=conversation_id,
+        context={
+            "profile": profile.model_dump(mode="json"),
+            "planning_hints": deterministic_context.model_dump(mode="json"),
+            "source_boundary": {
+                "allowed_classifications": ["inference", "to_verify"],
+                "forbidden": [
+                    "不得新增 fact 分类。",
+                    "不得把画像之外的实验结果、数据划分、超参数或资源写成事实。",
+                    "不得访问网络、论文全文或执行代码。",
+                ],
+            },
+            "required_json_shape": {
+                "research_title": "ResearchPlanEntry",
+                "research_goal": "ResearchPlanEntry",
+                "candidate_methods_or_baselines": "ResearchPlanEntry[]",
+                "suggested_datasets_or_metrics": "ResearchPlanEntry[]",
+                "two_week_mvp_plan": "ResearchPlanEntry[]",
+                "risks_and_mitigations": "ResearchPlanRisk[]",
+                "suggested_search_keywords": "string[]",
+                "pending_items": "ResearchPlanEntry[]",
+                "provenance_note": "string",
+            },
+        },
+    )
+    try:
+        plan = ConversationResearchPlan.model_validate_json(
+            require_generated_artifact(outcome, kind="research_plan")
+        )
+        entries = [
+            plan.research_title,
+            plan.research_goal,
+            *plan.candidate_methods_or_baselines,
+            *plan.suggested_datasets_or_metrics,
+            *plan.two_week_mvp_plan,
+            *plan.pending_items,
+            *(item.risk for item in plan.risks_and_mitigations),
+            *(item.mitigation for item in plan.risks_and_mitigations),
+        ]
+        if any(item.classification not in {"inference", "to_verify"} for item in entries):
+            raise ValueError("research plan contains an unsupported classification")
+        return plan.model_copy(
+            update={
+                "generation_mode": "llm",
+                "run_id": outcome.run_id,
+                "event_count": outcome.event_count,
+                "provenance_note": (
+                    "本研究计划由模型基于已确认科研画像生成；规则仅校验结构、准入和事实边界。"
+                    "所有条目均为建议或待验证项，不构成论文事实或实验结论。"
+                ),
+            }
+        )
+    except ResearchGenerationError:
+        raise
+    except ValueError as error:
+        raise ResearchGenerationError(
+            "invalid_output", "research_plan: boundary validation failed"
+        ) from error
 
 
 def _inference(content: str, basis: str) -> ResearchPlanEntry:
@@ -217,4 +300,4 @@ def _pending_entries(
     return pending
 
 
-__all__ = ["build_conversation_research_plan"]
+__all__ = ["build_conversation_research_plan", "build_llm_research_plan"]

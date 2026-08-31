@@ -11,7 +11,10 @@ from fastapi.testclient import TestClient
 
 from code_navi.cli import main
 from code_navi.research.conversation_agent import ConversationDecisionOutcome
-from code_navi.research.provider_service import _provider_connection_service
+from code_navi.research.provider_service import (
+    ProviderConnectionService,
+    _provider_connection_service,
+)
 from code_navi.server import app
 
 
@@ -88,6 +91,26 @@ class FakeConnectionGenerator:
         return self.outcome
 
 
+class SignatureMatchingConnectionGenerator:
+    """Expose drift between the test service and the runtime generator contract."""
+
+    def __init__(self) -> None:
+        self.user_message: str | None = None
+
+    def generate(
+        self,
+        *,
+        profile: object,
+        conversation_history: object = (),
+        user_message: str,
+        conversation_id: str,
+        confirmed_context: object | None = None,
+        runtime_input: str | None = None,
+    ) -> ConversationDecisionOutcome:
+        self.user_message = user_message
+        return ConversationDecisionOutcome.failed("test provider failure")
+
+
 def test_browser_provider_configuration_is_disabled_but_local_connection_test_is_available(
 ) -> None:
     """Key writes require opt-in; an explicit loopback connection test does not."""
@@ -154,6 +177,20 @@ def test_connection_test_returns_audit_id_without_leaking_provider_error(
     assert response.json()["run_id"] is None
     assert "secret-test-value" not in response.text
     assert fake.calls == 1
+
+
+def test_connection_test_uses_the_runtime_generator_argument_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-test-value")
+    generator = SignatureMatchingConnectionGenerator()
+
+    response = ProviderConnectionService(decision_generator=generator).test()
+
+    assert response.connected is False
+    assert response.failure_code == "provider_error"
+    assert generator.user_message == "这是一次连接测试。请返回合法的科研澄清结构，不要调用工具。"
 
 
 def test_local_ui_can_save_and_immediately_activate_provider_without_echoing_key(

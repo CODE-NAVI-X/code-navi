@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from code_navi.context_transfer.schemas import ConfirmedContextProvenance
 from code_navi.conversations import ContextAssembler, ConversationStateStore
+from code_navi.providers import ProviderSettings
 from kernel.core import ContentBlock, Message
 
 from .conversation_agent import (
@@ -29,7 +32,7 @@ from .conversation_context import (
 )
 from .conversation_difficulty import build_topic_difficulty_analysis
 from .conversation_experiment import build_experiment_design
-from .conversation_mindmap import build_research_mindmap
+from .conversation_mindmap import build_generated_research_mindmap
 from .conversation_paper_blueprint import build_paper_blueprint
 from .conversation_paper_review import (
     build_revision_from_suggestion,
@@ -37,26 +40,33 @@ from .conversation_paper_review import (
     build_rules_paper_review,
     parse_paper_sections,
 )
-from .conversation_plan import build_conversation_research_plan
+from .conversation_plan import build_conversation_research_plan, build_llm_research_plan
 from .conversation_reference_draft import build_reference_draft_package
 from .conversation_reproduction import build_reproduction_pipeline
 from .conversation_schemas import (
     ApplyRevisionSuggestionRequest,
+    AssessUnderstandingRequest,
     CitationCandidate,
     CitationQualityCheck,
     ConversationEvidenceBundle,
+    ConversationResearchPlan,
     CreateExperimentEvidenceBundleRequest,
     CreatePaperDraftRequest,
     CreateReproductionPipelineRequest,
     CreateResearchConversationRequest,
     CreateSelectedCitationRequest,
+    CreateUnderstandingQuestionRequest,
+    EvidenceReference,
     ExperimentCodeDraft,
     ExperimentDesign,
     ExperimentEvidenceBundle,
     ExperimentEvidenceItem,
+    PaperAnalysis,
     PaperBlueprint,
     PaperDraft,
     PaperExportPackage,
+    PaperReadingEvidence,
+    PaperReadingSection,
     PaperReview,
     PaperRevision,
     ReferenceDraftPackage,
@@ -66,20 +76,29 @@ from .conversation_schemas import (
     ResearchConversationDecision,
     ResearchConversationMessage,
     ResearchConversationResponse,
+    ResearchMindMap,
     ResearchProfile,
     ResearchProfilePatch,
     ResearchReadiness,
     RevisionSuggestion,
     SelectedCitation,
+    SelectedResearchPaper,
     SendResearchMessageRequest,
     SubmissionProfile,
     SubmissionProfileInput,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
+    UnderstandingCheck,
     UpdateRevisionTaskRequest,
     UpdateSelectedCitationRequest,
 )
 from .conversation_submission import build_paper_export_package, build_submission_readiness
+from .conversation_understanding import (
+    assess_understanding_answer as _assess_understanding_answer,
+)
+from .conversation_understanding import (
+    build_understanding_question as _build_understanding_question,
+)
 from .models import (
     ResearchCitationQualityCheckModel,
     ResearchConversationModel,
@@ -94,10 +113,13 @@ from .models import (
     ResearchSubmissionProfileModel,
     ResearchSubmissionReadinessModel,
 )
+from .paper_reading import PaperTextUnavailableError, read_public_paper_pdf
 from .research_artifact_llm import (
     ResearchArtifactGenerator,
     RuntimeResearchArtifactGenerator,
 )
+from .research_generation import ResearchGenerationError
+from .schemas import AcademicPaperResult
 
 
 class ConversationNotFoundError(LookupError):
@@ -187,31 +209,69 @@ class ResearchConversationService:
         if request.initial_message:
             self._process_message(conversation, request.initial_message, db)
         else:
-            welcome = ResearchConversationDecision(
-                reply=(
-                    "先不用按表格回答。请用自己的话说说你最近想研究的现象、"
-                    "困惑或项目背景，我会边聊边整理研究画像。"
-                ),
-                intent="explore",
-                uncertainties=["尚未了解用户的初步研究想法"],
-                next_question="你最近最想弄清楚、比较或解决的事情是什么？",
-                suggested_answers=[
-                    "我有一个模糊想法",
-                    "我有项目但没有研究问题",
-                    "我想先比较几个方向",
-                ],
-            )
+            welcome = self._welcome_decision(conversation.id)
+            welcome_mode = "agent" if welcome[1] else "rules"
             self._append_assistant(
                 conversation,
-                welcome,
-                generation_mode="rules",
+                welcome[0],
+                generation_mode=welcome_mode,
+                run_id=welcome[2],
+                event_count=welcome[3],
             )
-            conversation.profile_data = _apply_decision(ResearchProfile(), welcome).model_dump(
+            conversation.profile_data = _apply_decision(ResearchProfile(), welcome[0]).model_dump(
                 mode="json"
             )
             db.commit()
             db.refresh(conversation)
         return self._to_response(conversation, db)
+
+    def _welcome_decision(
+        self, conversation_id: str
+    ) -> tuple[ResearchConversationDecision, bool, str | None, int]:
+        """Use the model for the opening guidance when a real provider is configured."""
+        settings = ProviderSettings.resolve()
+        model_configured = (
+            (settings.name == "deepseek" and bool(os.getenv("DEEPSEEK_API_KEY")))
+            or (settings.name == "openai" and bool(os.getenv("OPENAI_API_KEY")))
+        )
+        if model_configured and "PYTEST_CURRENT_TEST" not in os.environ:
+            outcome = self.decision_generator.generate(
+                profile=ResearchProfile(),
+                conversation_history=(),
+                user_message=(
+                    "请作为科研端的开场引导，先用自然中文说明使用流程："
+                    "用户先描述想法，你整理科研画像，用户确认后生成研究计划，"
+                    "再由用户主动检索论文并逐步记录证据。最后只提出一个最适合开场的问题。"
+                ),
+                conversation_id=conversation_id,
+            )
+            if outcome.status == "generated" and outcome.decision is not None:
+                decision = outcome.decision.model_copy(
+                    update={
+                        "intent": "explore",
+                        "profile_patch": ResearchProfilePatch(),
+                        "recommended_action": "continue_dialogue",
+                        "candidate_questions": [],
+                    }
+                )
+                return decision, True, outcome.run_id, outcome.event_count
+            stage = "provider_unavailable" if outcome.status == "unavailable" else "failed"
+            raise ResearchGenerationError(stage, outcome.reason or "welcome generation failed")
+        welcome = ResearchConversationDecision(
+            reply=(
+                "先不用按表格回答。请用自己的话说说你最近想研究的现象、"
+                "困惑或项目背景，我会边聊边整理研究画像。"
+            ),
+            intent="explore",
+            uncertainties=["尚未了解用户的初步研究想法"],
+            next_question="你最近最想弄清楚、比较或解决的事情是什么？",
+            suggested_answers=[
+                "我有一个模糊想法",
+                "我有项目但没有研究问题",
+                "我想先比较几个方向",
+            ],
+        )
+        return welcome, False, None, 0
 
     def create_from_confirmed_context(
         self,
@@ -306,16 +366,49 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         bundles = self._evidence_bundles(conversation.id, db)
-        return build_topic_difficulty_analysis(
+        stored = dict(conversation.generated_artifacts or {})
+        paper_analysis = _stored_artifact(PaperAnalysis, stored.get("paper_analysis"))
+        analysis = build_topic_difficulty_analysis(
             profile,
             plan=plan,
             evidence_bundles=bundles,
+            paper_analysis=paper_analysis,
             generator=self.artifact_generator,
             conversation_id=conversation.id,
         )
+        self._store_generated_artifact(
+            conversation,
+            "topic_difficulty_analysis",
+            analysis.model_dump(mode="json"),
+            db,
+        )
+        return analysis
+
+    def generate_research_plan(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ConversationResearchPlan:
+        """Generate and persist the user-visible research plan on explicit request."""
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        plan = build_llm_research_plan(
+            profile,
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
+            ready_for_plan=assess_readiness(profile).can_prepare_search,
+        )
+        if plan is None:
+            raise ValueError("当前科研画像尚未达到研究计划生成条件。")
+        self._store_generated_artifact(
+            conversation, "research_plan", plan.model_dump(mode="json"), db
+        )
+        return plan
 
     def generate_experiment_design(
         self,
@@ -327,14 +420,229 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
-        return build_experiment_design(
+        stored = dict(conversation.generated_artifacts or {})
+        paper_analysis = _stored_artifact(PaperAnalysis, stored.get("paper_analysis"))
+        design = build_experiment_design(
             profile,
             plan=plan,
+            paper_analysis=paper_analysis,
             generator=self.artifact_generator,
             conversation_id=conversation.id,
         )
+        if design is not None:
+            self._store_generated_artifact(
+                conversation,
+                "experiment_design",
+                design.model_dump(mode="json"),
+                db,
+            )
+        return design
+
+    def generate_research_mindmap(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ResearchMindMap:
+        """Generate and save one source-bounded map after an explicit user action."""
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.can_prepare_search
+        )
+        stored = dict(conversation.generated_artifacts or {})
+        paper_analysis = _stored_artifact(PaperAnalysis, stored.get("paper_analysis"))
+        mindmap = build_generated_research_mindmap(
+            profile,
+            plan=plan,
+            evidence_bundles=self._evidence_bundles(conversation.id, db),
+            paper_analysis=paper_analysis,
+            understanding_checks=self._stored_understanding_checks(conversation),
+            experiment_evidence=self._experiment_evidence_bundles(conversation.id, db),
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
+        )
+        self._store_generated_artifact(
+            conversation, "research_mindmap", mindmap.model_dump(mode="json"), db
+        )
+        return mindmap
+
+    @staticmethod
+    def _store_generated_artifact(
+        conversation: ResearchConversationModel,
+        key: str,
+        payload: dict[str, object],
+        db: Session,
+    ) -> None:
+        """Persist the latest successful artefact; failures never overwrite it."""
+        stored = dict(conversation.generated_artifacts or {})
+        stored[key] = payload
+        conversation.generated_artifacts = stored
+        db.add(conversation)
+        db.commit()
+
+    def create_understanding_question(
+        self,
+        conversation_id: str,
+        request: CreateUnderstandingQuestionRequest,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> UnderstandingCheck:
+        """Generate one section-bound question; failures never wipe prior state."""
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
+        paper, evidence_ref = self._resolve_understanding_paper(
+            conversation, request.paper_url, request.bundle_id, db
+        )
+        check = _build_understanding_question(
+            paper,
+            section_key=request.section_key,
+            evidence_ref=evidence_ref,
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
+        )
+        self._store_understanding_check(conversation, check, db)
+        return check
+
+    def assess_understanding_answer(
+        self,
+        conversation_id: str,
+        request: AssessUnderstandingRequest,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> UnderstandingCheck:
+        """Assess a user answer; on failure retain the answer and last success."""
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
+        paper, _ = self._resolve_understanding_paper(
+            conversation, request.paper_url, request.bundle_id, db
+        )
+        existing = self._stored_understanding_check(
+            conversation, request.paper_url, request.section_key
+        )
+        if existing is None:
+            raise ValueError(
+                "understanding question has not been generated for this section"
+            )
+        if existing.check_id != request.check_id:
+            raise ValueError("understanding check id does not match this section")
+        try:
+            updated = _assess_understanding_answer(
+                existing,
+                paper=paper,
+                answer=request.answer,
+                generator=self.artifact_generator,
+                conversation_id=conversation.id,
+            )
+        except ResearchGenerationError:
+            failed = existing.model_copy(
+                update={
+                    "answer": request.answer,
+                    "status": "generation_failed",
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            self._store_understanding_check(conversation, failed, db)
+            raise
+        self._store_understanding_check(conversation, updated, db)
+        return updated
+
+    def list_understanding_checks(
+        self,
+        conversation_id: str,
+        paper_url: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> list[UnderstandingCheck]:
+        """Restore per-section last-success checks for one paper without a model call."""
+        conversation = self._get_model(conversation_id, db, owned_ids=owned_ids)
+        return [
+            check
+            for check in self._stored_understanding_checks(conversation)
+            if check.paper_url == paper_url
+        ]
+
+    def _resolve_understanding_paper(
+        self,
+        conversation: ResearchConversationModel,
+        paper_url: str,
+        bundle_id: str,
+        db: Session,
+    ) -> tuple[AcademicPaperResult, EvidenceReference]:
+        """Locate the saved paper in this conversation's evidence bundle."""
+        from .conversation_search_service import ConversationPaperNotFoundError
+
+        for bundle in self._evidence_bundles(conversation.id, db):
+            if bundle.bundle_id != bundle_id:
+                continue
+            for paper in bundle.papers:
+                if paper.url == paper_url:
+                    reference = EvidenceReference(
+                        bundle_id=bundle.bundle_id,
+                        paper_url=paper.url,
+                        title=paper.title,
+                        source_name=paper.source_name,
+                        year=paper.year,
+                        evidence_level="abstract" if paper.abstract_excerpt else "metadata",
+                        evidence_summary=paper.abstract_excerpt[:1000]
+                        if paper.abstract_excerpt
+                        else None,
+                    )
+                    return paper, reference
+        raise ConversationPaperNotFoundError(paper_url)
+
+    def _stored_understanding_checks(
+        self, conversation: ResearchConversationModel
+    ) -> list[UnderstandingCheck]:
+        stored = dict(conversation.generated_artifacts or {})
+        raw_checks = stored.get("understanding_checks") or []
+        checks: list[UnderstandingCheck] = []
+        for payload in raw_checks:
+            try:
+                checks.append(UnderstandingCheck.model_validate(payload))
+            except ValueError:
+                continue
+        return checks
+
+    def _stored_understanding_check(
+        self,
+        conversation: ResearchConversationModel,
+        paper_url: str,
+        section_key: str,
+    ) -> UnderstandingCheck | None:
+        for check in self._stored_understanding_checks(conversation):
+            if check.paper_url == paper_url and check.section_key == section_key:
+                return check
+        return None
+
+    def _store_understanding_check(
+        self,
+        conversation: ResearchConversationModel,
+        check: UnderstandingCheck,
+        db: Session,
+    ) -> None:
+        """Upsert per (paper_url, section_key); never touch other sections."""
+        stored = dict(conversation.generated_artifacts or {})
+        checks = list(stored.get("understanding_checks") or [])
+        payload = check.model_dump(mode="json")
+        for index, existing in enumerate(checks):
+            if (
+                existing.get("paper_url") == check.paper_url
+                and existing.get("section_key") == check.section_key
+            ):
+                checks[index] = payload
+                break
+        else:
+            checks.append(payload)
+        stored["understanding_checks"] = checks
+        conversation.generated_artifacts = stored
+        db.add(conversation)
+        db.commit()
 
     def create_experiment_code_draft(
         self,
@@ -346,7 +654,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         return build_experiment_code_draft(
             profile,
@@ -444,18 +752,46 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         created_at = datetime.now(UTC)
         pipeline_id = str(uuid.uuid4())
+        paper_reading = None
+        if request.paper_pdf_url:
+            try:
+                reading = read_public_paper_pdf(
+                    pdf_url=request.paper_pdf_url,
+                    arxiv_id=paper.arxiv_id,
+                )
+            except PaperTextUnavailableError:
+                raise
+            else:
+                paper_reading = PaperReadingEvidence(
+                    source_url=reading.source_url,
+                    page_count=reading.page_count,
+                    pages_read=reading.pages_read,
+                    text_excerpt=reading.text_excerpt,
+                    sections=[
+                        PaperReadingSection(
+                            key=section.key,
+                            title=section.title,
+                            order=section.order,
+                            text=section.text,
+                        )
+                        for section in reading.sections
+                    ],
+                )
         pipeline = build_reproduction_pipeline(
             profile,
             plan,
             bundle,
             paper,
             self._experiment_evidence_bundles(conversation_id, db),
+            generator=self.artifact_generator,
+            conversation_id=conversation.id,
             pipeline_id=pipeline_id,
             created_at=created_at,
+            paper_reading=paper_reading,
         )
         db.add(
             ResearchReproductionPipelineModel(
@@ -491,12 +827,12 @@ class ResearchConversationService:
         conversation_id: str,
         db: Session,
     ) -> PaperBlueprint:
-        """Build a rules-only, traceable outline after an explicit user action."""
+        """Generate a source-bounded outline after an explicit user action."""
         conversation = self._get_model(conversation_id, db)
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         return build_paper_blueprint(
             profile,
@@ -504,6 +840,7 @@ class ResearchConversationService:
             plan=plan,
             academic_evidence=self._evidence_bundles(conversation.id, db),
             experiment_evidence=self._experiment_evidence_bundles(conversation.id, db),
+            generator=self.artifact_generator,
         )
 
     def create_paper_draft(
@@ -691,7 +1028,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         blueprint = build_paper_blueprint(
             profile,
@@ -699,6 +1036,7 @@ class ResearchConversationService:
             plan=plan,
             academic_evidence=self._evidence_bundles(draft.conversation_id, db),
             experiment_evidence=self._experiment_evidence_bundles(draft.conversation_id, db),
+            generator=self.artifact_generator,
         )
         review = build_rules_paper_review(
             draft,
@@ -997,7 +1335,7 @@ class ResearchConversationService:
         profile = ResearchProfile.model_validate(conversation.profile_data)
         plan = build_conversation_research_plan(
             profile,
-            ready_for_plan=assess_readiness(profile).stage == "ready_for_plan",
+            ready_for_plan=assess_readiness(profile).can_prepare_search,
         )
         return build_paper_export_package(
             draft,
@@ -1181,11 +1519,17 @@ class ResearchConversationService:
         if assistant is None:
             raise ValueError("research conversation has no assistant message")
         readiness = assess_readiness(profile)
-        plan = build_conversation_research_plan(
-            profile,
-            ready_for_plan=readiness.stage == "ready_for_plan",
+        stored = conversation.generated_artifacts or {}
+        plan = _stored_artifact(ConversationResearchPlan, stored.get("research_plan"))
+        topic_analysis = _stored_artifact(
+            TopicDifficultyAnalysis, stored.get("topic_difficulty_analysis")
         )
-        bundles = self._evidence_bundles(conversation.id, db)
+        experiment_design = _stored_artifact(
+            ExperimentDesign, stored.get("experiment_design")
+        )
+        generated_mindmap = _stored_artifact(ResearchMindMap, stored.get("research_mindmap"))
+        selected_paper = _stored_artifact(SelectedResearchPaper, stored.get("selected_paper"))
+        paper_analysis = _stored_artifact(PaperAnalysis, stored.get("paper_analysis"))
         return ResearchConversationResponse(
             conversation_id=conversation.id,
             next_skill=(
@@ -1194,19 +1538,13 @@ class ResearchConversationService:
             profile=profile,
             readiness=readiness,
             stage=readiness.stage,
-            ready_for_plan=readiness.stage == "ready_for_plan",
+            ready_for_plan=readiness.can_prepare_search,
             research_plan=plan,
-            research_mindmap=build_research_mindmap(
-                profile,
-                plan=plan,
-                evidence_bundles=bundles,
-            ),
-            topic_difficulty_analysis=build_topic_difficulty_analysis(
-                profile,
-                plan=plan,
-                evidence_bundles=bundles,
-            ),
-            experiment_design=build_experiment_design(profile, plan=plan),
+            research_mindmap=generated_mindmap,
+            selected_paper=selected_paper,
+            paper_analysis=paper_analysis,
+            topic_difficulty_analysis=topic_analysis,
+            experiment_design=experiment_design,
             reply=assistant.content,
             generation_mode=assistant.generation_mode or "rules",
             recommended_action=assistant.recommended_action or "continue_dialogue",
@@ -1254,6 +1592,19 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         ResearchConversationMessage.model_validate(message)
         for message in conversation.messages_data
     ]
+
+
+_StoredArtifactT = TypeVar("_StoredArtifactT", bound=BaseModel)
+
+
+def _stored_artifact(model: type[_StoredArtifactT], payload: object) -> _StoredArtifactT | None:
+    """Return a persisted last-successful artefact, ignoring stale/invalid payloads."""
+    if payload is None:
+        return None
+    try:
+        return model.model_validate(payload)
+    except ValueError:
+        return None
 
 
 def _kernel_conversation_history(
@@ -1314,34 +1665,36 @@ def assess_readiness(profile: ResearchProfile) -> ResearchReadiness:
         score += 25
     else:
         reasons.append("还没有候选研究问题")
+    # Context can enrich recommendations, but an older session must not need it
+    # to enter the search-ready flow.
     if profile.context:
-        score += 15
-    else:
-        reasons.append("研究对象或应用场景仍不清楚")
+        score += 5
     if profile.motivation:
         score += 10
     if profile.methods or profile.data_requirements:
-        score += 10
+        score += 25
     else:
         reasons.append("数据或研究路径尚未讨论")
+    if profile.metrics:
+        score += 5
     if profile.constraints:
         score += 10
     if profile.expected_output:
         score += 5
     if profile.evidence_preferences or profile.time_scope:
         score += 5
+    score = min(score, 100)
     if score < 35:
         stage = "exploring"
     elif score < 70:
         stage = "focusing"
     else:
         stage = "ready_for_plan"
+    ready_for_plan = stage == "ready_for_plan"
     return ResearchReadiness(
         score=score,
         stage=stage,
-        can_prepare_search=bool(
-            profile.topic and (profile.research_questions or profile.candidate_questions)
-        ),
+        can_prepare_search=ready_for_plan,
         reasons=reasons,
     )
 
@@ -1356,7 +1709,7 @@ def _enforce_runtime_decision(
     provisional = _apply_decision(profile, decision)
     if (
         _requests_prepare_search(user_message)
-        and assess_readiness(provisional).stage == "ready_for_plan"
+        and assess_readiness(provisional).can_prepare_search
     ):
         return decision.model_copy(
             update={
@@ -1415,7 +1768,7 @@ def _fallback_decision(
             f"哪些因素会影响{provisional.topic}的结果？",
         ]
     readiness = assess_readiness(provisional)
-    if _requests_prepare_search(user_message) and readiness.stage == "ready_for_plan":
+    if _requests_prepare_search(user_message) and readiness.can_prepare_search:
         return ResearchConversationDecision(
             reply=(
                 "需求确认 Skill 已完成本轮澄清，当前画像已经可以形成检索约束。"
@@ -1472,7 +1825,7 @@ def _fallback_decision(
         suggested_answers=suggestions,
         recommended_action=(
             "continue_dialogue"
-            if continuing_narrowing or readiness.stage != "ready_for_plan"
+            if continuing_narrowing or not readiness.can_prepare_search
             else "review_profile"
         ),
     )
@@ -1494,10 +1847,22 @@ def _fallback_patch(
     explicitly_reframes_topic = any(
         marker in message for marker in ("改成", "换成", "主题是", "方向改为")
     )
+    labeled_topic = _first_capture(
+        message,
+        (
+            r"拟以([^，。；,;？?]+?)(?:为题|作为题目)",
+            r"课题聚焦([^，。；,;？?]+)",
+            r"计划比较([^，。；,;？?]+)",
+            r"希望评估([^，。；,;？?]+)",
+            r"(?:研究主题|主题)(?:是|为|：|:)([^，。；,;？?]+)",
+        ),
+    )
     if match and (profile.topic is None or explicitly_reframes_topic):
         candidate = match.group(1).strip("：: ")
         if candidate not in {"什么", "一下", "这个", "这个方向"} and len(candidate) >= 2:
             topic = candidate
+    if labeled_topic and (profile.topic is None or explicitly_reframes_topic):
+        topic = labeled_topic
     context: str | None = None
     context_match = re.search(r"(?:面向|针对)([^，。；,;]+)", message)
     if context_match:
@@ -1529,15 +1894,57 @@ def _fallback_patch(
         "本科生",
     )
     constraints.extend(marker for marker in markers if marker in message)
+    resource_constraint = _first_capture(
+        message,
+        (r"(?:资源限制是|资源是|我只有|仅可使用|没有)([^，。；,;？?]+)",),
+    )
+    if resource_constraint:
+        constraints.append(resource_constraint)
+    time_scope = _first_capture(
+        message,
+        (
+            r"(?:时间安排为|计划)([一二三四五六七八九十两\d]+(?:天|周|个月|月|年)(?:内)?(?:完成|给出)?)",
+            r"([一二三四五六七八九十两\d]+(?:天|周|个月|月|年)内(?:完成|给出))",
+        ),
+    )
     expected_output = next(
         (value for value in ("论文", "文献综述", "开题报告", "原型系统") if value in message),
         None,
     )
-    research_questions: list[str] | None = None
-    if any(marker in message for marker in ("是否", "如何", "为什么", "影响", "比较")):
+    research_question = _first_capture(
+        message,
+        (r"(?:候选问题|研究问题|想回答)(?:是|为|：|:)?([^，。；,;？?]+)",),
+    )
+    research_questions = [research_question] if research_question else None
+    if research_questions is None and any(
+        marker in message for marker in ("是否", "如何", "为什么", "影响", "比较")
+    ):
         research_questions = [message.strip()]
-    methods: list[str] | None = None
-    data_requirements: str | None = None
+    method = _first_capture(
+        message,
+        (
+            r"(?:方法(?:采用|是|为)?|采用)([^，。；,;？?]+)",
+            r"通过([^，。；,;？?]*(?:分析|评测|实验|访谈)[^，。；,;？?]*)",
+            r"使用([^，。；,;？?]*(?:分析|标注|评测|实验)[^，。；,;？?]*)",
+        ),
+    )
+    data_requirements = _first_capture(
+        message,
+        (
+            r"(?:数据集|数据)(?:为|是|：|:)?([^，。；,;？?]+)",
+            r"使用([^，。；,;？?]*(?:数据集|数据|记录|样本|问答集)[^，。；,;？?]*)",
+            r"([^，。；,;？?]*(?:公开数据|公开样本|课程记录|问答集)[^，。；,;？?]*)",
+        ),
+    )
+    if re.search(r"不(?:太)?清楚|不知道|没想好", message):
+        data_requirements = None
+    metric = _first_capture(
+        message,
+        (
+            r"指标(?:包括|为|是|：|:)?([^，。；,;？?]+)",
+            r"以\s*([^，。；,;？?]+?)\s*为指标",
+        ),
+    )
     if (
         profile.context
         and not (profile.methods or profile.data_requirements)
@@ -1556,18 +1963,30 @@ def _fallback_patch(
         ]
         if "实验" in message and "对照实验" not in message:
             method_names.append("实验")
-        methods = list(dict.fromkeys(method_names)) or None
-        if methods is None or any(marker in message for marker in ("数据", "材料", "案例", "样本")):
+        method = "；".join(dict.fromkeys(method_names)) or method
+        if method is None or any(marker in message for marker in ("数据", "材料", "案例", "样本")):
             data_requirements = message.strip()
     return ResearchProfilePatch(
         topic=topic,
         context=context,
-        methods=methods,
+        methods=[method] if method else None,
         data_requirements=data_requirements,
+        metrics=[metric] if metric else None,
         constraints=constraints or None,
         expected_output=expected_output,
+        time_scope=time_scope,
         research_questions=research_questions,
     )
+
+
+def _first_capture(message: str, patterns: tuple[str, ...]) -> str | None:
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            value = match.group(1).strip(" ：:，。；,;")
+            if value:
+                return value
+    return None
 
 
 def _apply_patch_only(

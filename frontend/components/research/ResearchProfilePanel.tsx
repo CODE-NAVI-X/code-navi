@@ -1,15 +1,14 @@
+"use client";
+
 import {
   AlertTriangle,
-  BarChart3,
-  Check,
-  CircleDashed,
-  Compass,
+  BookOpen,
+  Clock3,
   Database,
-  FileOutput,
   FlaskConical,
+  Lightbulb,
   Search,
   Target,
-  Users,
 } from "lucide-react";
 
 import type { ResearchProfile, ResearchReadiness } from "@/lib/api/research";
@@ -17,137 +16,114 @@ import type { ResearchProfile, ResearchReadiness } from "@/lib/api/research";
 interface ResearchProfilePanelProps {
   profile: ResearchProfile;
   readiness: ResearchReadiness;
+  learningBackground?: string | null;
+  selectedPaperTitle?: string | null;
   onSend: (message: string) => void;
   disabled: boolean;
 }
 
-const STAGE_LABELS = {
-  exploring: "方向探索中",
-  focusing: "正在聚焦",
-  ready_for_plan: "可准备研究计划",
-};
+function displayValues(values: string[]): string {
+  return values.length ? values.join("、") : "尚未确认";
+}
 
-function ProfileItem({
+function SummaryItem({
   icon,
   label,
   value,
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string | null;
+  value: string;
 }) {
   return (
-    <div className="app-card-subtle flex gap-3 rounded-xl p-3">
-      <span className="mt-0.5 text-slate-400 dark:text-zinc-500">{icon}</span>
-      <div className="min-w-0">
-        <p className="text-[11px] font-medium text-slate-500 dark:text-zinc-500">{label}</p>
-        <p className="mt-1 text-xs leading-5 text-slate-800 dark:text-zinc-200">
-          {value || "尚未讨论"}
-        </p>
-      </div>
+    <div className="min-w-0 rounded-xl border border-slate-200/80 bg-white/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/30">
+      <p className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-zinc-100">
+        {icon} {label}
+      </p>
+      <p className="mt-2 text-base leading-7 text-slate-700 dark:text-zinc-300">{value}</p>
     </div>
   );
-}
-
-function joinValues(values: string[]): string | null {
-  return values.length ? values.join("、") : null;
 }
 
 export function ResearchProfilePanel({
   profile,
   readiness,
+  learningBackground,
+  selectedPaperTitle,
   onSend,
   disabled,
 }: ResearchProfilePanelProps) {
+  const missing = readiness.reasons.length
+    ? readiness.reasons
+    : ["关键信息已足够进入下一步；仍请人工核对研究边界。"];
+
   return (
-    <aside className="space-y-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:pr-1">
-      <section className="app-card rounded-2xl p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-zinc-400">
-              Research profile
-            </p>
-            <h2 className="mt-1 text-sm font-bold text-slate-900 dark:text-zinc-100">科研画像</h2>
-          </div>
-          <span className="rounded-full bg-sky-100 px-2 py-1 text-[10px] font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-300">
-            {STAGE_LABELS[readiness.stage]}
-          </span>
-        </div>
-
-        <div className="mt-4 flex items-center gap-3">
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-zinc-800">
-            <div
-              className="h-full rounded-full bg-slate-900 transition-all duration-500 dark:bg-zinc-100"
-              style={{ width: `${readiness.score}%` }}
-            />
-          </div>
-          <span className="text-xs font-bold tabular-nums text-slate-700 dark:text-zinc-300">
-            {readiness.score}%
-          </span>
-        </div>
-
-        <div className="mt-4 space-y-2">
-          <ProfileItem icon={<Compass className="h-4 w-4" />} label="研究主题" value={profile.topic} />
-          <ProfileItem icon={<Target className="h-4 w-4" />} label="研究动机" value={profile.motivation} />
-          <ProfileItem icon={<Users className="h-4 w-4" />} label="对象与场景" value={profile.context} />
-          <ProfileItem icon={<FlaskConical className="h-4 w-4" />} label="方法路径" value={joinValues(profile.methods)} />
-          <ProfileItem icon={<Database className="h-4 w-4" />} label="数据需求" value={profile.data_requirements} />
-          <ProfileItem icon={<FileOutput className="h-4 w-4" />} label="预期产出" value={profile.expected_output} />
-        </div>
-      </section>
-
-      {profile.candidate_questions.length > 0 && (
-        <section className="app-card rounded-2xl p-4">
-          <h2 className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-zinc-100">
-            <BarChart3 className="h-4 w-4 text-slate-500 dark:text-zinc-400" /> 候选研究问题
+    <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5 dark:border-zinc-800 dark:bg-zinc-950/40 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-3xl">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-zinc-400">
+            Research starting point
+          </p>
+          <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 dark:text-zinc-100">
+            科研画像摘要
           </h2>
-          <div className="mt-3 space-y-2">
-            {profile.candidate_questions.map((question) => (
-              <button
-                key={question}
-                type="button"
-                disabled={disabled}
-                onClick={() => onSend(`我想优先讨论这个候选问题：${question}`)}
-                className="app-button-secondary w-full rounded-xl px-3 py-2.5 text-left text-xs leading-5 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {question}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="app-card rounded-2xl p-4">
-        <h2 className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-zinc-100">
-          {readiness.can_prepare_search ? (
-            <Check className="h-4 w-4 text-emerald-500" />
-          ) : (
-            <CircleDashed className="h-4 w-4 text-amber-500" />
-          )}
-          下一步准备度
-        </h2>
-        {readiness.reasons.length > 0 ? (
-          <ul className="mt-3 space-y-2 text-xs leading-5 text-slate-600 dark:text-zinc-400">
-            {readiness.reasons.map((reason) => (
-              <li key={reason} className="flex gap-2">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-                {reason}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-xs leading-5 text-emerald-700 dark:text-emerald-300">
-            当前信息已经足够检查研究画像并准备下一步。
+          <p className="mt-2 text-base leading-7 text-slate-600 dark:text-zinc-300">
+            只保留会影响方向、检索和复现安排的信息；旧会话中的其他字段仍在服务端保留以便兼容恢复。
           </p>
-        )}
-
-        <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-[11px] leading-5 text-violet-800 dark:border-violet-900/60 dark:bg-violet-950/20 dark:text-violet-300">
-          <p className="flex items-center gap-1.5 font-semibold">
-            <Search className="h-3.5 w-3.5" /> 信息来源边界
-          </p>
-          <p className="mt-1">当前对话不会自动联网检索。受限学术来源检索只有你明确触发后才会执行。</p>
         </div>
-      </section>
-    </aside>
+        <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+          {readiness.stage === "ready_for_plan" ? "可进入方向与文献" : "仍需补齐研究信息"}
+        </span>
+      </div>
+
+      <div className="mt-6 grid gap-4 md:grid-cols-2">
+        <SummaryItem icon={<BookOpen className="h-4 w-4" />} label="学习知识背景" value={learningBackground || "尚未从 Learning 上下文确认背景"} />
+        <SummaryItem icon={<Target className="h-4 w-4" />} label="研究主题" value={profile.topic || "尚未确认"} />
+        <SummaryItem icon={<Target className="h-4 w-4" />} label="研究目标" value={profile.expected_output || "尚未确认"} />
+        <SummaryItem icon={<Lightbulb className="h-4 w-4" />} label="研究动机" value={profile.motivation || "尚未确认"} />
+        <SummaryItem icon={<FlaskConical className="h-4 w-4" />} label="方法或数据偏好" value={[displayValues(profile.methods), profile.data_requirements].filter((item) => item !== "尚未确认").join("；") || "尚未确认"} />
+        <SummaryItem icon={<Clock3 className="h-4 w-4" />} label="时间和设备限制" value={[profile.time_scope, displayValues(profile.constraints)].filter((item) => item && item !== "尚未确认").join("；") || "尚未确认"} />
+        <SummaryItem icon={<Database className="h-4 w-4" />} label="当前选择论文" value={selectedPaperTitle || "尚未选择论文"} />
+        <SummaryItem icon={<Search className="h-4 w-4" />} label="感兴趣的研究方向" value={displayValues(profile.candidate_questions)} />
+      </div>
+
+      <div className="mt-5 px-1">
+        <p className="flex items-center gap-2 text-base font-semibold text-slate-800 dark:text-zinc-200">
+          <AlertTriangle className="h-4 w-4" /> 当前缺失信息
+        </p>
+        <ul className="mt-2 space-y-2 text-sm leading-6 text-slate-600 dark:text-zinc-400">
+          {missing.map((reason) => <li key={reason}>• {reason}</li>)}
+        </ul>
+      </div>
+
+      <details className="mt-5 rounded-xl border border-slate-200 bg-white/80 dark:border-zinc-800 dark:bg-zinc-950/30">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 dark:text-zinc-200">
+          查看并讨论候选研究问题（{profile.candidate_questions.length}）
+        </summary>
+        <div className="border-t border-slate-200 p-4 dark:border-zinc-800">
+          {profile.candidate_questions.length ? (
+            <div className="space-y-2">
+              {profile.candidate_questions.map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onSend(`我想优先讨论这个候选问题：${question}`)}
+                  className="app-button-secondary min-h-10 w-full rounded-xl px-4 py-2 text-left text-sm leading-6 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {question}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm leading-6 text-slate-600 dark:text-zinc-400">尚未形成候选问题，可先在上方对话中补充。</p>
+          )}
+        </div>
+      </details>
+
+      <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-zinc-400">
+        当前对话不会自动联网检索。受限学术来源检索只有你明确触发后才会执行。
+      </p>
+    </section>
   );
 }

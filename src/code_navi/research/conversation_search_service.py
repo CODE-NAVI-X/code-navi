@@ -25,14 +25,21 @@ from .conversation_schemas import (
     CreateConversationEvidenceBundleRequest,
     EvidenceReference,
     PaperAnalysis,
+    PaperReadingEvidence,
+    PaperReadingSection,
     ResearchProfile,
     ResearchSearchPlan,
     ResearchSearchSource,
     SavedResearchNotebookNote,
     SaveResearchNotebookNoteRequest,
+    SelectedResearchPaper,
 )
 from .conversation_service import ConversationNotFoundError, assess_readiness
 from .models import ResearchConversationModel, ResearchEvidenceBundleModel
+from .paper_reading import (
+    read_public_paper_pdf,
+    read_uploaded_pdf_bytes,
+)
 from .research_artifact_llm import (
     ResearchArtifactGenerator,
     RuntimeResearchArtifactGenerator,
@@ -136,6 +143,11 @@ class ResearchConversationSearchService:
         payload["conversation_id"] = conversation_id
         payload["requested_sources"] = request.sources
         payload["tool_audit"] = result.result["audit"]
+        payload["papers"] = [
+            {**paper, "paper_id": _bundle_paper_id(record.id, paper)}
+            for paper in payload["papers"]
+            if isinstance(paper, dict)
+        ]
         bundle = ConversationEvidenceBundle.model_validate(payload)
         record.bundle_data = bundle.model_dump(mode="json")
         db.commit()
@@ -159,16 +171,164 @@ class ResearchConversationSearchService:
         db: Session,
     ) -> PaperAnalysis:
         """Analyze only a paper the user explicitly selected from saved evidence."""
+        conversation = self._get_conversation(conversation_id, db)
         for bundle in self.list_bundles(conversation_id, db):
             for paper in bundle.papers:
                 if paper.url == request.paper_url:
-                    return build_paper_analysis(
+                    paper_reading, resolved_arxiv_id = self._resolve_paper_reading(
                         paper,
-                        evidence_ref=_evidence_reference(bundle.bundle_id, paper),
-                        generator=self.artifact_generator,
+                        paper_pdf_url=request.paper_pdf_url,
+                    )
+                    return self._save_paper_analysis(
                         conversation_id=conversation_id,
+                        conversation=conversation,
+                        bundle=bundle,
+                        paper=paper,
+                        paper_reading=paper_reading,
+                        arxiv_id=resolved_arxiv_id,
+                        db=db,
                     )
         raise ConversationPaperNotFoundError(request.paper_url)
+
+    def analyze_paper_upload(
+        self,
+        conversation_id: str,
+        *,
+        paper_url: str,
+        payload: bytes,
+        filename: str | None,
+        db: Session,
+    ) -> PaperAnalysis:
+        """Analyze a selected paper using a PDF uploaded in the current request."""
+        conversation = self._get_conversation(conversation_id, db)
+        for bundle in self.list_bundles(conversation_id, db):
+            for paper in bundle.papers:
+                if paper.url == paper_url:
+                    reading = read_uploaded_pdf_bytes(payload, filename=filename)
+                    paper_reading = PaperReadingEvidence(
+                        source_url=reading.source_url,
+                        page_count=reading.page_count,
+                        pages_read=reading.pages_read,
+                        text_excerpt=reading.text_excerpt,
+                        sections=[
+                            PaperReadingSection(
+                                key=section.key,
+                                title=section.title,
+                                order=section.order,
+                                text=section.text,
+                            )
+                            for section in reading.sections
+                        ],
+                    )
+                    return self._save_paper_analysis(
+                        conversation_id=conversation_id,
+                        conversation=conversation,
+                        bundle=bundle,
+                        paper=paper,
+                        paper_reading=paper_reading,
+                        arxiv_id=paper.arxiv_id,
+                        db=db,
+                    )
+        raise ConversationPaperNotFoundError(paper_url)
+
+    def _resolve_paper_reading(
+        self,
+        paper: AcademicPaperResult,
+        *,
+        paper_pdf_url: str | None,
+    ) -> tuple[PaperReadingEvidence | None, str | None]:
+        arxiv_id = paper.arxiv_id
+        if not paper_pdf_url and not arxiv_id:
+            match = self.search_tool.resolve_arxiv_paper(
+                title=paper.title,
+                authors=paper.authors,
+                year=paper.year,
+            )
+            arxiv_id = match.identifier if match is not None else None
+        if not paper_pdf_url and not arxiv_id:
+            return None, None
+        reading = read_public_paper_pdf(pdf_url=paper_pdf_url, arxiv_id=arxiv_id)
+        return (
+            PaperReadingEvidence(
+                source_url=reading.source_url,
+                page_count=reading.page_count,
+                pages_read=reading.pages_read,
+                text_excerpt=reading.text_excerpt,
+                sections=[
+                    PaperReadingSection(
+                        key=section.key,
+                        title=section.title,
+                        order=section.order,
+                        text=section.text,
+                    )
+                    for section in reading.sections
+                ],
+            ),
+            arxiv_id,
+        )
+
+    def _save_paper_analysis(
+        self,
+        *,
+        conversation_id: str,
+        conversation: ResearchConversationModel,
+        bundle: ConversationEvidenceBundle,
+        paper: AcademicPaperResult,
+        paper_reading: PaperReadingEvidence | None,
+        arxiv_id: str | None,
+        db: Session,
+    ) -> PaperAnalysis:
+        profile = ResearchProfile.model_validate(conversation.profile_data)
+        question = next(iter(profile.research_questions or profile.candidate_questions), None)
+        readiness = assess_readiness(profile)
+        plan = build_conversation_research_plan(
+            profile, ready_for_plan=readiness.can_prepare_search
+        )
+        analysis = build_paper_analysis(
+            paper,
+            evidence_ref=_evidence_reference(bundle.bundle_id, paper),
+            paper_reading=paper_reading,
+            research_context={
+                "research_topic": profile.topic,
+                "research_question": question,
+                "research_motivation": profile.motivation,
+                "methods": profile.methods,
+                "data_requirements": profile.data_requirements,
+                "metrics": profile.metrics,
+                "constraints": profile.constraints,
+                "time_scope": profile.time_scope,
+                "expected_output": profile.expected_output,
+                "reproduction_goal": (
+                    "围绕选中论文设计可在当前设备与时间约束下执行的最小复现核对路径，"
+                    "并明确哪些结论仍需用户实验验证。"
+                ),
+                "current_plan": (
+                    plan.model_dump(mode="json") if plan is not None else None
+                ),
+            },
+            generator=self.artifact_generator,
+            conversation_id=conversation_id,
+        )
+        selected = SelectedResearchPaper(
+            bundle_id=bundle.bundle_id,
+            title=paper.title,
+            url=paper.url,
+            authors=paper.authors,
+            year=paper.year,
+            source_name=paper.source_name,
+            doi=paper.doi,
+            arxiv_id=arxiv_id,
+            abstract_excerpt=paper.abstract_excerpt,
+            paper_kind=paper.paper_kind.content if paper.paper_kind else None,
+            abstract_available=bool(paper.abstract_excerpt),
+        )
+        stored = dict(conversation.generated_artifacts or {})
+        stored["selected_paper"] = selected.model_dump(mode="json")
+        stored["paper_analysis"] = analysis.model_dump(mode="json")
+        conversation.generated_artifacts = stored
+        db.add(conversation)
+        db.commit()
+        return analysis
 
     def save_notebook_note(
         self,
@@ -205,7 +365,7 @@ class ResearchConversationSearchService:
         ]
         readiness = assess_readiness(profile)
         plan = build_conversation_research_plan(
-            profile, ready_for_plan=readiness.stage == "ready_for_plan"
+            profile, ready_for_plan=readiness.can_prepare_search
         )
         next_steps = (
             [entry.content for entry in plan.two_week_mvp_plan[:3]]
@@ -337,6 +497,24 @@ def _evidence_reference(bundle_id: str, paper: AcademicPaperResult) -> EvidenceR
         evidence_level="abstract" if paper.abstract_excerpt else "metadata",
         evidence_summary=paper.abstract_excerpt[:1000] if paper.abstract_excerpt else None,
     )
+
+
+def _bundle_paper_id(bundle_id: str, paper: dict[str, object]) -> str:
+    identity = next(
+        (
+            str(value).strip().casefold()
+            for value in (
+                paper.get("doi"),
+                paper.get("arxiv_id"),
+                paper.get("identifier"),
+                paper.get("url"),
+                paper.get("title"),
+            )
+            if value and str(value).strip()
+        ),
+        "unknown-paper",
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{bundle_id}|{identity}"))
 
 
 __all__ = [

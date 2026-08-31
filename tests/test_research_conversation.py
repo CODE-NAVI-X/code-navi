@@ -39,7 +39,10 @@ from code_navi.research.conversation_schemas import (  # noqa: E402
     ResearchProfilePatch,
     SendResearchMessageRequest,
 )
-from code_navi.research.conversation_service import ResearchConversationService  # noqa: E402
+from code_navi.research.conversation_service import (  # noqa: E402
+    ResearchConversationService,
+    assess_readiness,
+)
 from code_navi.research.models import ResearchConversationModel  # noqa: E402
 from code_navi.research.research_artifact_llm import ArtifactLlmOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
@@ -544,7 +547,111 @@ def test_readiness_is_explainable_instead_of_a_required_field_gate(
     assert body["recommended_action"] == "review_profile"
 
 
-def test_ready_conversation_returns_a_restorable_rules_research_plan(
+@pytest.mark.parametrize(
+    "message",
+    [
+        (
+            "我想研究图卷积网络在 Cora 节点分类中的表现：候选问题是 GCN 与 GraphSAGE 的 "
+            "Accuracy 差异；方法采用对照实验；使用 Cora 数据集，指标为 Accuracy；我只有 RTX "
+            "4060 笔记本，计划两周完成，产出开题报告。"
+        ),
+        (
+            "拟以生成式 AI 辅助本科编程学习为题，研究问题是不同提示策略如何影响学习成绩；"
+            "采用离线对照评测，数据为公开课程记录，指标包括正确率；资源限制是单张消费级 "
+            "GPU，时间安排为三周，交付研究计划。"
+        ),
+        (
+            "课题聚焦医疗文本分类的可解释性，想回答注意力可视化是否改善医生理解；通过案例 "
+            "比较分析 MIMIC 公开样本，以 F1 为指标；仅可使用 16GB 内存设备，一个月内完成 "
+            "文献综述。"
+        ),
+        (
+            "计划比较联邦学习与集中训练在校园传感器预测中的效果：研究问题为隐私约束下误差 "
+            "是否扩大；方法是模拟实验，数据集为 UCI 公开数据，指标 RMSE；没有服务器，"
+            "两周内给出原型系统。"
+        ),
+        (
+            "希望评估检索增强生成在课程问答中的可信度，候选问题是检索覆盖率如何影响答案 "
+            "准确率；使用日志分析和人工标注，数据为公开问答集，指标为 Accuracy 与覆盖率；"
+            "资源是本地笔记本，计划四周完成论文。"
+        ),
+    ],
+)
+def test_rules_fallback_accepts_complete_research_request_in_one_turn(
+    client: TestClient,
+    message: str,
+) -> None:
+    _conversation_service.decision_generator = FakeDecisionGenerator(
+        [ConversationDecisionOutcome.unavailable()]
+    )
+
+    response = client.post("/api/v1/research/conversations", json={"initial_message": message})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["generation_mode"] == "rules"
+    assert body["profile"]["topic"]
+    assert body["profile"]["research_questions"]
+    assert body["profile"]["methods"]
+    assert body["profile"]["data_requirements"]
+    assert body["profile"]["metrics"]
+    assert body["profile"]["constraints"]
+    assert body["profile"]["time_scope"]
+    assert body["stage"] == "ready_for_plan"
+    assert body["ready_for_plan"] is True
+    assert body["readiness"]["can_prepare_search"] is True
+    assert "研究主题" not in (body["next_question"] or "")
+    assert "研究问题" not in (body["next_question"] or "")
+
+
+def test_search_readiness_does_not_diverge_from_plan_stage() -> None:
+    readiness = assess_readiness(
+        ResearchProfile(topic="图卷积网络", research_questions=["GCN 是否优于基线？"])
+    )
+
+    assert readiness.stage != "ready_for_plan"
+    assert readiness.can_prepare_search is False
+
+
+def test_search_readiness_does_not_require_legacy_context_field() -> None:
+    readiness = assess_readiness(
+        ResearchProfile(
+            topic="图卷积网络",
+            research_questions=["GCN 是否优于基线？"],
+            motivation="在小规模环境中复现经典模型。",
+            methods=["两层 GCN"],
+            data_requirements="Cora 数据集",
+            constraints=["个人电脑"],
+            time_scope="两周",
+        )
+    )
+
+    assert readiness.can_prepare_search is True
+    assert "研究对象或应用场景仍不清楚" not in readiness.reasons
+
+
+def test_search_readiness_score_is_bounded_for_complete_profile() -> None:
+    readiness = assess_readiness(
+        ResearchProfile(
+            topic="图卷积网络",
+            motivation="复现经典模型并比较基线。",
+            research_questions=["GCN 是否优于基线？"],
+            context="个人电脑上的 Cora 节点分类",
+            methods=["两层 GCN", "MLP 基线"],
+            data_requirements="Cora 数据集",
+            metrics=["Accuracy"],
+            constraints=["单卡运行"],
+            time_scope="两周",
+            expected_output="实验记录与研究简报",
+            evidence_preferences=["原始论文"],
+        )
+    )
+
+    assert readiness.score == 100
+    assert readiness.can_prepare_search is True
+
+
+def test_ready_conversation_does_not_return_unrequested_rule_research_plan(
     client: TestClient,
 ) -> None:
     """A plan is derived from the dynamic profile, not the legacy questionnaire."""
@@ -577,24 +684,14 @@ def test_ready_conversation_returns_a_restorable_rules_research_plan(
     assert created.status_code == 201
     body = created.json()
     assert body["ready_for_plan"] is True
-    assert body["research_plan"]["schema_version"] == "research-plan.v1"
-    assert body["research_plan"]["research_title"]["classification"] == "inference"
-    assert body["research_plan"]["two_week_mvp_plan"]
-    assert body["research_plan"]["suggested_search_keywords"]
-    assert "论文事实" in body["research_plan"]["provenance_note"]
-    assert body["research_mindmap"]["schema_version"] == "research-mindmap.v1"
-    assert body["research_mindmap"]["root_node_id"] == "topic"
-    assert any(
-        node["id"] == "research-plan" and node["status"] == "inference"
-        for node in body["research_mindmap"]["nodes"]
-    )
-    assert body["research_mindmap"]["edges"]
+    assert body["research_plan"] is None
+    assert body["research_mindmap"] is None
 
     restored = client.get(f"/api/v1/research/conversations/{body['conversation_id']}")
 
     assert restored.status_code == 200
-    assert restored.json()["research_plan"] == body["research_plan"]
-    assert restored.json()["research_mindmap"] == body["research_mindmap"]
+    assert restored.json()["research_plan"] is None
+    assert restored.json()["research_mindmap"] is None
 
 
 def test_incomplete_conversation_has_no_research_plan(client: TestClient) -> None:
@@ -621,7 +718,8 @@ def test_conversation_response_does_not_generate_optional_artifacts(
     response = client.post("/api/v1/research/conversations", json={})
 
     assert response.status_code == 201
-    assert response.json()["topic_difficulty_analysis"]["generation_mode"] == "rules"
+    assert response.json()["topic_difficulty_analysis"] is None
+    assert response.json()["experiment_design"] is None
 
 
 def test_difficulty_personalization_requires_explicit_endpoint(
@@ -690,7 +788,7 @@ def test_difficulty_personalization_requires_explicit_endpoint(
         ),
     ],
 )
-def test_ready_plan_marks_missing_topic_or_question_for_verification(
+def test_ready_conversation_does_not_render_plan_without_llm_generation(
     client: TestClient,
     profile_patch: ResearchProfilePatch,
     missing_label: str,
@@ -711,13 +809,10 @@ def test_ready_plan_marks_missing_topic_or_question_for_verification(
     )
 
     assert response.status_code == 201
-    plan = response.json()["research_plan"]
-    assert plan["research_title"]["classification"] == "to_verify"
-    assert missing_label in plan["research_title"]["content"]
-    assert "None" not in plan["research_title"]["content"]
+    assert response.json()["research_plan"] is None
 
 
-def test_ready_plan_safely_bounds_a_long_profile_question(client: TestClient) -> None:
+def test_ready_conversation_does_not_render_rule_plan_for_long_profile(client: TestClient) -> None:
     long_question = "问题" * 800
     _conversation_service.decision_generator = FakeDecisionGenerator(
         [
@@ -744,9 +839,7 @@ def test_ready_plan_safely_bounds_a_long_profile_question(client: TestClient) ->
     )
 
     assert response.status_code == 201
-    plan = response.json()["research_plan"]
-    assert len(plan["research_title"]["content"]) <= 1000
-    assert all(len(keyword) <= 300 for keyword in plan["suggested_search_keywords"])
+    assert response.json()["research_plan"] is None
 
 
 def test_runtime_generator_uses_agent_runtime_and_returns_auditable_run() -> None:

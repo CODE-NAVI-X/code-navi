@@ -78,7 +78,7 @@ class ResearchArtifactGenerator(Protocol):
 class RuntimeResearchArtifactGenerator:
     """Run one explicitly requested, no-tool artefact through AgentRuntime."""
 
-    def __init__(self, timeout_seconds: float = 8.0) -> None:
+    def __init__(self, timeout_seconds: float = 90.0) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self.timeout_seconds = timeout_seconds
@@ -94,7 +94,10 @@ class RuntimeResearchArtifactGenerator:
         if settings.name != "deepseek" or not os.getenv("DEEPSEEK_API_KEY"):
             return ArtifactLlmOutcome.unavailable()
         try:
-            provider = DeepSeekGuidanceProvider(timeout_seconds=self.timeout_seconds)
+            provider = DeepSeekGuidanceProvider(
+                timeout_seconds=self.timeout_seconds,
+                max_tokens=8000,
+            )
             runtime = AgentRuntime(provider, session_dir=_events_dir())
             result = runtime.run(
                 research_artifact_agent,
@@ -125,6 +128,11 @@ class RuntimeResearchArtifactGenerator:
     def _runtime_input(kind: str, context: Mapping[str, object]) -> str:
         payload = {
             "artifact_kind": kind,
+            "output_instruction": (
+                "只返回 validated_context.required_json_shape 对应的 JSON 对象；"
+                "不得原样复述 validated_context，不得返回 artifact_kind、"
+                "validated_context 或 Markdown。"
+            ),
             "validated_context": _redact_local_context(context),
         }
         return json.dumps(payload, ensure_ascii=False)
@@ -135,7 +143,7 @@ def _redact_local_context(value: object) -> object:
     if isinstance(value, Mapping):
         return {
             str(key): "[redacted]"
-            if any(token in str(key).casefold() for token in ("key", "secret", "token", "password"))
+            if _is_sensitive_field(str(key))
             else _redact_local_context(item)
             for key, item in value.items()
         }
@@ -143,10 +151,36 @@ def _redact_local_context(value: object) -> object:
         return [_redact_local_context(item) for item in value]
     if isinstance(value, str) and (
         "\\" in value
-        or re.search(r"(?:[A-Za-z]:/|/(?:Users|home|private|tmp)/)", value)
+        or re.search(r"(?:^[A-Za-z]:[/\\]|/(?:Users|home|private|tmp)/)", value)
     ):
         return "[redacted local path]"
     return value
+
+
+_SENSITIVE_FIELD_NAMES = {
+    "api_key",
+    "apikey",
+    "access_token",
+    "authorization",
+    "client_secret",
+    "credential",
+    "credentials",
+    "passphrase",
+    "password",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "secret_key",
+    "signing_key",
+    "token",
+}
+_SENSITIVE_FIELD_SUFFIXES = ("_api_key", "_access_key", "_secret", "_token", "_password")
+
+
+def _is_sensitive_field(name: str) -> bool:
+    """Redact credential-shaped names without hiding structural fields such as ``key``."""
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).casefold()
+    return normalized in _SENSITIVE_FIELD_NAMES or normalized.endswith(_SENSITIVE_FIELD_SUFFIXES)
 
 
 __all__ = [

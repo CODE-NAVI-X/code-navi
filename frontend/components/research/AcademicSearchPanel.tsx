@@ -15,12 +15,13 @@ import Link from "next/link";
 
 import {
   type AcademicSourceId,
+  type AcademicPaperResult,
   type ConversationEvidenceBundle,
-  type PaperAnalysis,
-  analyzeResearchPaper,
   getResearchSearchPlan,
   listResearchEvidence,
   ResearchApiError,
+  openAccessLabel,
+  researchPaperLinks,
   type ResearchSearchPlan,
   searchResearchEvidence,
   saveResearchNotebookNote,
@@ -36,14 +37,62 @@ function searchErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "检索过程中发生未知错误。";
 }
 
-export function AcademicSearchPanel({ conversationId }: { conversationId: string }) {
+function PaperSourceLinks({ paper }: { paper: AcademicPaperResult }) {
+  const links = researchPaperLinks(paper);
+  const access = openAccessLabel(paper);
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+      <a
+        href={links.sourceUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-sky-200 px-3 font-semibold text-sky-800 hover:bg-sky-50 dark:border-sky-900 dark:text-sky-200 dark:hover:bg-sky-950/30"
+      >
+        <ExternalLink className="h-4 w-4" /> 打开原始来源
+      </a>
+      {links.arxivPdfUrl && (
+        <a
+          href={links.arxivPdfUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-slate-200 px-3 font-semibold text-slate-700 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
+          <ExternalLink className="h-4 w-4" /> 在新窗口打开 arXiv PDF
+        </a>
+      )}
+      <span className="text-sm text-slate-600 dark:text-zinc-300">开放获取：{access.label}（{access.note}）</span>
+      <span className="w-full text-sm leading-6 text-slate-600 dark:text-zinc-300">打开来源不等于系统已阅读全文；不会自动下载或缓存 PDF。</span>
+    </div>
+  );
+}
+
+export function AcademicSearchPanel({
+  conversationId,
+  onEvidenceSaved,
+  onPaperSelected,
+}: {
+  conversationId: string;
+  onEvidenceSaved?: () => void;
+  onPaperSelected?: (paper: {
+    title: string;
+    url: string;
+    authors: string[];
+    year: number | null;
+    sourceName: string;
+    bundleId: string;
+    doi: string | null;
+    arxivId: string | null;
+    abstractExcerpt: string | null;
+    paperKind: string | null;
+    abstractAvailable: boolean;
+  }) => void;
+}) {
   const [plan, setPlan] = useState<ResearchSearchPlan | null>(null);
   const [query, setQuery] = useState("");
   const [bundle, setBundle] = useState<ConversationEvidenceBundle | null>(null);
   const [selectedSources, setSelectedSources] = useState<AcademicSourceId[]>([]);
   const [phase, setPhase] = useState<"planning" | "ready" | "searching">("planning");
   const [error, setError] = useState<string | null>(null);
-  const [paperAnalysis, setPaperAnalysis] = useState<PaperAnalysis | null>(null);
   const [selectedPaperUrls, setSelectedPaperUrls] = useState<string[]>([]);
   const [savingNote, setSavingNote] = useState(false);
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
@@ -81,6 +130,7 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
       setBundle(await searchResearchEvidence(conversationId, query.trim(), selectedSources));
       setSelectedPaperUrls([]);
       setSavedNoteId(null);
+      onEvidenceSaved?.();
     } catch (requestError) {
       setError(searchErrorMessage(requestError));
     } finally {
@@ -100,19 +150,11 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
         selectedPaperUrls,
       );
       setSavedNoteId(saved.notebook_item_id);
+      onEvidenceSaved?.();
     } catch (requestError) {
       setError(searchErrorMessage(requestError));
     } finally {
       setSavingNote(false);
-    }
-  }
-
-  async function analyzePaper(paperUrl: string) {
-    setError(null);
-    try {
-      setPaperAnalysis(await analyzeResearchPaper(conversationId, paperUrl));
-    } catch (requestError) {
-      setError(searchErrorMessage(requestError));
     }
   }
 
@@ -228,15 +270,14 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                       onChange={(event) => setSelectedPaperUrls((current) => event.target.checked ? [...current, paper.url] : current.filter((url) => url !== paper.url))}
                       className="mt-1.5 h-4 w-4 shrink-0 accent-emerald-600"
                     />
-                    <a href={paper.url} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-start gap-2 text-sm font-bold leading-6 text-sky-700 hover:underline dark:text-sky-300">
+                    <span className="flex min-w-0 flex-1 items-start gap-2 text-base font-bold leading-7 text-slate-900 dark:text-zinc-100">
                       <span className="min-w-0 flex-1">{paper.title}</span>
-                      <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0" />
-                    </a>
+                    </span>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
+                  <p className="mt-1 text-sm text-slate-600 dark:text-zinc-300">
                     {[paper.authors.slice(0, 4).join("、"), paper.year, paper.source_name].filter(Boolean).join(" · ")}
                   </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-semibold">
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-semibold">
                     <span className="rounded-full bg-sky-50 px-2 py-1 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">平台：{paper.source_name}</span>
                     <span className="rounded-full bg-violet-50 px-2 py-1 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">证据：{paper.abstract_excerpt ? "摘要级" : "元数据级"}</span>
                     <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600 dark:bg-zinc-800 dark:text-zinc-300">摘要：{paper.abstract_excerpt ? "可用" : "不可用"}</span>
@@ -244,10 +285,11 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                     <span className="rounded-full bg-orange-50 px-2 py-1 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300">相关性：{paper.relevance.classification === "inference" ? "规则推断，待人工核验" : paper.relevance.classification}</span>
                   </div>
                   {paper.abstract_excerpt && (
-                    <p className="mt-2 line-clamp-4 text-xs leading-5 text-slate-600 dark:text-zinc-300">{paper.abstract_excerpt}</p>
+                    <p className="mt-2 line-clamp-4 text-base leading-7 text-slate-700 dark:text-zinc-200">{paper.abstract_excerpt}</p>
                   )}
-                  <p className="mt-2 text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{paper.relevance.content}</p>
-                  <button type="button" onClick={() => void analyzePaper(paper.url)} className="app-button-secondary mt-3 rounded-lg px-2 py-1 text-[11px] font-semibold">分析元数据/摘要难点</button>
+                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-300">{paper.relevance.content}</p>
+                  <PaperSourceLinks paper={paper} />
+                  <button type="button" onClick={() => onPaperSelected?.({ title: paper.title, url: paper.url, authors: paper.authors, year: paper.year, sourceName: paper.source_name, bundleId: bundle.bundle_id, doi: paper.doi, arxivId: paper.arxiv_id, abstractExcerpt: paper.abstract_excerpt, paperKind: paper.paper_kind?.content ?? null, abstractAvailable: Boolean(paper.abstract_excerpt) })} className="app-button-secondary mt-3 inline-flex min-h-10 items-center rounded-xl px-3 py-2 text-sm font-semibold">选择并分析元数据/摘要难点</button>
                 </article>
               ))
             ) : (
@@ -273,13 +315,6 @@ export function AcademicSearchPanel({ conversationId }: { conversationId: string
                   </Link>
                 )}
               </div>
-            )}
-            {paperAnalysis && (
-              <article className="rounded-xl border border-orange-200 bg-orange-50/40 p-3 text-xs leading-5 dark:border-orange-900/60 dark:bg-orange-950/20">
-                <p className="font-bold text-orange-900 dark:text-orange-200">论文/方向难点分析：{paperAnalysis.title}</p>
-                <p className="mt-1 text-[11px] text-orange-800 dark:text-orange-300">{paperAnalysis.generation_mode === "llm" ? "模型个性化建议" : paperAnalysis.generation_mode === "rules_fallback" ? "模型失败后的规则降级" : "基础规则"}；仅基于{paperAnalysis.abstract_available ? "来源摘要与元数据" : "来源元数据"}；未下载全文。</p>
-                <ul className="mt-2 space-y-2">{paperAnalysis.items.map((item) => <li key={item.area}><span className="font-semibold">{item.area}：</span>{item.content}{item.evidence_refs.map((reference) => <a key={`${reference.bundle_id}:${reference.paper_url}`} href={reference.paper_url} target="_blank" rel="noreferrer" className="ml-2 font-semibold text-sky-700 underline dark:text-sky-300">查看所用 Evidence</a>)}</li>)}</ul>
-              </article>
             )}
           </div>
         )}

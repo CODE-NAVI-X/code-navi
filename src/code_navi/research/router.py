@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from code_navi.auth.dependencies import (
@@ -25,9 +25,11 @@ from .conversation_guidance_schemas import (
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ApplyRevisionSuggestionRequest,
+    AssessUnderstandingRequest,
     CitationCandidate,
     CitationQualityCheck,
     ConversationEvidenceBundle,
+    ConversationResearchPlan,
     CreateConversationEvidenceBundleRequest,
     CreateExperimentCodeDraftRequest,
     CreateExperimentEvidenceBundleRequest,
@@ -35,6 +37,7 @@ from .conversation_schemas import (
     CreateReproductionPipelineRequest,
     CreateResearchConversationRequest,
     CreateSelectedCitationRequest,
+    CreateUnderstandingQuestionRequest,
     ExperimentCodeDraft,
     ExperimentDesign,
     ExperimentEvidenceBundle,
@@ -49,6 +52,7 @@ from .conversation_schemas import (
     ReferenceEntryDraft,
     ReproductionPipeline,
     ResearchConversationResponse,
+    ResearchMindMap,
     ResearchSearchPlan,
     RevisionSuggestion,
     SavedResearchNotebookNote,
@@ -59,6 +63,7 @@ from .conversation_schemas import (
     SubmissionProfileInput,
     SubmissionReadinessCheck,
     TopicDifficultyAnalysis,
+    UnderstandingCheck,
     UpdateRevisionTaskRequest,
     UpdateSelectedCitationRequest,
 )
@@ -74,6 +79,7 @@ from .conversation_service import (
     ResearchConversationService,
     SelectedCitationNotFoundError,
 )
+from .paper_reading import PaperTextUnavailableError
 from .provider_schemas import (
     ConfigureProviderRequest,
     ProviderConnectionTestResponse,
@@ -95,6 +101,7 @@ from .reproduction_evaluation_service import (
     ReproductionEvaluationService,
     ReproductionImprovementTaskNotFoundError,
 )
+from .research_generation import ResearchGenerationError
 from .schemas import (
     CreateEvidenceBundleRequest,
     CreateResearchSessionRequest,
@@ -118,6 +125,23 @@ _conversation_search_service = ResearchConversationSearchService()
 _reproduction_evaluation_service = ReproductionEvaluationService()
 _db_dependency = Depends(get_db)
 _opt_principal_dep = Depends(get_optional_principal)
+
+
+def _raise_generation_error(error: ResearchGenerationError) -> None:
+    """Surface a failed generation as an explicit, retryable error; never rules prose."""
+    status_code = (
+        status.HTTP_503_SERVICE_UNAVAILABLE
+        if error.stage in {"provider_unavailable", "timeout"}
+        else status.HTTP_422_UNPROCESSABLE_CONTENT
+    )
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "code": "research_generation_failed",
+            "stage": error.stage,
+            "message": "模型生成失败，本次未生成科研建议。请重试。",
+        },
+    ) from error
 
 
 @router.get("/provider/status", response_model=ProviderStatusResponse)
@@ -186,7 +210,10 @@ def create_conversation(
 ) -> ResearchConversationResponse:
     """Start a dynamic research conversation without a fixed questionnaire."""
     principal_id = principal.principal_id if principal else None
-    return _conversation_service.create(request, db, owner_principal_id=principal_id)
+    try:
+        return _conversation_service.create(request, db, owner_principal_id=principal_id)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
 
 
 @router.post(
@@ -341,6 +368,32 @@ def get_conversation_search_plan(
 
 
 @router.post(
+    "/conversations/{conversation_id}/research-plan",
+    response_model=ConversationResearchPlan,
+)
+def generate_conversation_research_plan(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> ConversationResearchPlan:
+    """Generate the visible research plan only after an explicit user action."""
+    if not request.user_confirmed:
+        raise HTTPException(status_code=422, detail="请先确认生成研究计划。")
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_service.generate_research_plan(
+            conversation_id, db, owned_ids=owned_ids
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post(
     "/conversations/{conversation_id}/evidence-bundles",
     response_model=ConversationEvidenceBundle,
 )
@@ -383,9 +436,11 @@ def create_reproduction_pipeline(
     request: CreateReproductionPipelineRequest,
     db: Session = _db_dependency,
 ) -> ReproductionPipeline:
-    """Create a rules-only plan from one user-selected already-saved paper."""
+    """Create a model-written plan from one user-selected already-saved paper."""
     try:
         return _conversation_service.create_reproduction_pipeline(conversation_id, request, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
     except ReproductionPipelineNotFoundError as error:
@@ -393,6 +448,8 @@ def create_reproduction_pipeline(
             status_code=404,
             detail="Selected paper is not present in this conversation's saved evidence.",
         ) from error
+    except PaperTextUnavailableError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.get(
@@ -576,6 +633,8 @@ def analyze_conversation_paper(
     """Analyze only metadata/abstract from a user-selected saved evidence item."""
     try:
         return _conversation_search_service.analyze_paper(conversation_id, request, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
     except ConversationPaperNotFoundError as error:
@@ -583,6 +642,64 @@ def analyze_conversation_paper(
             status_code=404,
             detail="Paper is not present in this conversation's saved evidence bundles.",
         ) from error
+    except PaperTextUnavailableError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/paper-analysis/upload",
+    response_model=PaperAnalysis,
+)
+async def analyze_conversation_paper_upload(
+    conversation_id: str,
+    request: Request,
+    paper_url: str = Query(..., min_length=1, max_length=2000),
+    db: Session = _db_dependency,
+) -> PaperAnalysis:
+    """Analyze a selected saved paper from a user-uploaded local PDF."""
+    try:
+        payload = await request.body()
+        return _conversation_search_service.analyze_paper_upload(
+            conversation_id,
+            paper_url=paper_url,
+            payload=payload,
+            filename=request.headers.get("x-filename"),
+            db=db,
+        )
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ConversationPaperNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Paper is not present in this conversation's saved evidence bundles.",
+        ) from error
+    except PaperTextUnavailableError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/research-mindmap",
+    response_model=ResearchMindMap,
+)
+def generate_research_mindmap(
+    conversation_id: str,
+    request: GenerateResearchArtifactRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> ResearchMindMap:
+    """Generate a persisted, source-bounded map only after explicit confirmation."""
+    del request
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_service.generate_research_mindmap(
+            conversation_id, db, owned_ids=owned_ids
+        )
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
 
 @router.post(
@@ -598,6 +715,8 @@ def generate_topic_difficulty_analysis(
     del request
     try:
         return _conversation_service.generate_topic_difficulty_analysis(conversation_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -621,6 +740,86 @@ def generate_experiment_design(
                 detail="当前科研画像尚未形成规则研究计划。",
             )
         return design
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/understanding-checks/question",
+    response_model=UnderstandingCheck,
+)
+def create_understanding_question(
+    conversation_id: str,
+    request: CreateUnderstandingQuestionRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> UnderstandingCheck:
+    """Generate one section-bound comprehension question for an explicit paper."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_service.create_understanding_question(
+            conversation_id, request, db, owned_ids=owned_ids
+        )
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ConversationPaperNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Paper is not present in this conversation's saved evidence bundles.",
+        ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/understanding-checks/assess",
+    response_model=UnderstandingCheck,
+)
+def assess_understanding_answer(
+    conversation_id: str,
+    request: AssessUnderstandingRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> UnderstandingCheck:
+    """Assess a user-submitted answer; failures retain the answer and last success."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_service.assess_understanding_answer(
+            conversation_id, request, db, owned_ids=owned_ids
+        )
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from error
+    except ConversationPaperNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="Paper is not present in this conversation's saved evidence bundles.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/understanding-checks",
+    response_model=list[UnderstandingCheck],
+)
+def list_understanding_checks(
+    conversation_id: str,
+    paper_url: str = Query(..., min_length=1, max_length=2000),
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> list[UnderstandingCheck]:
+    """Restore per-section last-success checks for one paper without a model call."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_service.list_understanding_checks(
+            conversation_id, paper_url, db, owned_ids=owned_ids
+        )
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -637,6 +836,8 @@ def create_experiment_code_draft(
     """Return preview code only after the request explicitly confirms intent."""
     try:
         return _conversation_service.create_experiment_code_draft(conversation_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ConversationNotFoundError as error:
@@ -750,10 +951,12 @@ def generate_paper_blueprint(
     request: GenerateResearchArtifactRequest,
     db: Session = _db_dependency,
 ) -> PaperBlueprint:
-    """Create a rules-only paper outline after an explicit user confirmation."""
+    """Create a source-bounded model paper outline after explicit confirmation."""
     del request
     try:
         return _conversation_service.generate_paper_blueprint(conversation_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found.") from error
 
@@ -794,6 +997,8 @@ def create_paper_review(
     del request
     try:
         return _conversation_service.create_paper_review(draft_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except LookupError as error:
         raise HTTPException(status_code=404, detail="Paper draft not found.") from error
 
@@ -837,6 +1042,8 @@ def create_revision_suggestion(
     del request
     try:
         return _conversation_service.create_revision_suggestion(review_id, task_id, db)
+    except ResearchGenerationError as error:
+        _raise_generation_error(error)
     except LookupError as error:
         raise HTTPException(
             status_code=404, detail="Paper review or revision task not found."

@@ -24,6 +24,7 @@ from .conversation_schemas import (
     RevisionTask,
 )
 from .research_artifact_llm import ResearchArtifactGenerator
+from .research_generation import ResearchGenerationError, require_generated_artifact
 
 _EXPECTED_SECTIONS = ("摘要", "引言", "方法", "实验", "结果", "讨论", "局限", "结论")
 _CLAIM_PATTERN = re.compile(r"显著(?:提升|改善|差异)|证明(?:了)?(?:.*?)(?:有效|优于)")
@@ -382,12 +383,10 @@ def _enhance_revision_suggestion(
             },
         },
     )
-    if outcome.status == "unavailable":
-        return rules
-    if outcome.status != "generated" or outcome.text is None:
-        return rules.model_copy(update={"generation_mode": "rules_fallback"})
     try:
-        payload = _RevisionSuggestionPayload.model_validate_json(outcome.text)
+        payload = _RevisionSuggestionPayload.model_validate_json(
+            require_generated_artifact(outcome, kind="revision_suggestion")
+        )
         _validate_candidate_text(payload.candidate_text, rules.classification)
         return rules.model_copy(
             update={
@@ -398,8 +397,12 @@ def _enhance_revision_suggestion(
                 "run_id": outcome.run_id,
             }
         )
-    except (ValueError, json.JSONDecodeError):
-        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+    except ResearchGenerationError:
+        raise
+    except (ValueError, json.JSONDecodeError) as error:
+        raise ResearchGenerationError(
+            "invalid_output", "revision_suggestion: output validation failed"
+        ) from error
 
 
 def _finding(
@@ -459,12 +462,10 @@ def _enhance_review(
             },
         },
     )
-    if outcome.status == "unavailable":
-        return rules
-    if outcome.status != "generated" or outcome.text is None:
-        return rules.model_copy(update={"generation_mode": "rules_fallback"})
     try:
-        payload = _ReviewExplanationPayload.model_validate_json(outcome.text)
+        payload = _ReviewExplanationPayload.model_validate_json(
+            require_generated_artifact(outcome, kind="paper_review")
+        )
         by_id = {item.finding_id: item for item in payload.explanations}
         if not by_id or not set(by_id).issubset({item.id for item in rules.findings}):
             raise ValueError("model referenced an unknown finding")
@@ -494,5 +495,9 @@ def _enhance_review(
                 "event_count": outcome.event_count,
             }
         )
-    except (ValueError, json.JSONDecodeError):
-        return rules.model_copy(update={"generation_mode": "rules_fallback"})
+    except ResearchGenerationError:
+        raise
+    except (ValueError, json.JSONDecodeError) as error:
+        raise ResearchGenerationError(
+            "invalid_output", "paper_review: output validation failed"
+        ) from error

@@ -15,6 +15,11 @@ PAPER_DRAFT_REVIEW = Path("frontend/components/research/PaperDraftReviewPanel.ts
 REPRODUCTION_EVALUATION = Path(
     "frontend/components/research/ReproductionEvaluationPanel.tsx"
 )
+ACADEMIC_SEARCH = Path("frontend/components/research/AcademicSearchPanel.tsx")
+EXPERIMENT_EVIDENCE = Path("frontend/components/research/ExperimentEvidencePanel.tsx")
+REPRODUCTION_PIPELINE = Path("frontend/components/research/ReproductionPipelinePanel.tsx")
+WORKFLOW = Path("frontend/components/research/ResearchWorkflowNav.tsx")
+PAPER_ANALYSIS = Path("frontend/components/research/PaperDeepAnalysisPanel.tsx")
 API = Path("frontend/lib/api/research.ts")
 NEXT_CONFIG = Path("frontend/next.config.ts")
 
@@ -45,6 +50,9 @@ def test_research_workspace_is_chat_first_and_restorable() -> None:
     assert "context_provenance" in workspace_source
     assert "本会话来自已确认的 Learning 上下文" in workspace_source
     assert "查看保留的学习内容" in workspace_source
+    assert "模型未生成（需重试）" in workspace_source
+    assert "Agent 失败，规则接管" not in workspace_source
+    assert "系统未展示规则替代内容" in workspace_source
     assert "五字段" not in workspace_source
     assert "missing_fields" not in workspace_source
 
@@ -95,6 +103,46 @@ def test_model_backed_conversation_turn_allows_more_time_than_restore() -> None:
     assert "MODEL_TURN_TIMEOUT_MS" in send_region
 
 
+def test_paper_artifact_requests_allow_the_model_generation_window() -> None:
+    api_source = API.read_text(encoding="utf-8")
+    analysis_region = api_source.split(
+        "export async function analyzeResearchPaper", 1
+    )[1].split("export async function createUnderstandingQuestion", 1)[0]
+    mindmap_region = api_source.split(
+        "export async function generateResearchMindMap", 1
+    )[1].split("export async function generateExperimentDesign", 1)[0]
+    pipeline_region = api_source.split(
+        "export async function createReproductionPipeline", 1
+    )[1].split("export async function listReproductionPipelines", 1)[0]
+
+    assert "const PAPER_ARTIFACT_TIMEOUT_MS = 120_000" in api_source
+    assert "PAPER_ARTIFACT_TIMEOUT_MS" in analysis_region
+    assert "PAPER_ARTIFACT_TIMEOUT_MS" in mindmap_region
+    assert "PAPER_ARTIFACT_TIMEOUT_MS" in pipeline_region
+
+
+def test_experiment_artifact_requests_allow_the_model_generation_window() -> None:
+    api_source = API.read_text(encoding="utf-8")
+    experiment_region = api_source.split(
+        "export async function generateExperimentDesign", 1
+    )[1].split("export async function createExperimentEvidenceBundle", 1)[0]
+    draft_region = api_source.split(
+        "export async function createExperimentCodeDraft", 1
+    )[1].split("export async function createExperimentEvidenceBundle", 1)[0]
+
+    assert "PAPER_ARTIFACT_TIMEOUT_MS" in experiment_region
+    assert "PAPER_ARTIFACT_TIMEOUT_MS" in draft_region
+
+
+def test_topic_difficulty_requests_allow_the_model_generation_window() -> None:
+    api_source = API.read_text(encoding="utf-8")
+    difficulty_region = api_source.split(
+        "export async function generateTopicDifficultyAnalysis", 1
+    )[1].split("export async function generateResearchPlan", 1)[0]
+
+    assert "PAPER_ARTIFACT_TIMEOUT_MS" in difficulty_region
+
+
 def test_next_development_server_allows_documented_loopback_host() -> None:
     config_source = NEXT_CONFIG.read_text(encoding="utf-8")
     env_example = Path("frontend/.env.example").read_text(encoding="utf-8")
@@ -108,7 +156,7 @@ def test_next_development_server_allows_documented_loopback_host() -> None:
     assert "agentRules: false" in config_source
 
 
-def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:
+def test_research_workspace_displays_an_llm_conversation_plan() -> None:
     workspace_source = WORKSPACE.read_text(encoding="utf-8")
     plan_source = PLAN.read_text(encoding="utf-8")
     api_source = API.read_text(encoding="utf-8")
@@ -116,10 +164,17 @@ def test_research_workspace_displays_a_rules_based_conversation_plan() -> None:
     assert "ResearchPlanPanel" in workspace_source
     assert "research_plan" in workspace_source
     assert "research-plan.v1" in api_source
-    assert "规则研究计划" in plan_source
+    assert "模型研究计划" in plan_source
+    assert "生成模型研究计划" in workspace_source
     assert "待确认或待验证" in plan_source
     assert "<PlanEntry entry={item.risk} />" in plan_source
     assert "<PlanEntry entry={item.mitigation} />" in plan_source
+
+
+def test_research_plan_keeps_classification_data_out_of_the_visual_summary() -> None:
+    plan_source = PLAN.read_text(encoding="utf-8")
+
+    assert "ClassificationBadge" not in plan_source
 
 
 def test_research_workspace_exposes_a_traceable_mind_map_without_a_graph_runtime() -> None:
@@ -144,16 +199,18 @@ def test_research_workspace_labels_direction_analysis_as_a_non_paper_fact() -> N
     assert "ResearchDifficultyPanel" in workspace_source
     assert "topic_difficulty_analysis" in workspace_source
     assert "不是论文精读或实验结论" in difficulty_source
-    assert "模型个性化建议" in difficulty_source
-    assert "模型失败后的规则降级" in difficulty_source
+    assert "generationModeLabel" in difficulty_source
+    assert "GenerationFailure" in difficulty_source
+    assert "rules_fallback" not in difficulty_source
     assert "分析元数据/摘要难点" in search_source
 
 
 def test_experiment_design_discloses_model_or_rules_generation_mode() -> None:
     experiment_source = EXPERIMENT.read_text(encoding="utf-8")
 
-    assert "模型个性化建议" in experiment_source
-    assert "模型失败后的规则降级" in experiment_source
+    assert "generationModeLabel" in experiment_source
+    assert "GenerationFailure" in experiment_source
+    assert "rules_fallback" not in experiment_source
     assert "我确认仅预览代码草案" in experiment_source
     assert "复制代码" in experiment_source
     assert "下载草案文本" in experiment_source
@@ -214,8 +271,8 @@ def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -
     api_source = API.read_text(encoding="utf-8")
 
     assert "ReproductionEvaluationPanel" in workspace_source
-    assert "论文复现项目评估" in workspace_source
-    assert "我确认运行五维项目评估" in panel_source
+    assert "证据完整度评估" in workspace_source
+    assert "我确认运行证据完整度评估" in panel_source
     assert "不可评估" in panel_source
     assert "查看评分依据" in panel_source
     assert "复现改进任务" in panel_source
@@ -225,3 +282,170 @@ def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -
     assert "不代表复现成功或论文质量" in workspace_source
     assert "/reproduction-evaluations" in api_source
     assert "/reproduction-improvement-tasks/" in api_source
+
+
+def test_research_downstream_refreshes_only_from_saved_contracts() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    search_source = ACADEMIC_SEARCH.read_text(encoding="utf-8")
+    pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
+    experiment_source = EXPERIMENT_EVIDENCE.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "onEvidenceSaved" in search_source
+    assert "evidenceVersion" in workspace_source
+    assert "evidenceVersion" in pipeline_source
+    assert "paper_id" in api_source
+    assert "listReproductionPipelines" in experiment_source
+    assert "related_plan_item" in experiment_source
+    assert "不代表实验正确、完成或复现成功" in experiment_source
+    assert "来源范围：{item.source_scope}" in experiment_source
+
+
+def test_reproduction_pipeline_defaults_to_compact_readable_summary() -> None:
+    pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
+
+    assert "核心复现目标" in pipeline_source
+    assert "数据、基线与指标" in pipeline_source
+    assert "完整实验路径" in pipeline_source
+    assert "查看完整依据与待核对项" in pipeline_source
+    assert "<details" in pipeline_source
+    assert "text-base" in pipeline_source
+    assert "leading-7" in pipeline_source
+    assert "min-h-10" in pipeline_source
+    assert "ClassificationBadge" not in pipeline_source
+
+
+def test_experiment_design_groups_entries_into_readable_prose_without_badges() -> None:
+    experiment_source = EXPERIMENT.read_text(encoding="utf-8")
+
+    assert "ClassificationBadge" not in experiment_source
+    assert 'entries.map((item) => item.content).join(" ")' in experiment_source
+    assert "whitespace-pre-line" in experiment_source
+    assert "text-base" in experiment_source
+    assert "leading-7" in experiment_source
+
+
+def test_research_panels_hide_classification_badges_without_changing_contracts() -> None:
+    panel_sources = [
+        (DIFFICULTY, DIFFICULTY.read_text(encoding="utf-8")),
+        (EXPERIMENT_EVIDENCE, EXPERIMENT_EVIDENCE.read_text(encoding="utf-8")),
+        (REPRODUCTION_EVALUATION, REPRODUCTION_EVALUATION.read_text(encoding="utf-8")),
+        (CITATION, CITATION.read_text(encoding="utf-8")),
+        (PAPER_DRAFT_REVIEW, PAPER_DRAFT_REVIEW.read_text(encoding="utf-8")),
+    ]
+
+    for path, source in panel_sources:
+        assert "ClassificationBadge" not in source, path
+
+
+def test_research_workflow_uses_the_five_primary_research_zones() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    workflow_source = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "当前阶段" in workflow_source
+    assert "当前研究主题" in workflow_source
+    assert "当前选择论文" in workflow_source
+    assert "当前缺失信息" in workflow_source
+    assert "唯一下一步" in workflow_source
+    for label in (
+        "研究起点",
+        "方向与文献",
+        "论文深度分析",
+        "复现工作台",
+        "证据与成果",
+    ):
+        assert label in workflow_source
+    assert "总结已学习知识" not in workflow_source
+    assert "检查用户理解程度" not in workflow_source
+    assert "PaperDraftReviewPanel" in workspace_source
+    assert "ResearchMindMapPanel" in workspace_source
+
+
+def test_research_profile_hides_context_as_a_primary_display_field() -> None:
+    profile_source = PROFILE.read_text(encoding="utf-8")
+
+    assert "对象与场景" not in profile_source
+    assert "readiness.score" not in profile_source
+    assert "当前缺失信息" in profile_source
+
+
+def test_research_page_groups_paper_analysis_and_mindmap_before_the_workbench() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    paper_source = PAPER_ANALYSIS.read_text(encoding="utf-8")
+
+    assert "PaperDeepAnalysisPanel" in workspace_source
+    assert workspace_source.index("research-section-paper-analysis") < workspace_source.index(
+        "research-section-mindmap"
+    ) < workspace_source.index("research-section-workbench")
+    assert "自动寻找公开论文" in paper_source
+    assert "待核验内容" in paper_source
+    assert "GenerationFailure" in paper_source
+    assert "rules_fallback" not in paper_source
+    assert "读取论文并生成分析" in paper_source
+    assert "上传本地 PDF" in paper_source
+    api_source = API.read_text(encoding="utf-8")
+    assert "analyzeResearchPaperUpload" in api_source
+    assert "<details" in paper_source
+
+
+def test_research_primary_content_does_not_use_ten_or_eleven_pixel_text() -> None:
+    for path in (WORKSPACE, PROFILE, WORKFLOW, PAPER_ANALYSIS):
+        source = path.read_text(encoding="utf-8")
+        assert "text-[10px]" not in source
+        assert "text-[11px]" not in source
+
+
+def test_research_conversation_keeps_the_selected_paper_in_the_primary_flow() -> None:
+    conversation_source = WORKSPACE.read_text(encoding="utf-8")
+    pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
+
+    assert 'const [selectedPaperTitle, setSelectedPaperTitle]' in conversation_source
+    assert 'selectedPaperTitle={selectedPaperTitle}' in conversation_source
+    assert 'onPipelineSaved={(pipeline) =>' in conversation_source
+    assert 'onPipelineSaved?: (pipeline: ReproductionPipeline) => void;' in pipeline_source
+    assert 'onPipelineSaved?.(savedPipeline);' in pipeline_source
+
+
+def test_paper_analysis_embeds_evidence_bound_understanding_checks() -> None:
+    paper_source = PAPER_ANALYSIS.read_text(encoding="utf-8")
+    academic_search_source = ACADEMIC_SEARCH.read_text(encoding="utf-8")
+
+    assert "createUnderstandingQuestion" in paper_source
+    assert "assessUnderstandingAnswer" in paper_source
+    assert "source_scope" in paper_source
+    assert "paper-analysis-section-${item.section_key}" in paper_source
+    assert "const paperSections = analysis?.paper_reading?.sections ?? []" in paper_source
+    assert "item.chapter_key" in paper_source
+    assert "尚未生成本章节的针对性分析" in paper_source
+    assert "bundleId: bundle.bundle_id" in academic_search_source
+
+
+def test_mindmap_nodes_jump_to_stable_paper_analysis_anchors() -> None:
+    mindmap_source = MINDMAP.read_text(encoding="utf-8")
+
+    assert "paper-analysis-section-${sectionKey}" in mindmap_source
+    assert "scrollIntoView" in mindmap_source
+    assert "focus" in mindmap_source
+
+
+def test_mindmap_generation_is_explicit_and_discloses_a_real_failure() -> None:
+    mindmap_source = MINDMAP.read_text(encoding="utf-8")
+    api_source = API.read_text(encoding="utf-8")
+
+    assert "generateResearchMindMap" in mindmap_source
+    assert "生成科研思维导图" in mindmap_source
+    assert "本次未生成科研建议" in mindmap_source
+    assert "系统没有使用规则模板替代本次分析" in mindmap_source
+    assert "/research-mindmap" in api_source
+
+
+def test_open_access_actions_are_click_only_and_do_not_claim_full_text() -> None:
+    api_source = API.read_text(encoding="utf-8")
+    search_source = ACADEMIC_SEARCH.read_text(encoding="utf-8")
+
+    assert "researchPaperLinks" in api_source
+    assert "https://doi.org/" in api_source
+    assert "https://arxiv.org/pdf/" in api_source
+    assert "在新窗口打开 arXiv PDF" in search_source
+    assert "不会自动下载或缓存 PDF" in search_source
+    assert 'rel="noreferrer"' in search_source

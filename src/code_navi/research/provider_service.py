@@ -123,7 +123,6 @@ class ProviderConnectionService:
         started = time.perf_counter()
         outcome = self.decision_generator.generate(
             profile=ResearchProfile(),
-            messages=[],
             user_message="这是一次连接测试。请返回合法的科研澄清结构，不要调用工具。",
             conversation_id=f"provider-test-{uuid.uuid4()}",
         )
