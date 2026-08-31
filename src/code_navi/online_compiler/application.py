@@ -234,10 +234,21 @@ class CompilerApplication:
             runtimes = self._gateway.list_runtimes()
         except PistonError:
             return ApiResponse(
-                503,
+                200,
                 {
                     "ready": False,
+                    "language": "Python",
+                    "version": self._settings.python_version,
+                    "limits": {
+                        "wallTimeMs": self._limits.wall_time_ms,
+                        "memoryBytes": self._limits.memory_bytes,
+                        "sourceBytes": self._settings.max_source_bytes,
+                    },
                     "message": "执行服务暂时不可用，请稍后重试。",
+                    "ai": {
+                        "status": self._ai_status,
+                        "message": self._ai_message,
+                    },
                 },
             )
 
@@ -247,7 +258,7 @@ class CompilerApplication:
             for runtime in runtimes
         )
         return ApiResponse(
-            200 if ready else 503,
+            200,
             {
                 "ready": ready,
                 "language": "Python",
