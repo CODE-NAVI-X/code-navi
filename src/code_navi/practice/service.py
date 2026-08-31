@@ -124,10 +124,10 @@ class PracticeSetService:
 
         knowledge_points = self._bound_knowledge_points(request)
         set_id = str(uuid4())
-        code_fill_specs, code_fill_provider = (
+        code_fill_specs, code_fill_provider, code_fill_used_model = (
             self._generate_code_fill_specs(request)
             if request.kind != "concept_quiz"
-            else ([], "mock")
+            else ([], "mock", False)
         )
         code_fill_index = 0
 
@@ -176,11 +176,17 @@ class PracticeSetService:
             local_profile_id=None,
             profile_id=request.profile_id,
             generation_mode=(
-                "model" if code_fill_index and code_fill_provider != "mock" else "mock"
+                "model"
+                if code_fill_index and code_fill_used_model
+                else (
+                    "rules_fallback"
+                    if code_fill_index and code_fill_provider != "mock"
+                    else "mock"
+                )
             ),
             provider_name=(
                 _MOCK_PROVIDER_NAME
-                if not code_fill_index or code_fill_provider == "mock"
+                if not code_fill_index or not code_fill_used_model
                 else code_fill_provider
             ),
             owner_principal_id=owner_principal_id,
@@ -217,11 +223,17 @@ class PracticeSetService:
             items=items,
             coverage=coverage,
             generation_mode=(
-                "model" if code_fill_index and code_fill_provider != "mock" else "mock"
+                "model"
+                if code_fill_index and code_fill_used_model
+                else (
+                    "rules_fallback"
+                    if code_fill_index and code_fill_provider != "mock"
+                    else "mock"
+                )
             ),
             provider_name=(
                 _MOCK_PROVIDER_NAME
-                if not code_fill_index or code_fill_provider == "mock"
+                if not code_fill_index or not code_fill_used_model
                 else code_fill_provider
             ),
             audit=None,
@@ -292,7 +304,7 @@ class PracticeSetService:
     def _generate_code_fill_specs(
         self,
         request: PracticeSetGenerateRequest,
-    ) -> tuple[list[tuple[dict, dict | None]], str]:
+    ) -> tuple[list[tuple[dict, dict | None]], str, bool]:
         """Generate code-fill items from a provider, falling back to mock rules."""
         provider_name = self._provider_name()
         count = request.count
@@ -312,22 +324,23 @@ class PracticeSetService:
                     for position in range(1, count + 1)
                 ],
                 "mock",
+                False,
             )
-        offline = json.dumps(
-            [self._mock_code_fill_dict(topic, position) for position in range(1, count + 1)],
-            ensure_ascii=False,
-        )
-        result, provider_name = self._run_agent(
-            agent_name="practice_code_fill_generator",
-            system_prompt=CODE_FILL_SYSTEM_PROMPT,
-            user_input=code_fill_user_prompt(topic, count, request.difficulty),
-            session_id=f"practice-code-fill-{uuid4()}",
-            offline_json=offline,
-        )
-        items = self._parse_code_fill_items(result.output_text or "", count, topic)
+        try:
+            result, provider_name = self._run_agent(
+                agent_name="practice_code_fill_generator",
+                system_prompt=CODE_FILL_SYSTEM_PROMPT,
+                user_input=code_fill_user_prompt(topic, count, request.difficulty),
+                session_id=f"practice-code-fill-{uuid4()}",
+            )
+            items = self._parse_code_fill_items(result.output_text or "", count, topic)
+        except Exception:
+            items = None
+            provider_name = "rules"
         if items is None:
             items = [self._mock_code_fill_dict(topic, position) for position in range(1, count + 1)]
-        return items, provider_name
+            return items, "rules", False
+        return items, provider_name, True
 
     def _parse_code_fill_items(
         self,
@@ -346,24 +359,31 @@ class PracticeSetService:
             reference_code = str(raw_item.get("reference_code") or "").strip()
             if not reference_code:
                 continue
-            blanks = [
-                {
-                    "blank_id": str(blank.get("blank_id") or f"blank-{index + 1}"),
-                    "answer": str(blank.get("answer") or ""),
-                    "alternate_answers": [
-                        str(value) for value in (blank.get("alternate_answers") or [])
-                    ][:3],
-                    "hint": str(blank.get("hint") or "")[:200],
-                    "step_no": max(1, int(blank.get("step_no") or 1)),
-                }
-                for index, blank in enumerate(raw_item.get("blanks") or [])
-                if isinstance(blank, dict)
-            ]
+            blanks: list[dict] = []
+            seen_blank_ids: set[str] = set()
+            for index, blank in enumerate(raw_item.get("blanks") or []):
+                if not isinstance(blank, dict):
+                    continue
+                blank_id = str(blank.get("blank_id") or f"blank-{index + 1}")[:64]
+                if blank_id in seen_blank_ids:
+                    continue
+                seen_blank_ids.add(blank_id)
+                blanks.append(
+                    {
+                        "blank_id": blank_id,
+                        "answer": str(blank.get("answer") or "")[:500],
+                        "alternate_answers": [
+                            str(value) for value in (blank.get("alternate_answers") or [])
+                        ][:3],
+                        "hint": str(blank.get("hint") or "")[:200],
+                        "step_no": _coerce_step_no(blank.get("step_no")),
+                    }
+                )
             if not (2 <= len(blanks) <= 6):
                 continue
             steps = [
                 {
-                    "step_no": max(1, int(step.get("step_no") or 1)),
+                    "step_no": _coerce_step_no(step.get("step_no")),
                     "title": str(step.get("title") or "")[:120],
                     "reason": str(step.get("reason") or "")[:400],
                     "sub_steps": [str(item) for item in (step.get("sub_steps") or [])][:4],
@@ -373,17 +393,12 @@ class PracticeSetService:
             ][:5]
             if not steps:
                 continue
+            complexity, judge_mode = _code_fill_mode_from_reference(reference_code)
             payload = {
                 "title": str(raw_item.get("title") or f"（生成）{topic}")[:200],
                 "language": "python",
-                "complexity": (
-                    "heavy" if raw_item.get("complexity") == "heavy" else "light"
-                ),
-                "judge_mode": (
-                    "explain_only"
-                    if raw_item.get("judge_mode") == "explain_only"
-                    else "llm_static"
-                ),
+                "complexity": complexity,
+                "judge_mode": judge_mode,
                 "code_masked": str(raw_item.get("code_masked") or "")[:16000],
                 "blanks": [
                     {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS}
@@ -413,10 +428,10 @@ class PracticeSetService:
         )
         return payload, secret
 
-    def _provider_settings(self, offline_json: str) -> ProviderSettings:
+    def _provider_settings(self) -> ProviderSettings:
         name = (os.getenv("CODE_NAVI_PRACTICE_PROVIDER") or "mock").strip().lower()
         if name == "mock":
-            return ProviderSettings("mock", None, offline_json)
+            return ProviderSettings("mock")
         return ProviderSettings(
             name,
             os.getenv("CODE_NAVI_MODEL") or (
@@ -438,7 +453,6 @@ class PracticeSetService:
         system_prompt: str,
         user_input: str,
         session_id: str,
-        offline_json: str,
     ):
         agent = AgentSpec(
             name=agent_name,
@@ -447,9 +461,12 @@ class PracticeSetService:
             tool_names=(),
             output_format="json",
         )
-        settings = self._provider_settings(offline_json)
+        settings = self._provider_settings()
         provider = create_provider(settings)
-        runtime = AgentRuntime(provider, session_dir=os.getenv("CODE_NAVI_EVENTS_DIR"))
+        runtime = AgentRuntime(
+            provider,
+            session_dir=os.getenv("CODE_NAVI_EVENTS_DIR") or os.path.join("var", "runs"),
+        )
         result = runtime.run(
             agent,
             RuntimeRequest(
@@ -754,9 +771,6 @@ class PracticeSetService:
                     excerpt,
                 ),
                 session_id=f"practice-explain-{uuid4()}",
-                offline_json=json.dumps(
-                    {"explanation": f"规则回退：{request.symbol.kind} {request.symbol.name}"}
-                ),
             )
             data = _loads_model_json(result.output_text or "")
             if data is None:
@@ -979,44 +993,34 @@ class PracticeSetService:
         request: CodeFillGradeRequest,
     ) -> tuple[list[CodeFillGradeResultItem] | None, str | None]:
         """Use the configured provider for static grading; fail closed to rules."""
-        offline = json.dumps(
-            [
-                CodeFillGradeResultItem(
-                    blank_id=blank_id,
-                    correct=False,
-                    score=0,
-                    max_score=_CODE_FILL_BLANK_MAX_SCORE,
-                    comment="规则判定未匹配参考答案。",
-                    graded_by="rules",
-                ).model_dump(mode="json")
-                for blank_id, _, _ in unmatched
-            ],
-            ensure_ascii=False,
-        )
-        result, provider_name = self._run_agent(
-            agent_name="practice_code_fill_grader",
-            system_prompt=CODE_FILL_STATIC_GRADER_SYSTEM_PROMPT,
-            user_input=static_grade_user_prompt(
-                reference_code,
-                [
-                    {
-                        "blank_id": blank_id,
-                        "answer": blank.get("answer"),
-                        "alternate_answers": blank.get("alternate_answers"),
-                    }
-                    for blank_id, _, blank in unmatched
-                ],
-                [
-                    {"blank_id": blank_id, "value": value}
-                    for blank_id, value, _ in unmatched
-                ],
-            ),
-            session_id=f"practice-grade-{request.attempt_id}",
-            offline_json=offline,
-        )
-        parsed = self._parse_model_grade_results(result.output_text or "", unmatched)
+        if self._provider_name() == "mock":
+            return None, None
+        try:
+            result, provider_name = self._run_agent(
+                agent_name="practice_code_fill_grader",
+                system_prompt=CODE_FILL_STATIC_GRADER_SYSTEM_PROMPT,
+                user_input=static_grade_user_prompt(
+                    reference_code,
+                    [
+                        {
+                            "blank_id": blank_id,
+                            "answer": blank.get("answer"),
+                            "alternate_answers": blank.get("alternate_answers"),
+                        }
+                        for blank_id, _, blank in unmatched
+                    ],
+                    [
+                        {"blank_id": blank_id, "value": value}
+                        for blank_id, value, _ in unmatched
+                    ],
+                ),
+                session_id=f"practice-grade-{request.attempt_id}",
+            )
+            parsed = self._parse_model_grade_results(result.output_text or "", unmatched)
+        except Exception:
+            return None, None
         if parsed is None:
-            return None, provider_name
+            return None, None
         return parsed, provider_name
 
     def _parse_model_grade_results(
@@ -1043,7 +1047,7 @@ class PracticeSetService:
             parsed.append(
                 CodeFillGradeResultItem(
                     blank_id=blank_id,
-                    correct=bool(entry.get("correct", score >= _CODE_FILL_BLANK_MAX_SCORE)),
+                    correct=score >= _CODE_FILL_BLANK_MAX_SCORE,
                     score=score,
                     max_score=_CODE_FILL_BLANK_MAX_SCORE,
                     comment=str(entry.get("comment") or "").strip()[:600] or None,
@@ -1255,6 +1259,33 @@ def _loads_model_json(raw: str) -> dict | None:
         except (SyntaxError, ValueError):
             return None
     return data if isinstance(data, dict) else None
+
+
+def _coerce_step_no(value: object) -> int:
+    """Return a safe 1-based step number from provider output."""
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _code_fill_mode_from_reference(reference_code: str) -> tuple[str, str]:
+    """Derive complexity/judge_mode on the server side (§1.1)."""
+    lowered = reference_code.lower()
+    framework_markers = (
+        "fastapi",
+        "flask",
+        "torch",
+        "transformers",
+        "tensorflow",
+        "sklearn",
+    )
+    is_heavy = (
+        len(reference_code.splitlines()) > 200
+        or any(marker in lowered for marker in framework_markers)
+        or (reference_code.count("class ") >= 2 and reference_code.count("def ") >= 3)
+    )
+    return ("heavy", "explain_only") if is_heavy else ("light", "llm_static")
 
 
 def _knowledge_points_from_snapshot(snapshot: dict) -> list[str]:

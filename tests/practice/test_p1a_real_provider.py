@@ -106,12 +106,33 @@ def test_code_fill_generation_parses_model_output(monkeypatch: pytest.MonkeyPatc
         lambda **kwargs: (_model_output(json.dumps(model_json)), "deepseek"),
     )
 
-    specs, provider_name = service._generate_code_fill_specs(_generation_request())
+    specs, provider_name, used_model = service._generate_code_fill_specs(_generation_request())
 
     assert provider_name == "deepseek"
+    assert used_model is True
     assert len(specs) == 1
     assert specs[0][0]["judge_mode"] == "llm_static"
     assert specs[0][1]["reference_code"].startswith("def total")
+
+
+def test_generation_falls_back_to_rules_when_provider_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PracticeSetService()
+    monkeypatch.setattr(service, "_provider_name", lambda: "deepseek")
+
+    def fail_run(**kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(service, "_run_agent", fail_run)
+
+    specs, provider_name, used_model = service._generate_code_fill_specs(
+        _generation_request()
+    )
+
+    assert used_model is False
+    assert provider_name == "rules"
+    assert len(specs) == 3
 
 
 def test_grade_code_fill_uses_model_when_configured(
@@ -190,6 +211,62 @@ def test_grade_code_fill_uses_model_when_configured(
     assert response.results[0].correct is False
 
 
+def test_mock_grade_does_not_run_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Session,
+) -> None:
+    service = PracticeSetService()
+    set_id = "set-mock-grade"
+    item_id = "item-mock"
+    db.add(
+        PracticeSetModel(
+            set_id=set_id,
+            kind="code_practice",
+            generation_mode="mock",
+            provider_name="mock",
+        )
+    )
+    db.add(
+        PracticeSetItemModel(
+            set_id=set_id,
+            item_id=item_id,
+            position=1,
+            item_kind="code_fill",
+            payload={"judge_mode": "llm_static"},
+            judge_secret={
+                "blanks": [
+                    {
+                        "blank_id": "blank-1",
+                        "answer": "total + value",
+                        "alternate_answers": [],
+                        "hint": "累加",
+                        "step_no": 1,
+                    }
+                ],
+                "reference_code": "def average(nums):\n    total = 0\n",
+            },
+        )
+    )
+    db.commit()
+
+    def must_not_run(**kwargs):
+        raise AssertionError("mock grade must not run the kernel loop")
+
+    monkeypatch.setattr(service, "_run_agent", must_not_run)
+
+    response = service.grade_code_fill(
+        CodeFillGradeRequest(
+            set_id=set_id,
+            item_id=item_id,
+            attempt_id=_attempt_id(),
+            blank_answers=[{"blank_id": "blank-1", "value": "x"}],
+        ),
+        db,
+    )
+
+    assert response.results[0].graded_by == "rules"
+
+
 def test_explain_symbol_uses_model_and_caches(
     monkeypatch: pytest.MonkeyPatch,
     db: Session,
@@ -243,3 +320,79 @@ def test_explain_symbol_uses_model_and_caches(
     assert first.cached is False
     assert second.source == "model"
     assert second.cached is True
+
+
+def test_parser_derives_server_side_complexity() -> None:
+    service = PracticeSetService()
+    reference_code = "def f():\n" + "    x = 1\n" * 220
+    model = {
+        "items": [
+            {
+                "title": "long",
+                "complexity": "light",
+                "judge_mode": "llm_static",
+                "reference_code": reference_code,
+                "code_masked": reference_code,
+                "blanks": [
+                    {
+                        "blank_id": "b1",
+                        "answer": "x",
+                        "alternate_answers": [],
+                        "hint": "h",
+                        "step_no": 1,
+                    },
+                    {
+                        "blank_id": "b2",
+                        "answer": "x",
+                        "alternate_answers": [],
+                        "hint": "h",
+                        "step_no": 2,
+                    },
+                ],
+                "steps": [
+                    {
+                        "step_no": 1,
+                        "title": "t",
+                        "reason": "r",
+                        "sub_steps": [],
+                    }
+                ],
+            }
+        ]
+    }
+
+    specs = service._parse_code_fill_items(json.dumps(model), 1, "topic")
+
+    assert specs is not None
+    assert specs[0][0]["complexity"] == "heavy"
+    assert specs[0][0]["judge_mode"] == "explain_only"
+
+
+def test_parser_dedupes_and_truncates_blank_ids() -> None:
+    service = PracticeSetService()
+    blank_id = "b" * 100
+    model = {
+        "items": [
+            {
+                "title": "dup",
+                "reference_code": "def f():\n    return 1\n",
+                "code_masked": "def f():\n    return ______\n",
+                "blanks": [
+                    {"blank_id": blank_id, "answer": "1", "hint": "h", "step_no": 1},
+                    {"blank_id": blank_id, "answer": "1", "hint": "h", "step_no": 2},
+                ],
+                "steps": [
+                    {
+                        "step_no": 1,
+                        "title": "t",
+                        "reason": "r",
+                        "sub_steps": [],
+                    }
+                ],
+            }
+        ]
+    }
+
+    specs = service._parse_code_fill_items(json.dumps(model), 1, "topic")
+
+    assert specs is None
