@@ -10,7 +10,7 @@ import {
   type ReviewSeverity, type SubmissionProfile, type SubmissionReadinessCheck, type SubmissionReadinessItem,
 } from "@/lib/api/research";
 import { CitationScaffoldPanel } from "./CitationScaffoldPanel";
-import { ClassificationBadge } from "./ClassificationBadge";
+import { GenerationFailure, isGenerationFailure } from "./generationUi";
 
 const severityLabel: Record<ReviewSeverity, string> = { blocker: "阻塞", major: "重要", minor: "一般", suggestion: "建议" };
 const severityClass: Record<ReviewSeverity, string> = { blocker: "text-rose-700 dark:text-rose-300", major: "text-orange-700 dark:text-orange-300", minor: "text-amber-700 dark:text-amber-300", suggestion: "text-sky-700 dark:text-sky-300" };
@@ -18,7 +18,7 @@ const readinessLabel = { not_ready: "尚未就绪", needs_review: "需要人工�
 const readinessClass = { not_ready: "text-rose-700 dark:text-rose-300", needs_review: "text-amber-700 dark:text-amber-300", checklist_complete: "text-emerald-700 dark:text-emerald-300" } as const;
 
 function ReadinessItems({ items }: { items: SubmissionReadinessItem[] }) {
-  return <ul className="mt-1 space-y-1">{items.map((item) => <li key={item.id} className="rounded bg-slate-50 p-2 dark:bg-zinc-950"><p>{item.message}</p><p className="mt-1 text-[10px] text-slate-500"><ClassificationBadge classification={item.classification} /> · 依据：{item.basis}</p></li>)}</ul>;
+  return <ul className="mt-1 space-y-1">{items.map((item) => <li key={item.id} className="rounded bg-slate-50 p-2 dark:bg-zinc-950"><p>{item.message}</p><p className="mt-1 text-[10px] text-slate-500">依据：{item.basis}</p></li>)}</ul>;
 }
 
 export function PaperDraftReviewPanel({ conversationId }: { conversationId: string }) {
@@ -42,6 +42,8 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
   const [submissionNotes, setSubmissionNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState(false);
+  const [retryAction, setRetryAction] = useState<(() => void) | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -79,9 +81,13 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
   }
   async function runReview() {
     if (!draft) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setFailure(false); setRetryAction(null);
     try { setReview(await createPaperReview(draft.draft_id)); setRevision(null); }
-    catch (value) { setError(value instanceof Error ? value.message : "生成审稿建议失败。请重试。"); } finally { setBusy(false); }
+    catch (value) {
+      setFailure(isGenerationFailure(value));
+      setRetryAction(() => () => void runReview());
+      setError(value instanceof Error ? value.message : "生成审稿建议失败。请重试。");
+    } finally { setBusy(false); }
   }
   async function changeTask(taskId: string, status: "accepted" | "skipped") {
     if (!review) return;
@@ -94,9 +100,13 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
   }
   async function generateSuggestion(taskId: string) {
     if (!review) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setFailure(false); setRetryAction(null);
     try { const saved = await createRevisionSuggestion(review.review_id, taskId); setSuggestions((current) => ({ ...current, [taskId]: saved })); }
-    catch (value) { setError(value instanceof Error ? value.message : "无法生成候选改写。请重试。"); } finally { setBusy(false); }
+    catch (value) {
+      setFailure(isGenerationFailure(value));
+      setRetryAction(() => () => void generateSuggestion(taskId));
+      setError(value instanceof Error ? value.message : "无法生成候选改写。请重试。");
+    } finally { setBusy(false); }
   }
   async function applySuggestion(taskId: string, action: "accepted" | "skipped") {
     const suggestion = suggestions[taskId]; if (!suggestion) return;
@@ -178,17 +188,22 @@ export function PaperDraftReviewPanel({ conversationId }: { conversationId: stri
       <div className="border-t border-violet-100/70 px-2 pb-2 dark:border-violet-950/60">
     <div className="mt-3 grid gap-2"><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={500} placeholder="初稿标题" className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950" /><select value={format} onChange={(event) => setFormat(event.target.value as "markdown" | "plain_text")} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950"><option value="markdown">Markdown</option><option value="plain_text">纯文本</option></select><textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={60000} rows={8} placeholder="粘贴你的初稿。只提交你愿意在当前本地会话中分析的文本。" className="resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 dark:border-zinc-700 dark:bg-zinc-950" /></div>
     <button type="button" onClick={() => void submitDraft()} disabled={busy} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clipboard className="h-3.5 w-3.5" />}提交本地初稿</button>
-    {error && <p role="alert" className="mt-2 text-xs text-rose-600">{error}</p>}
+    {error &&
+      (failure && retryAction ? (
+        <GenerationFailure error={error} busy={busy} hasLastSuccess={review !== null} onRetry={retryAction} />
+      ) : (
+        <p role="alert" className="mt-2 text-sm text-rose-600">{error}</p>
+      ))}
     {notice && <p role="status" className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300">{notice}</p>}
     {draft && <div className="mt-4 rounded-xl border border-violet-100 p-3 text-xs dark:border-violet-950"><p className="font-semibold">已保存：{draft.title} · v{draft.version}</p><p className="mt-1 text-[10px] text-slate-500">{new Date(draft.created_at).toLocaleString()} · 仅限用户粘贴的本地会话文本</p><button type="button" onClick={() => void runReview()} disabled={busy} className="mt-2 inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"><RotateCcw className="h-3.5 w-3.5" />我确认生成结构化审稿建议</button></div>}
-    {review && <div className="mt-3 space-y-2"><p className="text-[11px] text-slate-500">{review.generation_mode === "llm" ? "模型个性化解释（事实边界仍由规则控制）" : review.generation_mode === "rules_fallback" ? "模型不可用，已使用基础规则降级" : "基础规则审稿"}</p>{review.revision_tasks.map((task) => <div key={task.task_id} className="rounded-lg border border-slate-200 p-2 text-[11px] dark:border-zinc-700"><p className={`font-semibold ${severityClass[task.finding.severity]}`}>{severityLabel[task.finding.severity]} · {task.finding.section}</p><p className="mt-1">{task.finding.issue}</p><p className="mt-1 text-slate-500">依据：{task.finding.basis} · <ClassificationBadge classification={task.finding.classification} /></p><p className="mt-1">建议：{task.finding.recommended_action}</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void changeTask(task.task_id, "accepted")} disabled={busy || task.status === "accepted"} className="inline-flex items-center gap-1 text-emerald-700 disabled:opacity-50 dark:text-emerald-300"><Check className="h-3.5 w-3.5" />接受</button><button type="button" onClick={() => void changeTask(task.task_id, "skipped")} disabled={busy || task.status === "skipped"} className="inline-flex items-center gap-1 text-slate-500 disabled:opacity-50"><X className="h-3.5 w-3.5" />跳过</button><span className="text-slate-500">当前：{task.status}</span></div></div>)}<button type="button" onClick={() => void previewRevision()} disabled={busy || !review.revision_tasks.some((task) => task.status === "accepted")} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300">生成已接受任务的修订预览</button></div>}
+    {review && <div className="mt-3 space-y-2"><p className="text-[11px] text-slate-500">{review.generation_mode === "llm" ? "模型个性化解释（事实边界仍由规则控制）" : "基础规则审稿"}</p>{review.revision_tasks.map((task) => <div key={task.task_id} className="rounded-lg border border-slate-200 p-2 text-[11px] dark:border-zinc-700"><p className={`font-semibold ${severityClass[task.finding.severity]}`}>{severityLabel[task.finding.severity]} · {task.finding.section}</p><p className="mt-1">{task.finding.issue}</p><p className="mt-1 text-slate-500">依据：{task.finding.basis}</p><p className="mt-1">建议：{task.finding.recommended_action}</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => void changeTask(task.task_id, "accepted")} disabled={busy || task.status === "accepted"} className="inline-flex items-center gap-1 text-emerald-700 disabled:opacity-50 dark:text-emerald-300"><Check className="h-3.5 w-3.5" />接受</button><button type="button" onClick={() => void changeTask(task.task_id, "skipped")} disabled={busy || task.status === "skipped"} className="inline-flex items-center gap-1 text-slate-500 disabled:opacity-50"><X className="h-3.5 w-3.5" />跳过</button><span className="text-slate-500">当前：{task.status}</span></div></div>)}<button type="button" onClick={() => void previewRevision()} disabled={busy || !review.revision_tasks.some((task) => task.status === "accepted")} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-[11px] font-semibold text-violet-800 disabled:opacity-50 dark:border-violet-900 dark:text-violet-300">生成已接受任务的修订预览</button></div>}
     {review && review.revision_tasks.filter((task) => task.status === "accepted").map((task) => {
       const suggestion = suggestions[task.task_id];
       return <div key={`suggestion-${task.task_id}`} className="mt-3 rounded-xl border border-sky-200 p-3 text-xs dark:border-sky-900">
         <p className="font-semibold">逐段候选改写 · {task.finding.section}</p>
         <p className="mt-1 text-[10px] text-slate-500">候选改写是建议，不自动覆盖原稿；仅用户接受后才创建新版本。</p>
         {!suggestion && <button type="button" onClick={() => void generateSuggestion(task.task_id)} disabled={busy} className="mt-2 inline-flex items-center gap-1 rounded-lg border border-sky-200 px-2.5 py-1.5 text-[11px] font-semibold text-sky-800 disabled:opacity-50 dark:border-sky-900 dark:text-sky-300"><Pencil className="h-3.5 w-3.5" />生成候选改写</button>}
-        {suggestion && <div className="mt-2 space-y-2"><p className="text-[10px] text-slate-500">{suggestion.generation_mode === "llm" ? "模型个性化建议（规则已校验）" : suggestion.generation_mode === "rules_fallback" ? "模型失败后的规则降级" : "基础规则"}</p><p><strong>原文片段：</strong>{suggestion.original_excerpt}</p><p><strong>依据：</strong>{suggestion.basis} · <ClassificationBadge classification={suggestion.classification} /></p><p><strong>修改理由：</strong>{suggestion.rationale}</p><textarea value={editingSuggestionId === suggestion.suggestion_id ? editedCandidate : suggestion.candidate_text} onChange={(event) => { setEditingSuggestionId(suggestion.suggestion_id); setEditedCandidate(event.target.value); }} rows={6} className="w-full resize-y rounded border border-slate-200 bg-white p-2 text-[11px] dark:border-zinc-700 dark:bg-zinc-950" /><p className="text-[10px] text-slate-500">缺证据内容必须保留待验证占位；不会自动检索、写文件、安装或执行。</p><div className="flex gap-2"><button type="button" onClick={() => void applySuggestion(task.task_id, "accepted")} disabled={busy} className="text-emerald-700 dark:text-emerald-300">接受并创建版本</button><button type="button" onClick={() => void applySuggestion(task.task_id, "skipped")} disabled={busy} className="text-slate-500">跳过候选</button></div></div>}
+        {suggestion && <div className="mt-2 space-y-2"><p className="text-[10px] text-slate-500">{suggestion.generation_mode === "llm" ? "模型个性化建议（规则已校验）" : "基础规则"}</p><p><strong>原文片段：</strong>{suggestion.original_excerpt}</p><p><strong>依据：</strong>{suggestion.basis}</p><p><strong>修改理由：</strong>{suggestion.rationale}</p><textarea value={editingSuggestionId === suggestion.suggestion_id ? editedCandidate : suggestion.candidate_text} onChange={(event) => { setEditingSuggestionId(suggestion.suggestion_id); setEditedCandidate(event.target.value); }} rows={6} className="w-full resize-y rounded border border-slate-200 bg-white p-2 text-[11px] dark:border-zinc-700 dark:bg-zinc-950" /><p className="text-[10px] text-slate-500">缺证据内容必须保留待验证占位；不会自动检索、写文件、安装或执行。</p><div className="flex gap-2"><button type="button" onClick={() => void applySuggestion(task.task_id, "accepted")} disabled={busy} className="text-emerald-700 dark:text-emerald-300">接受并创建版本</button><button type="button" onClick={() => void applySuggestion(task.task_id, "skipped")} disabled={busy} className="text-slate-500">跳过候选</button></div></div>}
       </div>;
     })}
       </div>

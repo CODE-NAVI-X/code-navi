@@ -23,3 +23,8 @@ Code Navi 的文档按“稳定产品边界、设计决策、可验收行为、�
 4. [Workspace–Task–Capability 决策](decisions/workspace-task-capability-model.md)
 5. [持久工作区实施计划](plans/persistent-workspace-orchestration-rollout.md)
 6. [板块合并与全局导航顶端设计](plans/module-consolidation-and-navigation-redesign.md)、[动手实践与科研引导接口设计](specs/hands-on-practice-research-guidance-interfaces.md)（设计提案 v2：已对照代码自评审修订，未实施；两文文末附评审记录）与 [实施计划 P0–P3](plans/module-consolidation-rollout.md)（含 PR 门禁）
+7. 科研端全内容 LLM 生成与质量规范：
+   - 上游基础质量：[实施计划](superpowers/plans/2026-08-28-research-upstream-quality.md) 与 [设计规格](superpowers/specs/2026-08-28-research-upstream-quality-design.md)
+   - 下游证据质量：[实施计划](superpowers/plans/2026-08-28-research-downstream-quality.md) 与 [设计规格](superpowers/specs/2026-08-28-research-downstream-quality-design.md)
+   - 全内容生成：[实施计划](superpowers/plans/2026-08-29-llm-all-research-content.md)、[设计规格](superpowers/specs/2026-08-29-llm-all-research-content-design.md)、[设计文档](design/2026-08-28-research-llm-generation-design.md) 与 [落地计划](plans/2026-08-28-research-llm-generation.md)
+   - 辅助规划：[自动论文抓取](superpowers/plans/2026-08-29-auto-paper-ingestion.md)、[分章深度解析](superpowers/plans/2026-08-29-chapter-paper-analysis.md) 与 [论文循证建议](superpowers/plans/2026-08-29-paper-grounded-advice.md)

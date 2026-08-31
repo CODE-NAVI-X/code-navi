@@ -188,6 +188,22 @@ def _reproduction_plan(
     evidence = _pipeline_evidence(
         [entry for group in groups for entry in group], pipeline.pipeline_id
     )
+    all_unverified = bool(evidence) and all(
+        item.classification == "to_verify" for item in evidence
+    )
+    verification = [f"人工确认{name}与目标论文一致。" for name in missing]
+    if all_unverified:
+        score = 0
+        verification.append(
+            "当前 Pipeline 条目均为待核验信息，不能据此声称复现方案已经准备完成。"
+        )
+    elif any(item.classification == "to_verify" for item in evidence):
+        verification.append("人工核对 Pipeline 中标为待验证的条件与来源范围。")
+    suggestions = (
+        ["先核对 Pipeline 中所有待验证条件的来源。"]
+        if all_unverified
+        else [f"补充{name}后重新评估。" for name in missing[:3]]
+    )
     return _dimension(
         "reproduction_plan",
         "复现路径与可执行性",
@@ -195,8 +211,8 @@ def _reproduction_plan(
         [f"缺少{name}。" for name in missing],
         evidence,
         "仅检查 Pipeline 条目是否存在且可追溯，不执行代码、不下载数据，也不证明方案可复现。",
-        [f"人工确认{name}与目标论文一致。" for name in missing],
-        [f"补充{name}后重新评估。" for name in missing[:3]],
+        verification,
+        suggestions,
     )
 
 

@@ -24,16 +24,21 @@ import {
   useEffect,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 
 import {
+  analyzeResearchPaper,
+  analyzeResearchPaperUpload,
   createResearchConversation,
+  generateResearchPlan,
   getResearchConversation,
+  type ResearchMindMap,
   RESEARCH_CONVERSATION_STORAGE_KEY,
   ResearchApiError,
   type ResearchConversationMessage,
   type ResearchConversationResponse,
+  type PaperAnalysis,
+  type SelectedResearchPaper as PersistedSelectedResearchPaper,
   sendResearchMessage,
 } from "@/lib/api/research";
 
@@ -50,6 +55,7 @@ import { ReproductionPipelinePanel } from "./ReproductionPipelinePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
 import { ReproductionEvaluationPanel } from "./ReproductionEvaluationPanel";
 import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
+import { PaperDeepAnalysisPanel, type SelectedResearchPaper } from "./PaperDeepAnalysisPanel";
 
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
 
@@ -58,8 +64,31 @@ type RequestPhase = "initializing" | "idle" | "thinking";
 const GENERATION_LABELS = {
   agent: "Agent 个性化分析",
   rules: "基础规则（非模型）",
-  rules_fallback: "Agent 失败，规则接管",
+  rules_fallback: "模型未生成（需重试）",
 };
+
+function messageContent(message: ResearchConversationMessage): string {
+  if (message.role === "assistant" && message.generation_mode === "rules_fallback") {
+    return "本次模型未生成科研回复，系统未展示规则替代内容。请重试。";
+  }
+  return message.content;
+}
+
+function restoreSelectedPaper(paper: PersistedSelectedResearchPaper): SelectedResearchPaper {
+  return {
+    bundleId: paper.bundle_id,
+    title: paper.title,
+    url: paper.url,
+    authors: paper.authors,
+    year: paper.year,
+    sourceName: paper.source_name,
+    doi: paper.doi,
+    arxivId: paper.arxiv_id,
+    abstractExcerpt: paper.abstract_excerpt,
+    paperKind: paper.paper_kind,
+    abstractAvailable: paper.abstract_available,
+  };
+}
 
 function friendlyError(error: unknown): string {
   if (error instanceof ResearchApiError) {
@@ -81,7 +110,7 @@ function ProcessingDetails({ message }: { message: ResearchConversationMessage }
         </span>
         <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
       </summary>
-      <div className="space-y-2 border-t border-slate-200/80 px-3 py-3 text-[11px] leading-5 text-slate-600 dark:border-zinc-800 dark:text-zinc-400">
+      <div className="space-y-2 border-t border-slate-200/80 px-3 py-3 text-sm leading-6 text-slate-600 dark:border-zinc-800 dark:text-zinc-400">
         <p>
           生成方式：
           <span className="font-semibold text-slate-800 dark:text-zinc-200">
@@ -91,6 +120,8 @@ function ProcessingDetails({ message }: { message: ResearchConversationMessage }
         {message.intent && <p>识别意图：{message.intent}</p>}
         {message.generation_mode === "agent" ? (
           <p>本轮已经过 Kernel AgentRuntime；记录了 {message.event_count} 个审计事件。</p>
+        ) : message.generation_mode === "rules_fallback" ? (
+          <p>模型生成失败，本轮未展示规则替代内容；可以重试本轮消息。</p>
         ) : (
           <p>本轮没有访问模型或网络，使用确定性规则整理用户明确表达的信息。</p>
         )}
@@ -118,7 +149,7 @@ function MessageItem({ message }: { message: ResearchConversationMessage }) {
               : "px-1 py-1 text-slate-800 dark:text-zinc-200"
           }
         >
-          {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownText content={message.content} />}
+          {isUser ? <p className="whitespace-pre-wrap">{message.content}</p> : <MarkdownText content={messageContent(message)} />}
         </div>
         {!isUser && message.next_question && (
           <div className="app-card-subtle mt-3 break-words rounded-xl px-4 py-3 text-sm font-medium leading-6 text-slate-800 dark:text-zinc-200">
@@ -147,22 +178,17 @@ function ThinkingMessage() {
           <Loader2 className="h-4 w-4 animate-spin text-slate-500 dark:text-zinc-400" />
           正在理解并整理研究画像
         </span>
-        <p className="mt-1 text-[11px] text-slate-400 dark:text-zinc-500">分析本轮信息、更新候选问题与下一步建议…</p>
+        <p className="mt-1 text-sm text-slate-500 dark:text-zinc-400">分析本轮信息、更新候选问题与下一步建议…</p>
       </div>
     </div>
   );
 }
 
-const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1024px)";
+type WorkflowPanelState = "current" | "completed" | "upcoming" | "supplementary";
 
-function subscribeDesktopBreakpoint(callback: () => void) {
-  const media = window.matchMedia(DESKTOP_BREAKPOINT_QUERY);
-  media.addEventListener("change", callback);
-  return () => media.removeEventListener("change", callback);
-}
-
-function readDesktopBreakpoint() {
-  return window.matchMedia(DESKTOP_BREAKPOINT_QUERY).matches;
+function panelState(currentStage: number, panelStage: number): WorkflowPanelState {
+  if (currentStage === panelStage) return "current";
+  return currentStage > panelStage ? "completed" : "upcoming";
 }
 
 function PanelSection({
@@ -170,31 +196,36 @@ function PanelSection({
   title,
   description,
   children,
+  state = "supplementary",
 }: {
   id: string;
   title: string;
   description: string;
   children: ReactNode;
+  state?: WorkflowPanelState;
 }) {
-  // Responsive default: collapsed on narrow screens, expanded on desktop
-  // (lg and up). The details content stays mounted either way, so panel
-  // state and saved inputs are never discarded. SSR and the hydration pass
-  // always render collapsed; the desktop snapshot only applies after mount.
-  const desktop = useSyncExternalStore(subscribeDesktopBreakpoint, readDesktopBreakpoint, () => false);
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+
+  useEffect(() => {
+    if (detailsRef.current) detailsRef.current.open = state === "current";
+  }, [state]);
+
   return (
     <details
+      ref={detailsRef}
       id={id}
-      open={desktop}
       className="app-card group scroll-mt-20 rounded-2xl"
     >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-5 py-4">
         <span className="min-w-0">
-          <span className="block text-sm font-bold text-slate-900 dark:text-zinc-100">{title}</span>
-          <span className="mt-0.5 block text-[11px] leading-5 text-slate-500 dark:text-zinc-400">{description}</span>
+          <span className="block text-xl font-bold text-slate-900 dark:text-zinc-100">{title}</span>
+          {state === "completed" && <span className="mt-1 block text-sm leading-6 text-emerald-700 dark:text-emerald-300">已完成阶段摘要：可展开查看已保存内容。</span>}
+          {state === "upcoming" && <span className="mt-1 block text-sm leading-6 text-slate-500 dark:text-zinc-400">未开始：完成前一阶段后可用。</span>}
+          {state !== "upcoming" && state !== "completed" && <span className="mt-1 block text-sm leading-6 text-slate-600 dark:text-zinc-300">{description}</span>}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-180" />
       </summary>
-      <div className="border-t border-slate-200 p-3 sm:p-4 dark:border-zinc-800">{children}</div>
+      <div className="border-t border-slate-200 p-5 sm:p-6 dark:border-zinc-800">{children}</div>
     </details>
   );
 }
@@ -202,6 +233,15 @@ function PanelSection({
 export function ResearchConversation() {
   const [searchPanelMounted, setSearchPanelMounted] = useState(false);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [evidenceVersion, setEvidenceVersion] = useState(0);
+  const [workflowStage, setWorkflowStage] = useState(0);
+  const [selectedPaperTitle, setSelectedPaperTitle] = useState<string | null>(null);
+  const [selectedPaper, setSelectedPaper] = useState<SelectedResearchPaper | null>(null);
+  const [paperAnalysis, setPaperAnalysis] = useState<PaperAnalysis | null>(null);
+  const [paperAnalysisError, setPaperAnalysisError] = useState<string | null>(null);
+  const [paperAnalysisLoading, setPaperAnalysisLoading] = useState(false);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<RequestPhase>("initializing");
@@ -220,6 +260,12 @@ export function ResearchConversation() {
         try {
           const restored = await getResearchConversation(savedId);
           setConversation(restored);
+          if (restored.selected_paper) {
+            setSelectedPaper(restoreSelectedPaper(restored.selected_paper));
+            setSelectedPaperTitle(restored.selected_paper.title);
+          }
+          setPaperAnalysis(restored.paper_analysis);
+          setWorkflowStage(restored.recommended_action === "prepare_search" ? 1 : 0);
           return;
         } catch (requestError) {
           if (!(requestError instanceof ResearchApiError) || requestError.status !== 404) {
@@ -235,6 +281,8 @@ export function ResearchConversation() {
       );
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
       setConversation(created);
+      setPaperAnalysis(created.paper_analysis);
+      setWorkflowStage(created.recommended_action === "prepare_search" ? 1 : 0);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {
@@ -252,6 +300,43 @@ export function ResearchConversation() {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [conversation?.messages.length, phase]);
 
+  const refreshDownstream = useCallback((stage: number) => {
+    setEvidenceVersion((current) => current + 1);
+    setWorkflowStage(stage);
+  }, []);
+
+  const analyzeSelectedPaper = useCallback(async (paper: SelectedResearchPaper, paperPdfUrl?: string) => {
+    if (!conversation) return;
+    setSelectedPaper(paper);
+    setSelectedPaperTitle(paper.title);
+    setWorkflowStage(2);
+    setPaperAnalysisError(null);
+    setPaperAnalysisLoading(true);
+    try {
+      setPaperAnalysis(await analyzeResearchPaper(conversation.conversation_id, paper.url, paperPdfUrl));
+    } catch (requestError) {
+      setPaperAnalysisError(friendlyError(requestError));
+    } finally {
+      setPaperAnalysisLoading(false);
+    }
+  }, [conversation]);
+
+  const uploadSelectedPaper = useCallback(async (paper: SelectedResearchPaper, file: File) => {
+    if (!conversation) return;
+    setSelectedPaper(paper);
+    setSelectedPaperTitle(paper.title);
+    setWorkflowStage(2);
+    setPaperAnalysisError(null);
+    setPaperAnalysisLoading(true);
+    try {
+      setPaperAnalysis(await analyzeResearchPaperUpload(conversation.conversation_id, paper.url, file));
+    } catch (requestError) {
+      setPaperAnalysisError(friendlyError(requestError));
+    } finally {
+      setPaperAnalysisLoading(false);
+    }
+  }, [conversation]);
+
   async function send(message: string) {
     const cleaned = message.trim();
     if (!conversation || !cleaned || phase !== "idle") return;
@@ -261,6 +346,7 @@ export function ResearchConversation() {
     try {
       const updated = await sendResearchMessage(conversation.conversation_id, cleaned);
       setConversation(updated);
+      setWorkflowStage(updated.recommended_action === "prepare_search" ? 1 : 0);
       setDraft("");
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -300,10 +386,31 @@ export function ResearchConversation() {
         created.conversation_id,
       );
       setConversation(created);
+      setEvidenceVersion(0);
+      setSelectedPaperTitle(null);
+      setSelectedPaper(null);
+      setPaperAnalysis(null);
+      setPaperAnalysisError(null);
+      setWorkflowStage(0);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {
       setPhase("idle");
+    }
+  }
+
+  async function generatePlan() {
+    if (!conversation || planLoading) return;
+    setPlanLoading(true);
+    setPlanError(null);
+    try {
+      const plan = await generateResearchPlan(conversation.conversation_id);
+      setConversation((current) => (current ? { ...current, research_plan: plan } : current));
+      setWorkflowStage(1);
+    } catch (requestError) {
+      setPlanError(friendlyError(requestError));
+    } finally {
+      setPlanLoading(false);
     }
   }
 
@@ -343,15 +450,15 @@ export function ResearchConversation() {
 
   return (
     <main className="min-h-screen bg-[var(--app-surface)] text-slate-900 dark:text-zinc-100">
-      <div className="mx-auto w-full max-w-[1380px] overflow-x-hidden px-3 py-2 sm:px-5 sm:py-3">
-        <header className="app-card mb-2 flex min-w-0 items-center justify-between gap-2 rounded-xl px-3 py-2 backdrop-blur">
+      <div className="mx-auto w-full max-w-[1280px] overflow-x-hidden px-4 py-6 sm:px-6 sm:py-8">
+        <header className="app-card mb-6 flex min-w-0 items-center justify-between gap-4 rounded-2xl px-5 py-4 backdrop-blur sm:px-7 sm:py-5">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white dark:bg-zinc-100 dark:text-zinc-950">
               <MessageSquareText className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-bold sm:text-base">科研方向对话助手</h1>
-              <p className="truncate text-[11px] text-slate-500 dark:text-zinc-400">自由表达 · 动态追问 · 可恢复科研画像</p>
+              <h1 className="truncate text-2xl font-bold sm:text-3xl">科研工作流</h1>
+              <p className="truncate text-sm text-slate-600 dark:text-zinc-300">从研究需求到来源受限的证据与下一步</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -359,7 +466,7 @@ export function ResearchConversation() {
               <Route className="h-3.5 w-3.5" /> 需求确认 Skill
             </span>
             <ProviderStatusCard />
-            <span className="hidden rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-medium text-slate-600 sm:inline-flex dark:bg-zinc-800 dark:text-zinc-300">
+            <span className="hidden rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 sm:inline-flex dark:bg-zinc-800 dark:text-zinc-300">
               {GENERATION_LABELS[conversation.generation_mode]}
             </span>
             <button
@@ -409,10 +516,20 @@ export function ResearchConversation() {
           </aside>
         )}
 
-        <ResearchWorkflowNav conversation={conversation} />
+        <ResearchWorkflowNav
+          conversation={conversation}
+          currentStage={workflowStage}
+          selectedPaperTitle={selectedPaperTitle}
+        />
 
-        <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
-          <section id="research-section-chat" className="app-card min-w-0 scroll-mt-20 overflow-hidden rounded-2xl">
+        <div className="min-w-0 space-y-7">
+          <PanelSection
+            id="research-section-start"
+            title="研究起点"
+            description="通过对话确认研究主题、候选问题、方法、数据与约束。"
+            state={panelState(workflowStage, 0)}
+          >
+          <section className="min-w-0 overflow-hidden">
             <div className="max-h-[calc(100vh-13rem)] min-h-[520px] space-y-7 overflow-y-auto px-4 py-6 sm:px-7" aria-label="科研对话消息">
               {conversation.messages.map((message) => (
                 <MessageItem key={message.message_id} message={message} />
@@ -432,40 +549,6 @@ export function ResearchConversation() {
                     </button>
                   )}
                 </div>
-              </div>
-            )}
-
-            {(conversation.research_plan || conversation.next_skill === "academic-search") && (
-              <div id="research-section-search" className="mx-4 mb-3 scroll-mt-20 sm:mx-7">
-                {conversation.next_skill === "academic-search" && (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200">
-                    <p className="flex items-center gap-2 font-bold">
-                      <SearchCheck className="h-4 w-4" /> 需求确认 Skill 已完成
-                    </p>
-                    <p className="mt-2 text-xs leading-5">
-                      当前科研画像已交给“信息源检索 Skill”。系统不会自动全网搜索，请检查下方检索计划后再确认启动。
-                    </p>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchPanelMounted(true);
-                    setSearchPanelOpen((open) => !open);
-                  }}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-50 dark:border-emerald-800 dark:bg-zinc-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
-                >
-                  <SearchCheck className="h-3.5 w-3.5" />
-                  {searchPanelOpen ? "收起受限检索与已保存证据" : "打开受限检索与已保存证据"}
-                </button>
-                {searchPanelMounted && (
-                  <div className={searchPanelOpen ? undefined : "hidden"}>
-                    <AcademicSearchPanel
-                      key={conversation.conversation_id}
-                      conversationId={conversation.conversation_id}
-                    />
-                  </div>
-                )}
               </div>
             )}
 
@@ -499,92 +582,174 @@ export function ResearchConversation() {
                   className="max-h-40 min-h-14 min-w-0 w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 outline-none placeholder:text-slate-400 disabled:opacity-60 dark:placeholder:text-zinc-600"
                 />
                 <div className="flex items-center justify-between gap-3 px-1">
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-600">Enter 发送 · Shift + Enter 换行</p>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">Enter 发送 · Shift + Enter 换行</p>
                   <button
                     type="submit"
                     disabled={disabled || !draft.trim()}
-                    className="app-button-primary inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-35 dark:hover:bg-white"
+                    className="app-button-primary inline-flex min-h-10 items-center gap-1.5 rounded-xl px-4 text-sm font-semibold transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-35 dark:hover:bg-white"
                   >
                     {phase === "thinking" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                     发送
                   </button>
                 </div>
               </div>
-              <p className="mt-2 flex items-center justify-center gap-1 text-[10px] text-slate-400 dark:text-zinc-600">
+              <p className="mt-2 flex items-center justify-center gap-1 text-xs text-slate-500 dark:text-zinc-400">
                 <Clock3 className="h-3 w-3" /> 对话自动保存；Agent 建议仍需你判断，不等同于论文事实。
               </p>
             </form>
           </section>
+          </PanelSection>
 
-          <aside className="min-w-0 space-y-4">
-            <div id="research-section-profile" className="scroll-mt-20">
+          <div className="min-w-0">
+            <PanelSection
+              id="research-section-profile"
+              title="科研画像"
+              description="当前研究需求与缺失信息；内容来自用户输入和规则判断。"
+              state={panelState(workflowStage, 0)}
+            >
               <ResearchProfilePanel profile={conversation.profile} readiness={conversation.readiness} onSend={(message) => void send(message)} disabled={disabled} />
-            </div>
-            {conversation.research_plan && (
-              <div id="research-section-plan" className="scroll-mt-20">
-                <ResearchPlanPanel plan={conversation.research_plan} />
-              </div>
+            </PanelSection>
+            {(conversation.research_plan || conversation.readiness.can_prepare_search) && (
+              <PanelSection
+                id="research-section-literature"
+                title="方向与文献"
+                description="先确认检索计划，再由你主动启动受限检索并保存来源。"
+                state={panelState(workflowStage, 1)}
+              >
+                {conversation.research_plan ? <ResearchPlanPanel plan={conversation.research_plan} /> : (
+                  <div className="app-card rounded-2xl p-5">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-zinc-100">生成模型研究计划</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-300">科研画像已达到准入条件。点击后由已配置的大模型生成研究计划；模型失败时不会使用规则模板替代。</p>
+                    {planError && <p role="alert" className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/20 dark:text-rose-200">{planError}</p>}
+                    <button type="button" onClick={() => void generatePlan()} disabled={planLoading} className="app-button-primary mt-4 inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold disabled:opacity-60">
+                      {planLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                      {planLoading ? "正在生成…" : "生成模型研究计划"}
+                    </button>
+                  </div>
+                )}
+                {conversation.research_plan && (
+                  <div className="mt-6 scroll-mt-20">
+                    {conversation.next_skill === "academic-search" && (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-base leading-7 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200">
+                        <p className="flex items-center gap-2 font-bold"><SearchCheck className="h-5 w-5" /> 需求确认已完成</p>
+                        <p className="mt-2">当前科研画像已交给“信息源检索 Skill”。系统不会自动全网搜索；请检查检索计划与允许来源后，再由你主动启动检索。</p>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchPanelMounted(true);
+                        setSearchPanelOpen((open) => !open);
+                      }}
+                      className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-xl border border-emerald-300 bg-white px-4 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:border-emerald-800 dark:bg-zinc-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+                    >
+                      <SearchCheck className="h-4 w-4" />
+                      {searchPanelOpen ? "收起受限检索与已保存证据" : "启动受限检索与查看已保存证据"}
+                    </button>
+                    {searchPanelMounted && (
+                      <div className={searchPanelOpen ? "mt-5" : "hidden"}>
+                        <AcademicSearchPanel
+                          key={conversation.conversation_id}
+                          conversationId={conversation.conversation_id}
+                          onEvidenceSaved={() => refreshDownstream(1)}
+                          onPaperSelected={(paper) => void analyzeSelectedPaper(paper)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </PanelSection>
             )}
-          </aside>
+          </div>
         </div>
 
-        <div className="mt-4 space-y-4">
+        <div className="mt-7 space-y-7">
           <PanelSection
-            id="research-section-difficulty"
-            title="方向难点分析"
-            description="基于科研画像、规则计划或已保存摘要的风险与缺口提示；每条均标注事实分类与生成方式。"
+            id="research-section-paper-analysis"
+            title="论文深度分析"
+            description="选择已保存论文后，系统会自动寻找公开正文；DeepSeek 将结合论文内容与你的研究目标生成针对性分析。"
+            state={panelState(workflowStage, 2)}
           >
-            <ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} />
+            <PaperDeepAnalysisPanel
+              conversationId={conversation.conversation_id}
+              selectedPaper={selectedPaper}
+              analysis={paperAnalysis}
+              loading={paperAnalysisLoading}
+              error={paperAnalysisError}
+              onRetry={(paperPdfUrl) => selectedPaper && void analyzeSelectedPaper(selectedPaper, paperPdfUrl)}
+              onUpload={(file) => selectedPaper && void uploadSelectedPaper(selectedPaper, file)}
+            />
+            <details className="mt-6 rounded-2xl border border-slate-200 dark:border-zinc-800">
+              <summary className="min-h-10 cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700 dark:text-zinc-200">补充能力：方向难点分析</summary>
+              <div className="border-t border-slate-200 p-4 dark:border-zinc-800"><ResearchDifficultyPanel analysis={conversation.topic_difficulty_analysis} conversationId={conversation.conversation_id} /></div>
+            </details>
           </PanelSection>
-          {conversation.experiment_design && (
-            <PanelSection
-              id="research-section-experiment"
-              title="实验方案与代码草案"
-              description="建议性实验设计；代码草案需你明确确认，且只能预览、复制或下载文本，不会写入项目或执行。"
-            >
-              <ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} />
-            </PanelSection>
-          )}
-          {conversation.research_plan && (
-            <PanelSection
-              id="research-section-evidence"
-              title="实验结果证据包"
-              description="只有你主动粘贴的实验记录才会成为事实来源；没有结果时仍可生成“待补充”的论文蓝图。"
-            >
-              <ExperimentEvidencePanel conversationId={conversation.conversation_id} />
-            </PanelSection>
-          )}
-          <PanelSection
-            id="research-section-reproduction-evaluation"
-            title="论文复现项目评估"
-            description="用户主动触发的五维证据完整性检查；缺少 Pipeline 或实验记录的维度保持不可评估，不代表复现成功或论文质量。"
-          >
-            <ReproductionEvaluationPanel conversationId={conversation.conversation_id} />
-          </PanelSection>
-          {conversation.research_plan && (
-            <PanelSection
-              id="research-section-reproduction"
-              title="论文复现辅助"
-              description="从已保存论文来源主动生成可核对的复现步骤；系统不自动执行代码或补造实验结果。"
-            >
-              <ReproductionPipelinePanel conversationId={conversation.conversation_id} />
-            </PanelSection>
-          )}
-          {conversation.research_plan && (
-            <PanelSection
-              id="research-section-paper"
-              title="论文辅助：初稿、审稿、修订与引用"
-              description="初稿由你粘贴；审稿、候选修订与投稿前检查均为建议，不代表导师或同行评审结论。"
-            >
-              <PaperDraftReviewPanel conversationId={conversation.conversation_id} />
-            </PanelSection>
-          )}
+
           <PanelSection
             id="research-section-mindmap"
             title="研究思维导图"
-            description="只可视化已保存画像、规则计划与证据包；支持缩放、拖拽节点与 SVG 导出。"
+            description="用于在进入复现前整理当前论文分析、保存来源与待核验边界。"
+            state={panelState(workflowStage, 2)}
           >
-            <ResearchMindMapPanel mindmap={conversation.research_mindmap} />
+            <ResearchMindMapPanel
+              conversationId={conversation.conversation_id}
+              mindmap={conversation.research_mindmap}
+              selectedPaperTitle={selectedPaper?.title ?? selectedPaperTitle}
+              paperAnalysis={paperAnalysis}
+              onGenerated={(mindmap: ResearchMindMap) => {
+                setConversation((current) => (
+                  current ? { ...current, research_mindmap: mindmap } : current
+                ));
+              }}
+            />
+          </PanelSection>
+
+          {conversation.research_plan && (
+            <PanelSection
+              id="research-section-workbench"
+              title="复现工作台"
+              description="生成并核对复现方案；系统不会下载论文全文、安装依赖或执行论文代码。"
+              state={panelState(workflowStage, 3)}
+            >
+              <ReproductionPipelinePanel
+                conversationId={conversation.conversation_id}
+                evidenceVersion={evidenceVersion}
+                onPipelineSaved={(pipeline) => {
+                  setSelectedPaperTitle(pipeline.selected_paper.title);
+                  refreshDownstream(3);
+                }}
+              />
+              <details className="mt-6 rounded-2xl border border-slate-200 dark:border-zinc-800">
+                <summary className="min-h-10 cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700 dark:text-zinc-200">补充能力：实验方案与代码草案</summary>
+                <div className="border-t border-slate-200 p-4 dark:border-zinc-800"><ExperimentDesignPanel design={conversation.experiment_design} conversationId={conversation.conversation_id} /></div>
+              </details>
+            </PanelSection>
+          )}
+
+          <PanelSection
+            id="research-section-evidence"
+            title="证据与成果"
+            description="只有你主动提交的实验记录才是事实来源；关联记录不代表复现完成或成功。"
+            state={panelState(workflowStage, 4)}
+          >
+            {conversation.research_plan && (
+              <ExperimentEvidencePanel
+                conversationId={conversation.conversation_id}
+                evidenceVersion={evidenceVersion}
+                onEvidenceSaved={() => refreshDownstream(4)}
+              />
+            )}
+            <div className="mt-6">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-zinc-100">证据完整度评估</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-zinc-300">它只检查已有证据边界，不代表复现成功或论文质量，也不代表实验正确或复现完成。</p>
+              <div className="mt-4"><ReproductionEvaluationPanel conversationId={conversation.conversation_id} /></div>
+            </div>
+            {conversation.research_plan && (
+              <details className="mt-6 rounded-2xl border border-slate-200 dark:border-zinc-800">
+                <summary className="min-h-10 cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700 dark:text-zinc-200">补充能力：论文辅助、引用与投稿前检查</summary>
+                <div className="border-t border-slate-200 p-4 dark:border-zinc-800"><PaperDraftReviewPanel conversationId={conversation.conversation_id} /></div>
+              </details>
+            )}
           </PanelSection>
         </div>
       </div>

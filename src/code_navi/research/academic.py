@@ -25,6 +25,7 @@ SourceStatus = Literal[
     "not_allowed",
     "dependency_missing",
 ]
+PaperKind = Literal["original_paper", "review", "downstream_application"]
 
 ARXIV_SOURCE = "arxiv"
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
@@ -300,7 +301,7 @@ class AcademicSearchTool:
     def search(self, session_id: str, query: str, sources: list[str]) -> dict[str, object]:
         searched_at = datetime.now(UTC)
         source_statuses: list[dict[str, object]] = []
-        papers: list[dict[str, object]] = []
+        candidate_papers: list[PaperMetadata] = []
         failure_reasons: list[str] = []
         actual_sources: list[str] = []
         pending: list[tuple[str, AcademicSourceClient]] = []
@@ -336,7 +337,6 @@ class AcademicSearchTool:
                     results[source] = AcademicSourceResult.failure(
                         source, "unavailable", f"{source} source failed safely", queried=True
                     )
-        seen_papers: set[str] = set()
         for source in dict.fromkeys(sources):
             result = results.get(source)
             if result is None:
@@ -354,11 +354,11 @@ class AcademicSearchTool:
                 actual_sources.append(result.source)
             if result.reason:
                 failure_reasons.append(result.reason)
-            for paper in result.papers:
-                identity = (paper.identifier or paper.url).casefold()
-                if identity not in seen_papers:
-                    papers.append(_paper_payload(paper, query))
-                    seen_papers.add(identity)
+            candidate_papers.extend(result.papers)
+        papers = [
+            _paper_payload(paper, query, doi=doi, arxiv_id=arxiv_id)
+            for paper, doi, arxiv_id in _deduplicate_and_rank(candidate_papers, query)
+        ]
         return {
             "session_id": session_id,
             "query": query,
@@ -373,6 +373,51 @@ class AcademicSearchTool:
                 "结果仅来自用户显式选择且代码允许的学术来源；未执行全网搜索、正文下载或论文精读。"
             ),
         }
+
+    def resolve_arxiv_paper(
+        self,
+        *,
+        title: str,
+        authors: list[str],
+        year: int | None,
+    ) -> PaperMetadata | None:
+        """Find a high-confidence public arXiv copy for a selected paper.
+
+        This is a user-triggered lookup used only before paper analysis. It does
+        not add a new evidence bundle or treat a fuzzy match as the selected
+        paper unless the title and author/year signals agree.
+        """
+        client = self.source_clients.get(ARXIV_SOURCE)
+        if client is None or not title.strip():
+            return None
+        try:
+            result = client.search(title.strip())
+        except Exception:
+            return None
+        candidates = [paper for paper in result.papers if _normalized_arxiv_id(paper)]
+        if not candidates:
+            return None
+        requested_authors = _tokens(" ".join(authors))
+
+        def score(paper: PaperMetadata) -> tuple[float, int, int, int, str]:
+            title_score = _title_overlap(title, paper.title)
+            candidate_authors = set(_author_tokens(paper))
+            author_match = int(bool(requested_authors & candidate_authors))
+            year_match = int(year is not None and paper.year == year)
+            year_distance = (
+                abs(paper.year - year)
+                if year is not None and paper.year is not None
+                else 9999
+            )
+            return (title_score, author_match, year_match, -year_distance, paper.url.casefold())
+
+        candidate = max(candidates, key=score)
+        title_score, author_match, year_match, _year_distance, _url = score(candidate)
+        if title_score < 0.75:
+            return None
+        if authors and not author_match and not year_match:
+            return None
+        return candidate
 
 
 def _status(
@@ -393,7 +438,13 @@ def _status(
     }
 
 
-def _paper_payload(paper: PaperMetadata, query: str) -> dict[str, object]:
+def _paper_payload(
+    paper: PaperMetadata,
+    query: str,
+    *,
+    doi: str | None,
+    arxiv_id: str | None,
+) -> dict[str, object]:
     metadata_fact = {
         "content": "标题、作者、年份、链接和摘要片段直接来自该来源返回的元数据。",
         "classification": "fact",
@@ -407,6 +458,8 @@ def _paper_payload(paper: PaperMetadata, query: str) -> dict[str, object]:
         "source_name": paper.source_name,
         "url": paper.url,
         "identifier": paper.identifier,
+        "doi": doi,
+        "arxiv_id": arxiv_id,
         "abstract_excerpt": paper.abstract_excerpt,
         "accessed_at": paper.accessed_at.isoformat(),
         "information_scope": "metadata_and_abstract_only",
@@ -425,6 +478,12 @@ def _paper_payload(paper: PaperMetadata, query: str) -> dict[str, object]:
             "source_url": paper.url,
             "basis": "关键词与元数据/摘要的匹配",
         },
+        "paper_kind": {
+            "content": _paper_kind(paper),
+            "classification": "inference",
+            "source_url": paper.url,
+            "basis": "标题和摘要中的论文类型线索；未读取全文，需人工核验。",
+        },
         "verification": {
             "content": "需要阅读全文并核验实验设置、数据集与结论；本检索未下载正文。",
             "classification": "to_verify",
@@ -433,6 +492,126 @@ def _paper_payload(paper: PaperMetadata, query: str) -> dict[str, object]:
         },
         "full_text_available": False,
     }
+
+
+def _deduplicate_and_rank(
+    papers: list[PaperMetadata], query: str
+) -> list[tuple[PaperMetadata, str | None, str | None]]:
+    groups: list[list[PaperMetadata]] = []
+    for paper in papers:
+        group = next((item for item in groups if _same_paper(item[0], paper)), None)
+        if group is None:
+            groups.append([paper])
+        else:
+            group.append(paper)
+    merged = [
+        (
+            max(group, key=_paper_quality),
+            next((doi for paper in group if (doi := _normalized_doi(paper))), None),
+            next((arxiv for paper in group if (arxiv := _normalized_arxiv_id(paper))), None),
+        )
+        for group in groups
+    ]
+    return sorted(merged, key=lambda item: _ranking_key(item[0], query))
+
+
+def _same_paper(left: PaperMetadata, right: PaperMetadata) -> bool:
+    left_doi = _normalized_doi(left)
+    right_doi = _normalized_doi(right)
+    if left_doi and right_doi and left_doi == right_doi:
+        return True
+    if _normalized_title(left.title) == _normalized_title(right.title):
+        return True
+    left_arxiv = _normalized_arxiv_id(left)
+    right_arxiv = _normalized_arxiv_id(right)
+    if left_arxiv and right_arxiv and left_arxiv == right_arxiv:
+        return True
+    return (
+        left.source_name != right.source_name
+        and _title_overlap(left.title, right.title) >= 0.85
+        and bool(set(_author_tokens(left)) & set(_author_tokens(right)))
+    )
+
+
+def _paper_quality(paper: PaperMetadata) -> tuple[int, int, int, int, str]:
+    return (
+        int(bool(paper.abstract_excerpt)),
+        int(bool(_normalized_doi(paper))),
+        len(paper.authors),
+        int(paper.year is not None),
+        paper.url.casefold(),
+    )
+
+
+def _ranking_key(paper: PaperMetadata, query: str) -> tuple[int, int, int, int, int, str, str]:
+    query_tokens = _tokens(query)
+    title_tokens = _tokens(paper.title)
+    author_tokens = set(_author_tokens(paper))
+    kind_score = {"original_paper": 3, "review": 2, "downstream_application": 1}[
+        _paper_kind(paper)
+    ]
+    title_matches = len(query_tokens & title_tokens)
+    author_matches = len(query_tokens & author_tokens)
+    keyword_coverage = len(query_tokens & _tokens(f"{paper.title} {paper.abstract_excerpt or ''}"))
+    year_score = int(paper.year is not None and 1800 <= paper.year <= 2100)
+    return (
+        -kind_score,
+        -title_matches,
+        -author_matches,
+        -keyword_coverage,
+        -year_score,
+        _normalized_title(paper.title),
+        paper.url.casefold(),
+    )
+
+
+def _paper_kind(paper: PaperMetadata) -> PaperKind:
+    text = f"{paper.title} {paper.abstract_excerpt or ''}".casefold()
+    if any(marker in text for marker in ("survey", "review", "综述", "overview")):
+        return "review"
+    if any(marker in text for marker in ("application", "applying", "applied", "应用")):
+        return "downstream_application"
+    return "original_paper"
+
+
+def _normalized_doi(paper: PaperMetadata) -> str | None:
+    for value in (paper.identifier, paper.url):
+        if not value:
+            continue
+        match = re.search(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", value.casefold())
+        if match:
+            return match.group(0).rstrip(".,;)")
+    return None
+
+
+def _normalized_arxiv_id(paper: PaperMetadata) -> str | None:
+    for value in (paper.identifier, paper.url):
+        if not value:
+            continue
+        match = re.search(r"(?:arxiv[:./]|abs/)(\d{4}\.\d{4,5})(?:v\d+)?", value.casefold())
+        if match:
+            return match.group(1)
+    return None
+
+
+def _normalized_title(title: str) -> str:
+    return " ".join(sorted(_tokens(title)))
+
+
+def _title_overlap(left: str, right: str) -> float:
+    left_tokens = _tokens(left)
+    right_tokens = _tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _author_tokens(paper: PaperMetadata) -> list[str]:
+    return [token for author in paper.authors for token in _tokens(author)]
+
+
+def _tokens(value: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", value.casefold()))
 
 
 def _text(element: ElementTree.Element, path: str, namespace: dict[str, str]) -> str | None:

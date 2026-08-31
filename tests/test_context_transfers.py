@@ -392,7 +392,7 @@ def test_research_uses_and_restores_confirmed_learning_context(
         conversation = current.json()
 
     assert conversation["ready_for_plan"] is True
-    assert conversation["research_plan"]["schema_version"] == "research-plan.v1"
+    assert conversation["research_plan"] is None
     assert len(generator.calls) == 3
     for call in generator.calls:
         confirmed_context = call["confirmed_context"]
@@ -409,5 +409,5 @@ def test_research_uses_and_restores_confirmed_learning_context(
     restored_body = restored.json()
     assert restored_body["context_provenance"] == conversation["context_provenance"]
     assert restored_body["profile"] == conversation["profile"]
-    assert restored_body["research_plan"] == conversation["research_plan"]
+    assert restored_body["research_plan"] is None
     assert restored_body["messages"] == conversation["messages"]

@@ -90,9 +90,12 @@ class DeepSeekGuidanceProvider:
         client: object | None = None,
         *,
         timeout_seconds: float = 10.0,
+        max_tokens: int = 1800,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not is_plausible_api_key(api_key):
             raise ProviderConfigurationError(
@@ -103,6 +106,7 @@ class DeepSeekGuidanceProvider:
                 'DeepSeek support is not installed; run pip install -e ".[server]"'
             )
         self.model = os.getenv("DEEPSEEK_MODEL", DEEPSEEK_DEFAULT_MODEL)
+        self.max_tokens = max_tokens
         self.client = client or OpenAI(  # type: ignore[operator]
             api_key=api_key,
             base_url=os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL),
@@ -123,7 +127,7 @@ class DeepSeekGuidanceProvider:
             model=self.model,
             messages=[self._message_payload(message) for message in messages],
             temperature=0.2,
-            max_tokens=1800,
+            max_tokens=self.max_tokens,
             response_format={"type": "json_object"},
             extra_body={"thinking": {"type": "disabled"}},
         )

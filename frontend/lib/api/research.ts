@@ -58,6 +58,9 @@ export interface ConversationResearchPlan {
   suggested_search_keywords: string[];
   pending_items: ResearchPlanEntry[];
   provenance_note: string;
+  generation_mode: "llm" | "rules";
+  run_id: string | null;
+  event_count: number;
 }
 
 export type ResearchMindMapNodeStatus =
@@ -78,6 +81,8 @@ export interface ResearchMindMapNode {
   label: string;
   status: ResearchMindMapNodeStatus;
   detail: string;
+  /** Program-derived link to a paper-analysis section; never model-authored. */
+  section_key: string | null;
   sources: ResearchMindMapSource[];
 }
 
@@ -92,7 +97,25 @@ export interface ResearchMindMap {
   root_node_id: string;
   nodes: ResearchMindMapNode[];
   edges: ResearchMindMapEdge[];
+  generation_mode: "rules" | "llm";
+  run_id: string | null;
+  event_count: number;
+  generated_at: string | null;
   provenance_note: string;
+}
+
+export interface SelectedResearchPaper {
+  bundle_id: string;
+  title: string;
+  url: string;
+  authors: string[];
+  year: number | null;
+  source_name: string;
+  doi: string | null;
+  arxiv_id: string | null;
+  abstract_excerpt: string | null;
+  paper_kind: string | null;
+  abstract_available: boolean;
 }
 
 export type AnalysisClassification = "fact" | "inference" | "to_verify";
@@ -112,14 +135,18 @@ export interface ResearchAnalysisItem {
   content: string;
   classification: AnalysisClassification;
   basis: string;
-  source_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+  source_scope: "profile_and_plan_only" | "metadata_and_abstract_only" | "full_text_user_triggered";
+  /** Program-derived from area; the model never produces this value. */
+  section_key: string;
+  chapter_key?: string | null;
+  chapter_order?: number | null;
   evidence_refs: EvidenceReference[];
 }
 
 export interface TopicDifficultyAnalysis {
   schema_version: "topic-difficulty-analysis.v1";
   title: string;
-  information_scope: "profile_and_plan_only" | "metadata_and_abstract_only";
+  information_scope: "profile_and_plan_only" | "metadata_and_abstract_only" | "full_text_user_triggered";
   items: ResearchAnalysisItem[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
@@ -131,13 +158,139 @@ export interface PaperAnalysis {
   schema_version: "paper-analysis.v1";
   title: string;
   paper_url: string;
-  information_scope: "metadata_and_abstract_only";
+  information_scope: "metadata_and_abstract_only" | "full_text_user_triggered";
   abstract_available: boolean;
   items: ResearchAnalysisItem[];
   provenance_note: string;
   generation_mode: "llm" | "rules" | "rules_fallback";
   run_id: string | null;
   event_count: number;
+  paper_reading: PaperReadingEvidence | null;
+}
+
+export interface PaperReadingEvidence {
+  schema_version: "paper-reading.v1";
+  source_url: string;
+  page_count: number;
+  pages_read: number;
+  text_excerpt: string;
+  sections: PaperReadingSection[];
+}
+
+export interface PaperReadingSection {
+  key: string;
+  title: string;
+  order: number;
+  text: string;
+}
+
+export type UnderstandingCheckStatus =
+  | "not_started"
+  | "question_ready"
+  | "answer_submitted"
+  | "needs_explanation"
+  | "partially_understood"
+  | "understood"
+  | "generation_failed";
+
+export interface UnderstandingCheck {
+  schema_version: "understanding-check.v1";
+  check_id: string;
+  conversation_id: string;
+  paper_url: string;
+  bundle_id: string;
+  section_key: string;
+  question: string;
+  question_basis: string;
+  source_scope: "metadata_only" | "metadata_and_abstract_only";
+  answer: string | null;
+  assessment: string | null;
+  missing_points: string[];
+  correct_points: string[];
+  explanation: string | null;
+  example: string | null;
+  recommended_next_action: string | null;
+  status: UnderstandingCheckStatus;
+  generation_mode: "llm" | "rules" | "rules_fallback";
+  run_id: string | null;
+  event_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Derive a paper-analysis section key from an area label. Mirrors the Python
+ * `section_key_for_area` map so mind-map nodes and paper-analysis anchors share
+ * one program-controlled vocabulary; the model never produces these keys.
+ */
+export function sectionKeyForArea(area: string): string {
+  const normalized = (area ?? "").trim();
+  const mapping: Array<[string, string]> = [
+    ["待核验", "to_verify"],
+    ["研究问题", "research_question"],
+    ["问题", "research_question"],
+    ["核心方法", "core_method"],
+    ["方法", "core_method"],
+    ["数据集", "dataset"],
+    ["数据", "dataset"],
+    ["贡献", "contribution"],
+    ["背景", "background"],
+    ["动机", "motivation"],
+    ["实验设计", "experiment"],
+    ["实验", "experiment"],
+    ["评价指标", "metrics"],
+    ["指标", "metrics"],
+    ["结果", "results"],
+    ["局限", "limitations"],
+    ["复现", "reproduction"],
+  ];
+  for (const [needle, key] of mapping) {
+    if (normalized.includes(needle)) return key;
+  }
+  return "other";
+}
+
+/**
+ * Describe open-access status only from saved metadata. An arXiv id suggests an
+ * open preprint, but never that every version is open; without metadata it is
+ * "待核验". The model must never decide this from memory.
+ */
+export function openAccessLabel(paper: {
+  arxiv_id?: string | null;
+  doi?: string | null;
+}): { label: string; note: string } {
+  if (paper.arxiv_id) {
+    return {
+      label: "arXiv 预印本（开放获取）",
+      note: "存在 arXiv 标识不等于所有版本都开放获取，仍需人工核验。",
+    };
+  }
+  if (paper.doi) {
+    return {
+      label: "待核验",
+      note: "已保存 DOI，但开放获取状态需在原始来源人工核验。",
+    };
+  }
+  return { label: "待核验", note: "检索元数据未提供开放获取状态。" };
+}
+
+/**
+ * Return only user-clickable source links. This helper never fetches, downloads,
+ * caches, or asserts that a PDF has been read. A DOI resolves through its
+ * canonical source; an arXiv PDF is offered only for a validated arXiv id.
+ */
+export function researchPaperLinks(paper: {
+  url: string;
+  doi?: string | null;
+  arxiv_id?: string | null;
+}): { sourceUrl: string; arxivPdfUrl: string | null } {
+  const sourceUrl = paper.doi ? `https://doi.org/${encodeURIComponent(paper.doi)}` : paper.url;
+  const arxivId = paper.arxiv_id?.trim();
+  const validArxivId = arxivId && /^\d{4}\.\d{4,5}(?:v\d+)?$/.test(arxivId);
+  return {
+    sourceUrl,
+    arxivPdfUrl: validArxivId ? `https://arxiv.org/pdf/${arxivId}` : null,
+  };
 }
 
 export interface ExperimentDesign {
@@ -215,7 +368,9 @@ export interface ResearchConversationResponse {
   stage: ResearchStage;
   ready_for_plan: boolean;
   research_plan: ConversationResearchPlan | null;
-  research_mindmap: ResearchMindMap;
+  research_mindmap: ResearchMindMap | null;
+  selected_paper: SelectedResearchPaper | null;
+  paper_analysis: PaperAnalysis | null;
   topic_difficulty_analysis: TopicDifficultyAnalysis;
   experiment_design: ExperimentDesign | null;
   reply: string;
@@ -287,18 +442,22 @@ export interface ResearchSearchPlan {
 }
 
 export interface AcademicPaperResult {
+  paper_id: string | null;
   title: string;
   authors: string[];
   year: number | null;
   source_name: string;
   url: string;
   identifier: string | null;
+  doi: string | null;
+  arxiv_id: string | null;
   abstract_excerpt: string | null;
   information_scope: "metadata_and_abstract_only";
   full_text_available: false;
   metadata_evidence: EvidenceStatement[];
   supporting_snippets: EvidenceStatement[];
   relevance: EvidenceStatement;
+  paper_kind: EvidenceStatement | null;
   verification: EvidenceStatement;
 }
 
@@ -513,6 +672,7 @@ export interface ReproductionPipeline {
   two_week_mvp: ReproductionPipelineItem[];
   created_at: string;
   provenance_note: string;
+  paper_reading: PaperReadingEvidence | null;
 }
 
 export interface PaperBlueprintReference {
@@ -693,9 +853,15 @@ export class ResearchApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly stage?: string,
   ) {
     super(message);
     this.name = "ResearchApiError";
+  }
+
+  /** True when the model failed to generate advice; the UI should offer a retry. */
+  get isGenerationFailure(): boolean {
+    return this.status === 503 || this.stage !== undefined;
   }
 }
 
@@ -707,6 +873,10 @@ const API_BASE = (
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MODEL_TURN_TIMEOUT_MS = 25_000;
+// Paper analysis and mind-map generation can take longer than a chat turn while
+// the backend validates structured LLM output. Keep the browser from aborting
+// a request before the backend's generation window has elapsed.
+const PAPER_ARTIFACT_TIMEOUT_MS = 120_000;
 
 export async function createResearchConversation(
   initialMessage?: string,
@@ -810,10 +980,64 @@ export async function saveResearchNotebookNote(
 export async function analyzeResearchPaper(
   conversationId: string,
   paperUrl: string,
+  paperPdfUrl?: string,
 ): Promise<PaperAnalysis> {
   return request<PaperAnalysis>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-analysis`,
-    { method: "POST", body: JSON.stringify({ paper_url: paperUrl }) },
+    { method: "POST", body: JSON.stringify({ paper_url: paperUrl, paper_pdf_url: paperPdfUrl || null }) },
+    PAPER_ARTIFACT_TIMEOUT_MS,
+  );
+}
+
+export async function analyzeResearchPaperUpload(
+  conversationId: string,
+  paperUrl: string,
+  file: File,
+): Promise<PaperAnalysis> {
+  return request<PaperAnalysis>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/paper-analysis/upload?paper_url=${encodeURIComponent(paperUrl)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf", "X-Filename": file.name },
+      body: file,
+    },
+    PAPER_ARTIFACT_TIMEOUT_MS,
+  );
+}
+
+export async function createUnderstandingQuestion(
+  conversationId: string,
+  payload: { paper_url: string; bundle_id: string; section_key: string },
+): Promise<UnderstandingCheck> {
+  return request<UnderstandingCheck>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/understanding-checks/question`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function assessUnderstandingAnswer(
+  conversationId: string,
+  payload: {
+    check_id: string;
+    paper_url: string;
+    bundle_id: string;
+    section_key: string;
+    answer: string;
+  },
+): Promise<UnderstandingCheck> {
+  return request<UnderstandingCheck>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/understanding-checks/assess`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function listUnderstandingChecks(
+  conversationId: string,
+  paperUrl: string,
+): Promise<UnderstandingCheck[]> {
+  const query = new URLSearchParams({ paper_url: paperUrl });
+  return request<UnderstandingCheck[]>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/understanding-checks?${query.toString()}`,
   );
 }
 
@@ -823,6 +1047,27 @@ export async function generateTopicDifficultyAnalysis(
   return request<TopicDifficultyAnalysis>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/topic-difficulty-analysis`,
     { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+    PAPER_ARTIFACT_TIMEOUT_MS,
+  );
+}
+
+export async function generateResearchPlan(
+  conversationId: string,
+): Promise<ConversationResearchPlan> {
+  return request<ConversationResearchPlan>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/research-plan`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+    MODEL_TURN_TIMEOUT_MS,
+  );
+}
+
+export async function generateResearchMindMap(
+  conversationId: string,
+): Promise<ResearchMindMap> {
+  return request<ResearchMindMap>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/research-mindmap`,
+    { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+    PAPER_ARTIFACT_TIMEOUT_MS,
   );
 }
 
@@ -832,6 +1077,7 @@ export async function generateExperimentDesign(
   return request<ExperimentDesign>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-design`,
     { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+    PAPER_ARTIFACT_TIMEOUT_MS,
   );
 }
 
@@ -841,6 +1087,7 @@ export async function createExperimentCodeDraft(
   return request<ExperimentCodeDraft>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/experiment-code-draft`,
     { method: "POST", body: JSON.stringify({ user_confirmed: true }) },
+    PAPER_ARTIFACT_TIMEOUT_MS,
   );
 }
 
@@ -891,11 +1138,12 @@ export async function updateReproductionImprovementTask(
 
 export async function createReproductionPipeline(
   conversationId: string,
-  payload: { evidence_bundle_id: string; paper_url: string },
+  payload: { evidence_bundle_id: string; paper_url: string; paper_pdf_url?: string | null },
 ): Promise<ReproductionPipeline> {
   return request<ReproductionPipeline>(
     `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/reproduction-pipelines`,
     { method: "POST", body: JSON.stringify(payload) },
+    PAPER_ARTIFACT_TIMEOUT_MS,
   );
 }
 
@@ -1049,9 +1297,11 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    const info = await errorInfo(response);
     throw new ResearchApiError(
       response.status,
-      (await errorDetail(response)) ?? `科研服务请求失败（HTTP ${response.status}）。`,
+      info.message ?? `科研服务请求失败（HTTP ${response.status}）。`,
+      info.stage,
     );
   }
   try {
@@ -1061,12 +1311,26 @@ async function request<T>(
   }
 }
 
-async function errorDetail(response: Response): Promise<string | null> {
+interface ErrorInfo {
+  message: string | null;
+  stage?: string;
+}
+
+async function errorInfo(response: Response): Promise<ErrorInfo> {
   try {
     const body: unknown = await response.json();
-    if (!body || typeof body !== "object" || !("detail" in body)) return null;
+    if (!body || typeof body !== "object" || !("detail" in body)) {
+      return { message: null };
+    }
     const detail = (body as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") return { message: detail };
+    if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+      const info = detail as { message?: unknown; stage?: unknown };
+      return {
+        message: typeof info.message === "string" ? info.message : null,
+        stage: typeof info.stage === "string" ? info.stage : undefined,
+      };
+    }
     if (Array.isArray(detail)) {
       const messages = detail.flatMap((item) => {
         if (!item || typeof item !== "object") return [];
@@ -1077,10 +1341,10 @@ async function errorDetail(response: Response): Promise<string | null> {
           : "请求内容";
         return [`${location || "请求内容"}：${validation.msg}`];
       });
-      return messages.length ? messages.join("；") : null;
+      return { message: messages.length ? messages.join("；") : null };
     }
   } catch {
     // A proxy may return HTML or an empty body. Keep the status fallback.
   }
-  return response.statusText || null;
+  return { message: response.statusText || null };
 }

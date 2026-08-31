@@ -26,7 +26,6 @@ import {
   type ReferenceDraftPackage,
   type SelectedCitation,
 } from "@/lib/api/research";
-import { ClassificationBadge } from "./ClassificationBadge";
 
 const sectionOptions = ["引言", "相关工作", "方法", "实验", "讨论", "结论"];
 
@@ -388,9 +387,7 @@ function SelectedCitationList({
             {item.target_section} / {item.paragraph_anchor}
           </p>
           <p className="mt-1 text-[10px] text-slate-500">
-            {item.citation.paper_title} ·{" "}
-            <ClassificationBadge classification={item.reference_entry.classification} /> ·{" "}
-            {item.citation.abstract_scope}
+            {item.citation.paper_title} · {item.citation.abstract_scope}
           </p>
           {item.reference_entry.to_verify_items.length > 0 && (
             <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
@@ -523,8 +520,7 @@ function CoverageDetails({ check }: { check: CitationQualityCheck }) {
             className="rounded border border-sky-100 p-2 dark:border-sky-950"
           >
             <p className="font-semibold">
-              {item.target_section} · {item.source_titles.length} 个来源 ·{" "}
-              <ClassificationBadge classification={item.classification} />
+              {item.target_section} · {item.source_titles.length} 个来源
             </p>
             <p className="mt-1 text-[10px] text-slate-500">
               {item.source_titles.join("；")} · 信息范围：
@@ -567,7 +563,7 @@ function IssueList({ title, issues }: { title: string; issues: CitationQualityIs
               String(index)
             }
           >
-            <ClassificationBadge classification={issue.classification} /> {issue.message}
+            {issue.message}
             <span className="block text-slate-500">依据：{issue.basis}</span>
           </li>
         ))}
@@ -625,9 +621,8 @@ function ReferenceDraftList({
               查看原始来源 <ExternalLink className="h-3 w-3" />
             </a>
             <p className="mt-1 text-[10px] text-slate-500">
-              <ClassificationBadge classification={reference.classification} />
               {reference.to_verify_items.length
-                ? " · 待核对：" + reference.to_verify_items.join("；")
+                ? "待核对：" + reference.to_verify_items.join("；")
                 : ""}
             </p>
           </li>
@@ -639,7 +634,7 @@ function ReferenceDraftList({
           <ul className="mt-1 list-disc space-y-1 pl-4 text-amber-800 dark:text-amber-200">
             {referencePackage.verification_items.map((item) => (
               <li key={item.selected_citation_id}>
-                {item.missing_fields.join("；")} · <ClassificationBadge classification={item.classification} />
+                {item.missing_fields.join("；")}
               </li>
             ))}
           </ul>

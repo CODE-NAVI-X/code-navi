@@ -28,6 +28,7 @@ from code_navi.research.router import (  # noqa: E402
     _conversation_service,
 )
 from code_navi.server import app  # noqa: E402
+from research_llm_fakes import ContextAwareArtifactGenerator  # noqa: E402
 
 
 class ReadyGenerator:
@@ -39,6 +40,7 @@ class ReadyGenerator:
                 profile_patch=ResearchProfilePatch(
                     topic="Prompt learning",
                     research_questions=["Which prompt helps?"],
+                    context="A course comparison exercise",
                     methods=["baseline comparison"],
                 ),
                 recommended_action="prepare_search",
@@ -77,10 +79,13 @@ def isolated_services() -> Generator[None, None, None]:
     Base.metadata.create_all(bind=engine)
     original_generator = _conversation_service.decision_generator
     original_tool = _conversation_search_service.search_tool
+    original_artifact = _conversation_service.artifact_generator
     _conversation_service.decision_generator = ReadyGenerator()
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator()
     _conversation_search_service.search_tool = AcademicSearchTool({"arxiv": LocalSource()})
     yield
     _conversation_service.decision_generator = original_generator
+    _conversation_service.artifact_generator = original_artifact
     _conversation_search_service.search_tool = original_tool
     Base.metadata.drop_all(bind=engine)
 

@@ -41,6 +41,47 @@ class FakeArxivSource:
         return self.result
 
 
+def test_academic_tool_resolves_selected_paper_to_matching_arxiv_copy() -> None:
+    source = FakeArxivSource(
+        AcademicSourceResult.success(
+            "arxiv",
+            [
+                PaperMetadata(
+                    title="A Study of Feedback Systems",
+                    authors=["Ada Lovelace", "Grace Hopper"],
+                    year=2025,
+                    source_name="arXiv",
+                    url="https://arxiv.org/abs/2501.00001",
+                    identifier="arXiv:2501.00001",
+                    abstract_excerpt="A matching abstract.",
+                    accessed_at=datetime(2026, 7, 30, tzinfo=UTC),
+                ),
+                PaperMetadata(
+                    title="Unrelated Feedback Systems",
+                    authors=["Other Author"],
+                    year=2020,
+                    source_name="arXiv",
+                    url="https://arxiv.org/abs/2001.00001",
+                    identifier="arXiv:2001.00001",
+                    abstract_excerpt="An unrelated paper.",
+                    accessed_at=datetime(2026, 7, 30, tzinfo=UTC),
+                ),
+            ],
+        )
+    )
+    tool = AcademicSearchTool({"arxiv": source})
+
+    resolved = tool.resolve_arxiv_paper(
+        title="A Study of Feedback Systems",
+        authors=["Ada Lovelace", "Grace Hopper"],
+        year=2025,
+    )
+
+    assert resolved is not None
+    assert resolved.identifier == "arXiv:2501.00001"
+    assert source.calls == 1
+
+
 @pytest.fixture(autouse=True)
 def fresh_tables() -> Generator[None, None, None]:
     Base.metadata.create_all(bind=engine)
@@ -123,6 +164,88 @@ def test_academic_search_returns_source_restricted_evidence_bundle() -> None:
     assert bundle["papers"][0]["relevance"]["classification"] == "inference"
     assert bundle["papers"][0]["full_text_available"] is False
     assert source.calls == 1
+
+
+def test_academic_search_prioritizes_and_deduplicates_original_gcn_paper() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    original_title = "Semi-Supervised Classification with Graph Convolutional Networks"
+    sources = {
+        "arxiv": FakeArxivSource(
+            AcademicSourceResult.success(
+                "arxiv",
+                [
+                    PaperMetadata(
+                        title=original_title,
+                        authors=["Thomas N. Kipf", "Max Welling"],
+                        year=2016,
+                        source_name="arXiv",
+                        url="https://arxiv.org/abs/1609.02907",
+                        identifier="arXiv:1609.02907",
+                        abstract_excerpt=(
+                            "We present graph convolutional networks for "
+                            "semi-supervised classification."
+                        ),
+                        accessed_at=accessed_at,
+                    ),
+                    PaperMetadata(
+                        title="A Survey of Graph Convolutional Networks",
+                        authors=["Survey Author"],
+                        year=2021,
+                        source_name="arXiv",
+                        url="https://arxiv.org/abs/2101.00001",
+                        identifier="arXiv:2101.00001",
+                        abstract_excerpt="This survey reviews graph convolutional network methods.",
+                        accessed_at=accessed_at,
+                    ),
+                ],
+            )
+        ),
+        "crossref": FakeArxivSource(
+            AcademicSourceResult.success(
+                "crossref",
+                [
+                    PaperMetadata(
+                        title=original_title,
+                        authors=["Thomas N. Kipf", "Max Welling"],
+                        year=2017,
+                        source_name="Crossref",
+                        url="https://doi.org/10.48550/arXiv.1609.02907",
+                        identifier="doi:10.48550/arXiv.1609.02907",
+                        abstract_excerpt=None,
+                        accessed_at=accessed_at,
+                    ),
+                    PaperMetadata(
+                        title="Applying GCNs to Cora Citation Prediction",
+                        authors=["Application Author"],
+                        year=2024,
+                        source_name="Crossref",
+                        url="https://doi.org/10.1000/gcn-cora-application",
+                        identifier="doi:10.1000/gcn-cora-application",
+                        abstract_excerpt="We apply GCNs to a downstream Cora prediction task.",
+                        accessed_at=accessed_at,
+                    ),
+                ],
+            )
+        ),
+    }
+
+    bundle = AcademicSearchTool(sources).search(
+        "session-gcn",
+        "GCN Cora Kipf Welling semi-supervised classification",
+        ["arxiv", "crossref"],
+    )
+
+    original_papers = [item for item in bundle["papers"] if item["title"] == original_title]
+    assert len(original_papers) == 1
+    assert bundle["papers"].index(original_papers[0]) < 3
+    assert original_papers[0]["paper_kind"] == {
+        "content": "original_paper",
+        "classification": "inference",
+        "source_url": original_papers[0]["url"],
+        "basis": "标题和摘要中的论文类型线索；未读取全文，需人工核验。",
+    }
+    assert original_papers[0]["verification"]["classification"] == "to_verify"
+    assert len(bundle["papers"]) == 3
 
 
 @pytest.mark.parametrize(

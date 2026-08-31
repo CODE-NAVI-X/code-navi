@@ -19,6 +19,7 @@ from code_navi.research.conversation_agent import (  # noqa: E402
 from code_navi.research.conversation_schemas import ResearchProfilePatch  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.server import app  # noqa: E402
+from research_llm_fakes import ContextAwareArtifactGenerator  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +32,11 @@ def fresh_tables() -> Generator[None, None, None]:
 @pytest.fixture(autouse=True)
 def restore_generator() -> Generator[None, None, None]:
     original = _conversation_service.decision_generator
+    original_artifact = _conversation_service.artifact_generator
+    _conversation_service.artifact_generator = ContextAwareArtifactGenerator()
     yield
     _conversation_service.decision_generator = original
+    _conversation_service.artifact_generator = original_artifact
 
 
 @pytest.fixture
@@ -70,13 +74,27 @@ class ReadyDecisionGenerator:
 
 
 def _ready_conversation(client: TestClient) -> str:
+    """Create a ready conversation and generate its plan explicitly.
+
+    Plans are model-generated on user request (checkpoint 3 contract); a new
+    conversation no longer ships a rules plan by default, so the fixture calls
+    the dedicated endpoint with the faked artifact generator.
+    """
     _conversation_service.decision_generator = ReadyDecisionGenerator()
     response = client.post(
         "/api/v1/research/conversations", json={"initial_message": "我想研究编程反馈"}
     )
     assert response.status_code == 201
-    assert response.json()["research_plan"] is not None
-    return response.json()["conversation_id"]
+    conversation_id = response.json()["conversation_id"]
+    plan_response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/research-plan",
+        json={"user_confirmed": True},
+    )
+    assert plan_response.status_code == 200
+    restored = client.get(f"/api/v1/research/conversations/{conversation_id}")
+    assert restored.status_code == 200
+    assert restored.json()["research_plan"] is not None
+    return conversation_id
 
 
 def _submission() -> dict[str, object]:
@@ -134,7 +152,7 @@ def test_blueprint_without_experiment_evidence_is_explicitly_pending(client: Tes
 
     assert response.status_code == 200
     body = response.json()
-    assert body["generation_mode"] == "rules"
+    assert body["generation_mode"] == "llm"
     assert body["submission_readiness"]["classification"] == "to_verify"
     experiment = next(item for item in body["sections"] if item["section"] == "实验")
     assert experiment["evidence_references"] == []

@@ -19,7 +19,9 @@ from code_navi.research.conversation_schemas import (
 from code_navi.research.research_artifact_llm import (
     ArtifactLlmOutcome,
     RuntimeResearchArtifactGenerator,
+    _redact_local_context,
 )
+from code_navi.research.research_generation import ResearchGenerationError
 from code_navi.research.schemas import AcademicPaperResult, EvidenceStatement
 from kernel.core import ContentBlock, Message, ProviderCapabilities, ProviderResult
 
@@ -28,6 +30,7 @@ class FakeArtifactGenerator:
     def __init__(self, outcome: ArtifactLlmOutcome) -> None:
         self.outcome = outcome
         self.calls: list[str] = []
+        self.contexts: list[dict[str, object]] = []
 
     def generate(
         self,
@@ -38,6 +41,7 @@ class FakeArtifactGenerator:
     ) -> ArtifactLlmOutcome:
         assert conversation_id
         self.calls.append(kind)
+        self.contexts.append(context)
         return self.outcome
 
 
@@ -158,7 +162,109 @@ def test_evidence_scoped_model_difficulty_keeps_a_saved_evidence_reference() -> 
     assert analysis.items[0].evidence_refs[0].bundle_id == bundle.bundle_id
 
 
-def test_invalid_model_fact_claim_falls_back_to_rules() -> None:
+def test_selected_paper_reference_remains_allowed_after_context_paper_limit() -> None:
+    from code_navi.research.conversation_schemas import EvidenceReference
+
+    papers = [
+        AcademicPaperResult(
+            title=f"Saved paper {index}",
+            authors=["Example Author"],
+            year=2025,
+            source_name="OpenAlex",
+            url=f"https://openalex.org/W{index:08d}",
+            abstract_excerpt="A saved abstract.",
+            accessed_at=datetime(2026, 8, 7, tzinfo=UTC),
+            information_scope="metadata_and_abstract_only",
+            metadata_evidence=[],
+            supporting_snippets=[],
+            relevance=EvidenceStatement(
+                content="可能相关。", classification="inference", basis="关键词匹配"
+            ),
+            verification=EvidenceStatement(
+                content="需要核验。", classification="to_verify", basis="只有摘要"
+            ),
+            full_text_available=False,
+        )
+        for index in range(10)
+    ]
+    bundle = ConversationEvidenceBundle(
+        bundle_id="bundle-selected-paper",
+        conversation_id="conv-test",
+        query="selected paper",
+        requested_sources=["openalex"],
+        allowed_sources=["openalex"],
+        queried_sources=["openalex"],
+        source_statuses=[],
+        searched_at=datetime(2026, 8, 7, tzinfo=UTC),
+        papers=papers,
+        source_links=[paper.url for paper in papers],
+        failure_reasons=[],
+        provenance_note="仅元数据和摘要。",
+    )
+    selected_ref = EvidenceReference(
+        bundle_id=bundle.bundle_id,
+        paper_url=papers[9].url,
+        title=papers[9].title,
+        source_name=papers[9].source_name,
+        year=papers[9].year,
+        evidence_level="abstract",
+        evidence_summary=papers[9].abstract_excerpt,
+    )
+    from code_navi.research.conversation_schemas import PaperAnalysis, ResearchAnalysisItem
+
+    selected_analysis = PaperAnalysis(
+        title=papers[9].title,
+        paper_url=papers[9].url,
+        information_scope="metadata_and_abstract_only",
+        abstract_available=True,
+        items=[
+            ResearchAnalysisItem(
+                area="方法",
+                content="选中论文的摘要方法需要纳入难点分析。",
+                classification="inference",
+                basis="论文摘要",
+                source_scope="metadata_and_abstract_only",
+                evidence_refs=[selected_ref],
+            )
+        ],
+        provenance_note="模型分析。",
+    )
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "title": "选中论文难点",
+                    "information_scope": "metadata_and_abstract_only",
+                    "items": [
+                        {
+                            "area": "方法难点",
+                            "content": "选中论文摘要中的方法需要进一步核验。",
+                            "classification": "inference",
+                            "basis": "选中论文摘要",
+                            "source_scope": "metadata_and_abstract_only",
+                            "evidence_refs": [selected_ref.model_dump(mode="json")],
+                        }
+                    ],
+                    "provenance_note": "建议关联到已保存摘要。",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    analysis = build_topic_difficulty_analysis(
+        _profile(),
+        plan=build_conversation_research_plan(_profile(), ready_for_plan=True),
+        evidence_bundles=[bundle],
+        paper_analysis=selected_analysis,
+        generator=generator,
+        conversation_id="conv-test",
+    )
+
+    assert analysis.items[0].evidence_refs[0].paper_url == papers[9].url
+
+
+def test_model_fact_claim_is_rejected_as_invalid_output() -> None:
     generator = FakeArtifactGenerator(
         ArtifactLlmOutcome.generated(
             '{"title":"不安全","information_scope":"profile_and_plan_only",'
@@ -169,28 +275,29 @@ def test_invalid_model_fact_claim_falls_back_to_rules() -> None:
         )
     )
 
-    analysis = build_topic_difficulty_analysis(
-        _profile(),
-        plan=None,
-        evidence_bundles=[],
-        generator=generator,
-        conversation_id="conv-test",
-    )
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_topic_difficulty_analysis(
+            _profile(),
+            plan=None,
+            evidence_bundles=[],
+            generator=generator,
+            conversation_id="conv-test",
+        )
 
-    assert analysis.generation_mode == "rules_fallback"
-    assert all(item.content != "模型声称得到结果" for item in analysis.items)
+    assert excinfo.value.stage == "invalid_output"
 
 
-def test_unavailable_model_keeps_rules_difficulty_analysis() -> None:
-    analysis = build_topic_difficulty_analysis(
-        _profile(),
-        plan=None,
-        evidence_bundles=[],
-        generator=FakeArtifactGenerator(ArtifactLlmOutcome.unavailable()),
-        conversation_id="conv-test",
-    )
+def test_unavailable_provider_raises_generation_error_without_rules_advice() -> None:
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_topic_difficulty_analysis(
+            _profile(),
+            plan=None,
+            evidence_bundles=[],
+            generator=FakeArtifactGenerator(ArtifactLlmOutcome.unavailable()),
+            conversation_id="conv-test",
+        )
 
-    assert analysis.generation_mode == "rules"
+    assert excinfo.value.stage == "provider_unavailable"
 
 
 class FakeDeepSeekProvider:
@@ -231,6 +338,70 @@ def test_deepseek_artifact_generator_uses_existing_settings_with_mock_provider(
     assert outcome.run_id
     assert outcome.event_count > 0
     assert list(tmp_path.rglob("*.jsonl"))
+
+
+def test_deepseek_artifact_generator_uses_configured_generation_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-" + "a" * 32)
+    seen: dict[str, float] = {}
+
+    def provider_factory(**kwargs: object) -> FakeDeepSeekProvider:
+        seen["timeout_seconds"] = float(kwargs["timeout_seconds"])
+        seen["max_tokens"] = float(kwargs["max_tokens"])
+        return FakeDeepSeekProvider('{"title":"ok"}')
+
+    monkeypatch.setattr(
+        "code_navi.research.research_artifact_llm.DeepSeekGuidanceProvider",
+        provider_factory,
+    )
+
+    RuntimeResearchArtifactGenerator().generate(
+        kind="topic_difficulty_analysis",
+        context={},
+        conversation_id="conv-test",
+    )
+
+    assert seen["timeout_seconds"] >= 60.0
+    assert seen["max_tokens"] >= 4000.0
+
+
+def test_context_redaction_preserves_non_secret_keyword_fields() -> None:
+    context = {"suggested_search_keywords": ["GCN", "Cora"]}
+
+    assert _redact_local_context(context) == context
+
+
+def test_context_redaction_preserves_paper_structure_keys_but_masks_api_key() -> None:
+    context = {
+        "paper_sections": [{"key": "method", "order": 3}],
+        "required_json_shape": {"chapter_key": "string|null"},
+        "api_key": "secret-value",
+    }
+
+    assert _redact_local_context(context) == {
+        "paper_sections": [{"key": "method", "order": 3}],
+        "required_json_shape": {"chapter_key": "string|null"},
+        "api_key": "[redacted]",
+    }
+
+
+def test_context_redaction_preserves_http_urls_for_paper_identity() -> None:
+    context = {"url": "https://openalex.org/W2809418595", "identifier": "http://doi.org/10.1/abc"}
+
+    assert _redact_local_context(context) == context
+
+
+def test_artifact_runtime_input_explicitly_requires_output_shape() -> None:
+    payload = json.loads(
+        RuntimeResearchArtifactGenerator._runtime_input(
+            "research_plan", {"required_json_shape": {"research_title": "ResearchPlanEntry"}}
+        )
+    )
+
+    assert "output_instruction" in payload
+    assert "不得原样复述 validated_context" in payload["output_instruction"]
 
 
 def test_deepseek_artifact_generator_without_key_is_offline(
@@ -299,17 +470,52 @@ def test_experiment_design_uses_validated_model_suggestions_after_plan_exists() 
     )
 
 
-def test_failed_experiment_design_model_uses_rules_fallback() -> None:
+def test_experiment_design_prompt_requests_detailed_professional_guidance() -> None:
     profile = _profile()
-    design = build_experiment_design(
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            '{"hypothesis":{"content":"建议检验反馈差异。","classification":"inference","basis":"研究问题。"},'
+            '"variables":[{"content":"反馈时机。","classification":"inference","basis":"方法。"}],'
+            '"data_sources":[{"content":"数据许可待确认。","classification":"to_verify","basis":"约束。"}],'
+            '"baselines":[{"content":"延迟反馈。","classification":"inference","basis":"比较。"}],'
+            '"metrics":[{"content":"Accuracy。","classification":"to_verify","basis":"待确认。"}],'
+            '"steps":[{"content":"完成一次试跑。","classification":"inference","basis":"时间。"}],'
+            '"resources":[{"content":"环境待确认。","classification":"to_verify","basis":"约束。"}],'
+            '"risks":[{"content":"样本不足。","classification":"to_verify","basis":"风险。"}],'
+            '"advisor_confirmation_items":[{"content":"确认数据许可。","classification":"to_verify","basis":"导师确认。"}],'
+            '"provenance_note":"模型生成建议。"}'
+        )
+    )
+
+    build_experiment_design(
         profile,
         plan=build_conversation_research_plan(profile, ready_for_plan=True),
-        generator=FakeArtifactGenerator(ArtifactLlmOutcome.generated("not-json")),
+        generator=generator,
         conversation_id="conv-test",
     )
 
-    assert design is not None
-    assert design.generation_mode == "rules_fallback"
+    guidance = generator.contexts[0]["writing_guidance"]
+    assert isinstance(guidance, list)
+    assert any("目的" in str(item) and "判定标准" in str(item) for item in guidance)
+    assert any("selected_paper_analysis" in str(item) for item in guidance)
+    assert any("content" in str(item) and "basis" in str(item) for item in guidance)
+    assert generator.contexts[0]["required_json_shape"]["risks"] == "ResearchPlanEntry[]"
+    detail_requirements = generator.contexts[0]["detail_requirements"]
+    assert isinstance(detail_requirements, dict)
+    assert "operational definition" in str(detail_requirements["variables"])
+
+
+def test_invalid_experiment_design_output_raises_instead_of_rules_fallback() -> None:
+    profile = _profile()
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_experiment_design(
+            profile,
+            plan=build_conversation_research_plan(profile, ready_for_plan=True),
+            generator=FakeArtifactGenerator(ArtifactLlmOutcome.generated("not-json")),
+            conversation_id="conv-test",
+        )
+
+    assert excinfo.value.stage == "invalid_output"
 
 
 def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
@@ -320,9 +526,19 @@ def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
             json.dumps(
                 {
                     "title": "反馈策略实验草案",
+                    "directory_tree": ["README.md", "src/", "src/data.py"],
+                    "dependencies": ["Python 3.11+（未安装）"],
+                    "files": [
+                        {"path": "README.md", "content": "# 仅预览；替换 TODO 前不要运行。"},
+                        {
+                            "path": "src/data.py",
+                            "content": "def load_data():\n    # TODO: 确认许可\n    return []\n",
+                        },
+                    ],
+                    "run_instructions": ["先人工确认 README 中的 TODO。"],
                     "assumptions": ["默认使用合成数据。"],
                     "to_verify_items": ["真实数据许可待确认。"],
-                    "provenance_note": "模型只个性化说明，代码文件来自服务端固定模板。",
+                    "provenance_note": "模型基于已确认画像生成预览；不写文件、不执行。",
                 },
                 ensure_ascii=False,
             )
@@ -338,25 +554,36 @@ def test_code_draft_uses_safe_model_preview_only_after_existing_plan() -> None:
 
     assert draft.generation_mode == "llm"
     assert generator.calls == ["experiment_code_draft"]
-    assert any(item.path == "requirements.txt" for item in draft.files)
+    assert any(item.path == "src/data.py" for item in draft.files)
+    assert "不执行" in draft.provenance_note
+    assert "TODO" in "\n".join(item.content for item in draft.files)
 
 
-def test_model_cannot_replace_server_owned_code_templates() -> None:
+def test_code_draft_blocks_secret_or_execution_primitives() -> None:
     profile = _profile()
-    draft = build_experiment_code_draft(
-        profile,
-        plan=build_conversation_research_plan(profile, ready_for_plan=True),
-        generator=FakeArtifactGenerator(
-            ArtifactLlmOutcome.generated(json.dumps({
-                "title": "unsafe",
-                "files": [{"path": "src/data.py", "content": "api_key = 'secret'"}],
-                "assumptions": ["x"],
-                "to_verify_items": ["x"],
-                "provenance_note": "x",
-            }))
-        ),
-        conversation_id="conv-test",
+    generator = FakeArtifactGenerator(
+        ArtifactLlmOutcome.generated(
+            json.dumps(
+                {
+                    "title": "unsafe",
+                    "directory_tree": ["src/data.py"],
+                    "dependencies": [],
+                    "files": [{"path": "src/data.py", "content": "api_key = 'secret'"}],
+                    "run_instructions": ["run it"],
+                    "assumptions": ["x"],
+                    "to_verify_items": ["x"],
+                    "provenance_note": "x",
+                }
+            )
+        )
     )
 
-    assert draft.generation_mode == "rules_fallback"
-    assert "api_key" not in "\n".join(item.content.casefold() for item in draft.files)
+    with pytest.raises(ResearchGenerationError) as excinfo:
+        build_experiment_code_draft(
+            profile,
+            plan=build_conversation_research_plan(profile, ready_for_plan=True),
+            generator=generator,
+            conversation_id="conv-test",
+        )
+
+    assert excinfo.value.stage == "invalid_output"

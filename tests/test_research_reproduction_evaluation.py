@@ -166,6 +166,55 @@ def test_evaluation_persists_records_and_user_controlled_tasks(
     )["status"] == "completed"
 
 
+def test_complete_user_report_still_requires_human_judgment() -> None:
+    categories = (
+        "setup",
+        "baseline_or_control",
+        "metric_or_result",
+        "random_seed_or_reason",
+        "failure_or_limitation",
+    )
+    bundle = ExperimentEvidenceBundle(
+        bundle_id="experiment-complete",
+        conversation_id="conversation-1",
+        experiment_name=ExperimentEvidenceItem(
+            category="setup",
+            content="用户报告的完整实验",
+            classification="fact",
+            basis="用户主动提交。",
+        ),
+        goal=ExperimentEvidenceItem(
+            category="setup",
+            content="核对主要趋势",
+            classification="fact",
+            basis="用户主动提交。",
+        ),
+        items=[
+            ExperimentEvidenceItem(
+                category=category,
+                content=f"用户报告的 {category} 记录",
+                classification="fact",
+                basis="用户主动提交，系统未复核。",
+            )
+            for category in categories
+        ],
+        submitted_at=datetime.now(UTC),
+        provenance_note="用户主动提交，系统未复核。",
+    )
+
+    dimensions, _ = evaluate_reproduction_project(
+        ResearchProfile(topic="复现", research_questions=["能否复现？"]),
+        [],
+        [bundle],
+        None,
+    )
+    execution = next(item for item in dimensions if item.dimension == "execution_evidence")
+
+    assert execution.score == 20
+    assert execution.status == "checklist_complete"
+    assert "系统未读取原始数据、运行代码或独立复核结果" in execution.fact_boundary
+
+
 def test_abstract_scope_never_becomes_full_text_fact() -> None:
     now = datetime.now(UTC)
     citation = SelectedCitation(
@@ -265,8 +314,8 @@ def test_pipeline_adapter_view_can_score_plan_without_redefining_a_model() -> No
     )
     plan = next(item for item in dimensions if item.dimension == "reproduction_plan")
 
-    assert plan.score == 20
-    assert plan.status == "checklist_complete"
+    assert plan.score == 0
+    assert plan.status == "needs_revision"
     assert all(item.classification == "to_verify" for item in plan.evidence)
     assert summary.total_maximum == 100
 
@@ -329,6 +378,6 @@ def test_default_service_reads_latest_persisted_a_pipeline(client: TestClient) -
     plan = _dimension(result, "reproduction_plan")
     assert result["pipeline_contract_status"] == "available"
     assert result["pipeline_id"] == "pipeline-from-a"
-    assert plan["status"] == "checklist_complete"
-    assert plan["score"] == 20
+    assert plan["status"] == "needs_revision"
+    assert plan["score"] == 0
     assert all(item["classification"] == "to_verify" for item in plan["evidence"])
