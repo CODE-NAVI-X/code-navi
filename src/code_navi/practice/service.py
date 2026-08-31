@@ -336,15 +336,8 @@ class PracticeSetService:
         topic: str,
     ) -> list[tuple[dict, dict | None]] | None:
         """Parse provider JSON into server-safe payload/secret tuples."""
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.splitlines()
-            cleaned = "\n".join(lines[1:-1]).strip()
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        data = _loads_model_json(raw)
+        if data is None or not isinstance(data.get("items"), list):
             return None
         parsed: list[tuple[dict, dict | None]] = []
         for raw_item in data["items"][:count]:
@@ -765,11 +758,9 @@ class PracticeSetService:
                     {"explanation": f"规则回退：{request.symbol.kind} {request.symbol.name}"}
                 ),
             )
-            cleaned = (result.output_text or "").strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.splitlines()
-                cleaned = "\n".join(lines[1:-1]).strip()
-            data = json.loads(cleaned)
+            data = _loads_model_json(result.output_text or "")
+            if data is None:
+                return None
             explanation = str(data.get("explanation") or "").strip()
             if not explanation:
                 return None
@@ -1033,15 +1024,8 @@ class PracticeSetService:
         raw: str,
         unmatched: list[tuple[str, str, dict]],
     ) -> list[CodeFillGradeResultItem] | None:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.splitlines()
-            cleaned = "\n".join(lines[1:-1]).strip()
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        data = _loads_model_json(raw)
+        if data is None or not isinstance(data.get("results"), list):
             return None
         known = {blank_id for blank_id, _, _ in unmatched}
         parsed: list[CodeFillGradeResultItem] = []
@@ -1248,6 +1232,29 @@ def _judging_channel(item_kind: str) -> str:
     if item_kind == "coding_problem":
         return "server_tests"
     return "llm_static"
+
+
+def _strip_model_fence(raw: str) -> str:
+    """Strip surrounding Markdown fences from a provider payload."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 3:
+            cleaned = "\n".join(lines[1:-1]).strip()
+    return cleaned
+
+
+def _loads_model_json(raw: str) -> dict | None:
+    """Parse JSON or a Python dict literal emitted by a provider."""
+    cleaned = _strip_model_fence(raw)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        try:
+            data = ast.literal_eval(cleaned)
+        except (SyntaxError, ValueError):
+            return None
+    return data if isinstance(data, dict) else None
 
 
 def _knowledge_points_from_snapshot(snapshot: dict) -> list[str]:
