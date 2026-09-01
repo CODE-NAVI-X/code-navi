@@ -109,11 +109,11 @@ export function StageBriefingCard({ conversationId }: StageBriefingCardProps) {
               <h2 id="stage-briefing-title" className="text-sm font-bold text-slate-900 dark:text-zinc-100">
                 科研阶段简报 (Stage Briefing)
               </h2>
-              <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/40">
+              <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/40">
                 纯规则衔接
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
               六步闭环第 5&rarr;6 步：笔记与学情画像向科研引导的无缝衔接
             </p>
           </div>
@@ -152,7 +152,7 @@ export function StageBriefingCard({ conversationId }: StageBriefingCardProps) {
             {/* 掌握度快照 */}
             {briefing.stage_summary.knowledge_points && briefing.stage_summary.knowledge_points.length > 0 && (
               <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-zinc-800">
-                <p className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400 mb-1.5">
+                <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400 mb-1.5">
                   学习掌握度快照：
                 </p>
                 <div className="flex flex-wrap gap-1.5">
@@ -164,7 +164,7 @@ export function StageBriefingCard({ conversationId }: StageBriefingCardProps) {
                       <CheckCircle2 className="h-3 w-3 text-emerald-500" />
                       <span>{kp.name}</span>
                       {kp.mastery !== null && (
-                        <span className="font-semibold text-emerald-600 dark:text-emerald-400 text-[10px]">
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400 text-xs">
                           {Math.round(kp.mastery * 100)}%
                         </span>
                       )}
@@ -271,7 +271,7 @@ export function StageBriefingCard({ conversationId }: StageBriefingCardProps) {
                       {rec.knowledge_point}
                     </span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                      className={`text-xs px-1.5 py-0.5 rounded font-medium ${
                         rec.mastery_status === "mastered"
                           ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
                           : rec.mastery_status === "weak"
@@ -286,7 +286,7 @@ export function StageBriefingCard({ conversationId }: StageBriefingCardProps) {
                           : "未学习"}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
                     {rec.reason}
                   </p>
                 </div>
