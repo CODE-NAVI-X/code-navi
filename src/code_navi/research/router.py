@@ -97,7 +97,7 @@ from .provider_service import (
 from .reproduction_evaluation_schemas import (
     CreateReproductionEvaluationRequest,
     ReproductionImprovementTask,
-    ReproductionProjectEvaluation,
+    ReproductionProjectEvaluationDetail,
     UpdateReproductionImprovementTaskRequest,
 )
 from .reproduction_evaluation_service import (
@@ -973,14 +973,14 @@ def list_experiment_evidence_bundles(
 
 @router.post(
     "/conversations/{conversation_id}/reproduction-evaluations",
-    response_model=ReproductionProjectEvaluation,
-    status_code=status.HTTP_201_CREATED,
+    status_code=201,
+    response_model=ReproductionProjectEvaluationDetail,
 )
 def create_reproduction_evaluation(
     conversation_id: str,
     request: CreateReproductionEvaluationRequest,
     db: Session = _db_dependency,
-) -> ReproductionProjectEvaluation:
+) -> ReproductionProjectEvaluationDetail:
     """Persist one explicit offline evaluation; never execute or retrieve anything."""
     del request
     try:
@@ -991,12 +991,12 @@ def create_reproduction_evaluation(
 
 @router.get(
     "/conversations/{conversation_id}/reproduction-evaluations",
-    response_model=list[ReproductionProjectEvaluation],
+    response_model=list[ReproductionProjectEvaluationDetail],
 )
 def list_reproduction_evaluations(
     conversation_id: str,
     db: Session = _db_dependency,
-) -> list[ReproductionProjectEvaluation]:
+) -> list[ReproductionProjectEvaluationDetail]:
     """Restore saved evaluation snapshots and current improvement-task states."""
     try:
         return _reproduction_evaluation_service.list(conversation_id, db)
@@ -1006,12 +1006,12 @@ def list_reproduction_evaluations(
 
 @router.get(
     "/reproduction-evaluations/{evaluation_id}",
-    response_model=ReproductionProjectEvaluation,
+    response_model=ReproductionProjectEvaluationDetail,
 )
 def get_reproduction_evaluation(
     evaluation_id: str,
     db: Session = _db_dependency,
-) -> ReproductionProjectEvaluation:
+) -> ReproductionProjectEvaluationDetail:
     """Restore one saved evaluation without re-running its rules."""
     try:
         return _reproduction_evaluation_service.get(evaluation_id, db)

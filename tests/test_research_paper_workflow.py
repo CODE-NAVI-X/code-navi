@@ -154,6 +154,9 @@ def test_blueprint_without_experiment_evidence_is_explicitly_pending(client: Tes
     body = response.json()
     assert body["generation_mode"] == "llm"
     assert body["submission_readiness"]["classification"] == "to_verify"
+    assert len(body["sections"]) == 5
+    section_names = [item["section"] for item in body["sections"]]
+    assert section_names == ["摘要", "介绍", "文献综述", "方法", "实验"]
     experiment = next(item for item in body["sections"] if item["section"] == "实验")
     assert experiment["evidence_references"] == []
     assert experiment["missing_evidence"]
@@ -201,10 +204,127 @@ def test_creating_evidence_and_blueprint_never_triggers_academic_search(
         ).status_code
         == 201
     )
-    assert (
-        client.post(
-            f"/api/v1/research/conversations/{conversation_id}/paper-blueprint",
-            json={"user_confirmed": True},
-        ).status_code
-        == 200
+    res = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-blueprint",
+        json={"user_confirmed": True},
     )
+    assert res.status_code == 200
+    assert res.json()["schema_version"] == "paper-blueprint.v2"
+
+
+def test_blueprint_schema_enforces_five_sections_order_and_abstract_limit() -> None:
+    from code_navi.research.conversation_schemas import (
+        PaperBlueprint,
+        PaperBlueprintEntry,
+        PaperBlueprintSection,
+    )
+
+    def _entry(c: str) -> PaperBlueprintEntry:
+        return PaperBlueprintEntry(content=c, classification="inference", basis="依据")
+
+    def _sec(name: str, goal_text: str = "目标") -> PaperBlueprintSection:
+        return PaperBlueprintSection(
+            section=name,  # type: ignore[arg-type]
+            writing_goal=_entry(goal_text),
+        )
+
+    valid_sections = [
+        _sec("摘要", "结构化摘要骨架不超过200字。"),
+        _sec("介绍"),
+        _sec("文献综述"),
+        _sec("方法"),
+        _sec("实验"),
+    ]
+
+    # 1. 正常构造 -> 成功
+    bp = PaperBlueprint(
+        schema_version="paper-blueprint.v2",
+        conversation_id="conv-1",
+        candidate_titles=[_entry("标题")],
+        target_submission_direction=_entry("方向"),
+        abstract_requirements=[_entry("a"), _entry("b"), _entry("c"), _entry("d")],
+        sections=valid_sections,
+        submission_readiness=_entry("准备度"),
+        gaps=[_entry("缺口")],
+        provenance_note="来源",
+    )
+    assert bp.schema_version == "paper-blueprint.v2"
+    assert len(bp.sections) == 5
+
+    # 2. 乱序五段 -> 抛出 ValueError
+    shuffled_sections = [
+        _sec("介绍"),
+        _sec("摘要"),
+        _sec("文献综述"),
+        _sec("方法"),
+        _sec("实验"),
+    ]
+    with pytest.raises(ValueError, match="sections 必须严格按"):
+        PaperBlueprint(
+            schema_version="paper-blueprint.v2",
+            conversation_id="conv-1",
+            candidate_titles=[_entry("标题")],
+            target_submission_direction=_entry("方向"),
+            abstract_requirements=[_entry("a"), _entry("b"), _entry("c"), _entry("d")],
+            sections=shuffled_sections,
+            submission_readiness=_entry("准备度"),
+            gaps=[_entry("缺口")],
+            provenance_note="来源",
+        )
+
+    # 3. 摘要段 writing_goal 超过 200 字 -> 抛出 ValueError
+    long_abstract_sections = [
+        _sec("摘要", "字" * 201),
+        _sec("介绍"),
+        _sec("文献综述"),
+        _sec("方法"),
+        _sec("实验"),
+    ]
+    with pytest.raises(
+        ValueError, match="摘要段 writing_goal（结构化摘要骨架）长度不得超过 200 字"
+    ):
+        PaperBlueprint(
+            schema_version="paper-blueprint.v2",
+            conversation_id="conv-1",
+            candidate_titles=[_entry("标题")],
+            target_submission_direction=_entry("方向"),
+            abstract_requirements=[_entry("a"), _entry("b"), _entry("c"), _entry("d")],
+            sections=long_abstract_sections,
+            submission_readiness=_entry("准备度"),
+            gaps=[_entry("缺口")],
+            provenance_note="来源",
+        )
+
+
+def test_paper_blueprint_prompt_contract_captures_v2_shape_and_fixed_sections(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """先红后绿契约测试：捕获传入 Artifact Generator 的 context，断言 Prompt 声明 v2 和固定五段。"""
+    from code_navi.research.router import _conversation_service
+
+    captured_context: dict[str, object] = {}
+    original_generate = _conversation_service.artifact_generator.generate
+
+    def _spy_generate(
+        *,
+        kind: str,
+        context: dict[str, object],
+        conversation_id: str,
+    ):
+        if kind == "paper_blueprint":
+            captured_context.update(context)
+        return original_generate(kind=kind, context=context, conversation_id=conversation_id)
+
+    monkeypatch.setattr(_conversation_service.artifact_generator, "generate", _spy_generate)
+
+    conversation_id = _ready_conversation(client)
+    response = client.post(
+        f"/api/v1/research/conversations/{conversation_id}/paper-blueprint",
+        json={"user_confirmed": True},
+    )
+    assert response.status_code == 200
+
+    required_shape = captured_context.get("required_json_shape", {})
+    assert isinstance(required_shape, dict)
+    assert required_shape.get("schema_version") == "paper-blueprint.v2"
+    assert required_shape.get("sections") == ["摘要", "介绍", "文献综述", "方法", "实验"]

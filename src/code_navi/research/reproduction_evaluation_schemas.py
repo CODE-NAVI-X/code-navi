@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .conversation_schemas import AnalysisClassification
+from .conversation_schemas import AnalysisClassification, DatasetRef, MetricSpec
 
 ReproductionEvaluationDimension = Literal[
     "research_definition",
@@ -59,8 +59,10 @@ class ReproductionPipelineEvaluationView(BaseModel):
     target_paper_url: str | None = Field(default=None, max_length=2000)
     objective_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
     dataset_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
+    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     baseline_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
     metric_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
+    metric_specs: list[MetricSpec] = Field(default_factory=list)
     step_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
     resource_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
     risk_entries: list[ReproductionPipelineEvidenceEntry] = Field(default_factory=list)
@@ -144,8 +146,103 @@ class UpdateReproductionImprovementTaskRequest(BaseModel):
     status: Literal["accepted", "skipped", "completed"]
 
 
+class ReproductionEvaluationCriterion(BaseModel):
+    """One conservative 0/1/2 criterion out of the fixed six."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    criterion_no: int = Field(ge=1, le=6)
+    title: str = Field(min_length=1, max_length=100)
+    score: Literal[0, 1, 2]
+    basis: str = Field(min_length=1, max_length=500)
+    evidence_refs: list[ReproductionEvaluationEvidence] | None = None
+    improvement_task_id: str | None = None
+
+
+class ReproductionEvaluationScoreSummaryV2(BaseModel):
+    """v2 score summary based on 6 criteria and 12-point maximum."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    earned_score: int = Field(ge=0, le=12)
+    scored_maximum: int = Field(ge=0, le=12)
+    total_maximum: Literal[12] = 12
+    scored_criterion_count: int = Field(ge=0, le=6)
+    unscored_criterion_count: int = Field(ge=0, le=6)
+    display: str = Field(min_length=1, max_length=200)
+
+
+_V2_CRITERION_TITLES = {
+    1: "研究问题与假设可复述性",
+    2: "方法可执行性（步骤完整、变量可操作）",
+    3: "数据可得性（公开链接与许可）",
+    4: "指标与统计方法正确性（对照标准目录）",
+    5: "计算资源与时间可行性",
+    6: "结果核验路径（baseline 与预期区间）",
+}
+
+
+class ReproductionProjectEvaluationV2(BaseModel):
+    """v2 conservative evaluation snapshot locking exactly 6 criteria with 12-point scale."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["reproduction-project-evaluation.v2"] = (
+        "reproduction-project-evaluation.v2"
+    )
+    evaluation_id: str
+    conversation_id: str
+    pipeline_id: str | None = None
+    pipeline_contract_status: Literal["available", "unavailable"]
+    selected_paper_count: int = Field(ge=0)
+    experiment_record_count: int = Field(ge=0)
+    total_score: int = Field(ge=0, le=12)
+    score_summary: ReproductionEvaluationScoreSummaryV2
+    criteria: list[ReproductionEvaluationCriterion] = Field(min_length=6, max_length=6)
+    improvement_tasks: list[ReproductionImprovementTask] = Field(default_factory=list)
+    created_at: datetime
+    boundary_note: str = Field(min_length=1, max_length=1600)
+
+    @model_validator(mode="after")
+    def validate_criteria_and_total(self) -> ReproductionProjectEvaluationV2:
+        nos = [c.criterion_no for c in self.criteria]
+        if nos != [1, 2, 3, 4, 5, 6]:
+            raise ValueError(f"v2 criteria must have criterion_no 1 through 6, got {nos}")
+        for c in self.criteria:
+            expected_title = _V2_CRITERION_TITLES[c.criterion_no]
+            if c.title != expected_title:
+                raise ValueError(
+                    f"Criterion {c.criterion_no} title must be '{expected_title}', got '{c.title}'"
+                )
+        sum_score = sum(c.score for c in self.criteria)
+        if self.total_score != sum_score:
+            raise ValueError(
+                f"total_score ({self.total_score}) must equal sum of criteria scores ({sum_score})"
+            )
+        return self
+
+
+class ReproductionEvaluationListItemResponse(BaseModel):
+    """Item for evaluation list endpoint with schema_version for proper frontend rendering."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[
+        "reproduction-project-evaluation.v1", "reproduction-project-evaluation.v2"
+    ]
+    evaluation_id: str
+    conversation_id: str
+    pipeline_id: str | None = None
+    pipeline_contract_status: Literal["available", "unavailable"]
+    selected_paper_count: int = Field(ge=0)
+    experiment_record_count: int = Field(ge=0)
+    total_score: int = Field(ge=0, le=100)
+    display_score: str = Field(min_length=1, max_length=200)
+    created_at: datetime
+
+
 class ReproductionProjectEvaluation(BaseModel):
-    """Persisted five-dimensional snapshot; it is not a quality or publication verdict."""
+    """Persisted five-dimensional snapshot (v1); it is not a quality or publication verdict."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -165,3 +262,9 @@ class ReproductionProjectEvaluation(BaseModel):
     improvement_tasks: list[ReproductionImprovementTask] = Field(default_factory=list)
     created_at: datetime
     boundary_note: str = Field(min_length=1, max_length=1600)
+
+
+ReproductionProjectEvaluationV1 = ReproductionProjectEvaluation
+ReproductionProjectEvaluationDetail = (
+    ReproductionProjectEvaluation | ReproductionProjectEvaluationV2
+)

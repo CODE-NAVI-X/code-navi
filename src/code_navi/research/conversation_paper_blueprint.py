@@ -57,9 +57,8 @@ def build_paper_blueprint(
                 ],
             },
             "required_json_shape": {
-                "schema_version": "paper-blueprint.v1",
-                "all_fields": "Return a complete PaperBlueprint JSON object.",
-                "sections": ["引言", "相关工作", "方法", "实验", "讨论", "结论"],
+                "schema_version": "paper-blueprint.v2",
+                "sections": ["摘要", "介绍", "文献综述", "方法", "实验"],
                 "evidence_references": "must exactly match allowed_evidence_references",
             },
         },

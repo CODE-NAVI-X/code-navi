@@ -113,6 +113,7 @@ from .models import (
     ResearchPaperDraftModel,
     ResearchPaperReviewModel,
     ResearchPaperRevisionModel,
+    ResearchReproductionEvaluationModel,
     ResearchReproductionPipelineModel,
     ResearchRevisionSuggestionModel,
     ResearchSelectedCitationModel,
@@ -1474,6 +1475,13 @@ class ResearchConversationService:
         review = self._latest_paper_review(draft_id, db)
         revision = self._latest_paper_revision(draft_id, db)
         submission_profile = self.get_submission_profile(draft.conversation_id, db)
+        eval_record = (
+            db.query(ResearchReproductionEvaluationModel)
+            .filter(ResearchReproductionEvaluationModel.conversation_id == draft.conversation_id)
+            .order_by(ResearchReproductionEvaluationModel.created_at.desc())
+            .first()
+        )
+        latest_eval_data = eval_record.evaluation_data if eval_record is not None else None
         check = build_submission_readiness(
             draft,
             review,
@@ -1483,6 +1491,7 @@ class ResearchConversationService:
                 self._experiment_evidence_bundles(draft.conversation_id, db)
             ),
             submission_profile=submission_profile,
+            reproduction_evaluation=latest_eval_data,
         )
         db.add(
             ResearchSubmissionReadinessModel(

@@ -691,7 +691,32 @@ export interface ReproductionImprovementTask {
   created_at: string;
   updated_at: string;
 }
-export interface ReproductionProjectEvaluation {
+export interface ReproductionEvaluationCriterion {
+  criterion_no: number;
+  title: string;
+  score: 0 | 1 | 2;
+  basis: string;
+  evidence_refs?: Array<{
+    source_type: string;
+    source_id?: string | null;
+    label: string;
+    classification: string;
+    information_scope: string;
+    basis: string;
+  }> | null;
+  improvement_task_id?: string | null;
+}
+
+export interface ReproductionEvaluationScoreSummaryV2 {
+  earned_score: number;
+  scored_maximum: number;
+  total_maximum: 12;
+  scored_criterion_count: number;
+  unscored_criterion_count: number;
+  display: string;
+}
+
+export interface ReproductionProjectEvaluationV1 {
   schema_version: "reproduction-project-evaluation.v1";
   evaluation_id: string;
   conversation_id: string;
@@ -705,6 +730,26 @@ export interface ReproductionProjectEvaluation {
   created_at: string;
   boundary_note: string;
 }
+
+export interface ReproductionProjectEvaluationV2 {
+  schema_version: "reproduction-project-evaluation.v2";
+  evaluation_id: string;
+  conversation_id: string;
+  pipeline_id: string | null;
+  pipeline_contract_status: "available" | "unavailable";
+  selected_paper_count: number;
+  experiment_record_count: number;
+  total_score: number;
+  score_summary: ReproductionEvaluationScoreSummaryV2;
+  criteria: ReproductionEvaluationCriterion[];
+  improvement_tasks: ReproductionImprovementTask[];
+  created_at: string;
+  boundary_note: string;
+}
+
+export type ReproductionProjectEvaluation =
+  | ReproductionProjectEvaluationV1
+  | ReproductionProjectEvaluationV2;
 
 export interface ReproductionPipelineItem {
   content: string;
@@ -776,7 +821,7 @@ export interface PaperBlueprintEntry {
 }
 
 export interface PaperBlueprintSection {
-  section: "引言" | "相关工作" | "方法" | "实验" | "讨论" | "结论";
+  section: "摘要" | "介绍" | "文献综述" | "方法" | "实验";
   writing_goal: PaperBlueprintEntry;
   evidence_references: PaperBlueprintReference[];
   missing_evidence: PaperBlueprintEntry[];
@@ -785,7 +830,7 @@ export interface PaperBlueprintSection {
 }
 
 export interface PaperBlueprint {
-  schema_version: "paper-blueprint.v1";
+  schema_version: "paper-blueprint.v2";
   conversation_id: string;
   candidate_titles: PaperBlueprintEntry[];
   target_submission_direction: PaperBlueprintEntry;

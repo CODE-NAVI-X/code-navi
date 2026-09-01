@@ -275,16 +275,15 @@ def _blueprint(context: dict[str, object], conversation_id: str) -> str:
         }
 
     sections = [
-        section("引言", "说明研究问题与边界。"),
-        section("相关工作", "整理已保存来源。", evidence=academic, citations=academic),
+        section("摘要", "概括研究问题、方法与结论。"),
+        section("介绍", "说明研究问题与边界。"),
+        section("文献综述", "整理已保存来源。", evidence=academic, citations=academic),
         section("方法", "描述方法。"),
         section("实验", "报告实验。", evidence=experiment),
-        section("讨论", "讨论。"),
-        section("结论", "结论。"),
     ]
     return json.dumps(
         {
-            "schema_version": "paper-blueprint.v1",
+            "schema_version": "paper-blueprint.v2",
             "conversation_id": conversation_id,
             "candidate_titles": [_entry("候选标题")],
             "target_submission_direction": _entry("目标方向待确认。", "to_verify"),

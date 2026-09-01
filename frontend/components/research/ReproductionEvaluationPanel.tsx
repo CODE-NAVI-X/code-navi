@@ -16,9 +16,12 @@ import { useEffect, useState } from "react";
 import {
   createReproductionEvaluation,
   listReproductionEvaluations,
+  type ReproductionEvaluationCriterion,
   type ReproductionEvaluationStatus,
   type ReproductionImprovementTask,
   type ReproductionProjectEvaluation,
+  type ReproductionProjectEvaluationV1,
+  type ReproductionProjectEvaluationV2,
   updateReproductionImprovementTask,
 } from "@/lib/api/research";
 
@@ -55,7 +58,7 @@ const taskStatusCopy = {
 function DimensionCard({
   dimension,
 }: {
-  dimension: ReproductionProjectEvaluation["dimensions"][number];
+  dimension: ReproductionProjectEvaluationV1["dimensions"][number];
 }) {
   const status = statusCopy[dimension.status];
   return (
@@ -118,6 +121,64 @@ function DimensionCard({
     </article>
   );
 }
+
+function CriterionCard({
+  criterion,
+}: {
+  criterion: ReproductionEvaluationCriterion;
+}) {
+  const scoreColors = [
+    "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+    "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
+  ];
+  const scoreLabels = ["0 分 / 需补充", "1 分 / 部分完整", "2 分 / 依据充分"];
+  return (
+    <article className="rounded-2xl border border-slate-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950/40">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-slate-900 dark:text-zinc-100">
+            {criterion.criterion_no}. {criterion.title}
+          </p>
+          <p className="mt-1 text-sm font-semibold text-slate-500 dark:text-zinc-400">
+            得分：{criterion.score} / 2
+          </p>
+        </div>
+        <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${scoreColors[criterion.score] ?? scoreColors[0]}`}>
+          {scoreLabels[criterion.score] ?? `${criterion.score} 分`}
+        </span>
+      </div>
+      <div className="mt-3 rounded-xl bg-slate-50 p-2.5 text-sm leading-6 text-slate-600 dark:bg-zinc-900 dark:text-zinc-400">
+        <p className="font-semibold text-slate-700 dark:text-zinc-300">评分依据</p>
+        <p>{criterion.basis}</p>
+      </div>
+      {criterion.evidence_refs && criterion.evidence_refs.length > 0 && (
+        <details className="mt-2 rounded-xl border border-slate-200 dark:border-zinc-800">
+          <summary className="min-h-10 cursor-pointer px-2.5 py-2 text-sm font-semibold text-slate-700 dark:text-zinc-300">
+            查看关联证据（{criterion.evidence_refs.length} 条）
+          </summary>
+          <div className="space-y-2 border-t border-slate-200 p-2.5 dark:border-zinc-800">
+            {criterion.evidence_refs.map((item, index) => (
+              <div
+                key={`${item.source_type}-${item.source_id ?? index}-${index}`}
+                className="rounded-lg bg-slate-50 p-2 text-sm leading-6 dark:bg-zinc-900"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-semibold">{item.label}</span>
+                </div>
+                <p className="mt-1 text-slate-500 dark:text-zinc-400">
+                  信息范围：{item.information_scope}
+                </p>
+                <p className="text-slate-500 dark:text-zinc-400">依据：{item.basis}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </article>
+  );
+}
+
 function TaskActions({
   task,
   busy,
@@ -197,7 +258,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
       const created = await createReproductionEvaluation(conversationId);
       setEvaluations((current) => [created, ...current]);
     } catch (value) {
-      setError(value instanceof Error ? value.message : "运行五维项目评估失败。请重试。");
+      setError(value instanceof Error ? value.message : "运行项目评估失败。请重试。");
     } finally {
       setCreating(false);
     }
@@ -227,11 +288,15 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
   }
 
   const latest = evaluations[0] ?? null;
-  const progress = latest?.score_summary.scored_maximum
-    ? Math.round(
-        (latest.score_summary.earned_score / latest.score_summary.scored_maximum) * 100,
-      )
-    : 0;
+  const isV2 = latest?.schema_version === "reproduction-project-evaluation.v2";
+  const progress = isV2
+    ? Math.round(((latest as ReproductionProjectEvaluationV2).total_score / 12) * 100)
+    : latest
+      ? Math.round(
+          (latest.score_summary.earned_score / (latest.score_summary.scored_maximum || 100)) *
+            100,
+        )
+      : 0;
 
   return (
     <section className="rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm dark:border-indigo-900/70 dark:bg-zinc-900/80">
@@ -241,10 +306,24 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
             <ClipboardList className="h-4 w-4" />
           </span>
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
-              Reproduction evaluation
-            </p>
-            <h2 className="mt-1 text-sm font-bold">五维证据完整度评估</h2>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">
+                Reproduction evaluation
+              </p>
+              {latest && !isV2 && (
+                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-zinc-800 dark:text-zinc-300">
+                  历史口径 (v1)
+                </span>
+              )}
+              {isV2 && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                  六条评分依据 (v2)
+                </span>
+              )}
+            </div>
+            <h2 className="mt-1 text-sm font-bold">
+              {isV2 ? "六条证据完整度评估（满分 12）" : "五维证据完整度评估"}
+            </h2>
           </div>
         </div>
         <button
@@ -280,7 +359,7 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
 
       {!loading && !latest && (
         <div className="mt-4 rounded-xl border border-dashed border-indigo-200 p-4 text-center text-xs text-slate-500 dark:border-indigo-900 dark:text-zinc-400">
-          尚未运行评估。证据缺失的维度会显示“不可评估”，不会被猜测或强行打零分。
+          尚未运行评估。证据缺失的条目会显示“0 分 / 需补充”，不会被猜测或编造。
         </div>
       )}
 
@@ -289,18 +368,22 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
           <div className="rounded-2xl bg-slate-950 p-4 text-white dark:bg-zinc-950">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-              <p className="text-sm uppercase tracking-[0.18em] text-slate-400">
+                <p className="text-sm uppercase tracking-[0.18em] text-slate-400">
                   Evidence completeness
                 </p>
                 <p className="mt-1 text-2xl font-black">
-                  {latest.score_summary.earned_score}
+                  {isV2
+                    ? (latest as ReproductionProjectEvaluationV2).total_score
+                    : (latest as ReproductionProjectEvaluationV1).score_summary.earned_score}
                   <span className="text-sm font-medium text-slate-400">
-                    /{latest.score_summary.scored_maximum || "—"}
+                    /{isV2 ? 12 : (latest as ReproductionProjectEvaluationV1).score_summary.scored_maximum || "—"}
                   </span>
                 </p>
               </div>
               <p className="max-w-xl text-sm leading-6 text-slate-300">
-                {latest.score_summary.display}
+                {isV2
+                  ? `总分 ${(latest as ReproductionProjectEvaluationV2).total_score} / 12（基于 6 条固定准则评估完整度；满分为 12 分）`
+                  : (latest as ReproductionProjectEvaluationV1).score_summary.display}
               </p>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800">
@@ -324,15 +407,19 @@ export function ReproductionEvaluationPanel({ conversationId }: { conversationId
             <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
               <FileWarning className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
-                当前会话尚未生成复现方案，因此“复现路径与可执行性”保持不可评估。请先选择已保存论文并主动生成 Pipeline；评价模块不会用普通研究计划冒充复现方案。
+                当前会话尚未生成复现方案，部分方法与路径准则可能因缺少 Pipeline 条目而得 0 分。请先选择已保存论文并主动生成 Pipeline；评价模块不会用普通研究计划冒充复现方案。
               </p>
             </div>
           )}
 
           <div className="grid gap-3 lg:grid-cols-2">
-            {latest.dimensions.map((dimension) => (
-              <DimensionCard key={dimension.dimension} dimension={dimension} />
-            ))}
+            {isV2
+              ? (latest as ReproductionProjectEvaluationV2).criteria.map((criterion) => (
+                  <CriterionCard key={criterion.criterion_no} criterion={criterion} />
+                ))
+              : (latest as ReproductionProjectEvaluationV1).dimensions.map((dimension) => (
+                  <DimensionCard key={dimension.dimension} dimension={dimension} />
+                ))}
           </div>
 
           <section className="rounded-2xl border border-indigo-200 p-3 dark:border-indigo-900/70">

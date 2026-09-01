@@ -58,6 +58,26 @@ def test_public_paper_skill_docs_keep_the_minimum_contract() -> None:
             assert heading in content, f"{skill_name} 文档 Skill 缺少契约：{heading}"
 
 
+def test_blueprint_and_reproduction_evaluation_skill_docs_describe_v2_contracts() -> None:
+    paper_blueprint = (SKILL_ROOT / "paper-blueprint" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    reproduction = (SKILL_ROOT / "reproduction-evaluation" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    public_reproduction = (
+        REPOSITORY_ROOT / "docs" / "skills" / "reproduction_evaluation" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "paper-blueprint.v2" in paper_blueprint
+    assert "摘要/介绍/文献综述/方法/实验" in paper_blueprint
+    for content in (reproduction, public_reproduction):
+        assert "reproduction-project-evaluation.v2" in content
+        assert "六条" in content
+        assert "12" in content
+        assert "历史口径" in content
+
+
 def test_public_mindmap_skill_documents_the_focus_workspace_and_svg_limit() -> None:
     content = (REPOSITORY_ROOT / "docs" / "skills" / "research-mindmap" / "SKILL.md").read_text(
         encoding="utf-8"

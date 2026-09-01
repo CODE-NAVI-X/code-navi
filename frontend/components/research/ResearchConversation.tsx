@@ -55,6 +55,7 @@ import { ExperimentDesignPanel } from "./ExperimentDesignPanel";
 import { ExperimentEvidencePanel } from "./ExperimentEvidencePanel";
 import { ReproductionPipelinePanel } from "./ReproductionPipelinePanel";
 import { PaperDraftReviewPanel } from "./PaperDraftReviewPanel";
+import { PaperBlueprintPanel } from "./PaperBlueprintPanel";
 import { ReproductionEvaluationPanel } from "./ReproductionEvaluationPanel";
 import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 import { PaperDeepAnalysisPanel, type SelectedResearchPaper } from "./PaperDeepAnalysisPanel";
@@ -840,6 +841,11 @@ export function ResearchConversation() {
                 <summary className="min-h-10 cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700 dark:text-zinc-200">补充能力：论文辅助、引用与投稿前检查</summary>
                 <div className="border-t border-slate-200 p-4 dark:border-zinc-800"><PaperDraftReviewPanel conversationId={conversation.conversation_id} /></div>
               </details>
+            )}
+            {conversation.research_plan && (
+              <div className="mt-6">
+                <PaperBlueprintPanel conversationId={conversation.conversation_id} />
+              </div>
             )}
           </PanelSection>
         </div>
