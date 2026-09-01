@@ -44,6 +44,26 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       {
+        source: "/learning/explore",
+        destination: "/learning",
+        permanent: false,
+      },
+      {
+        source: "/student/explore",
+        destination: "/learning",
+        permanent: false,
+      },
+      {
+        source: "/notebook",
+        destination: "/learning/notebook",
+        permanent: false,
+      },
+      {
+        source: "/student/notebook",
+        destination: "/learning/notebook",
+        permanent: false,
+      },
+      {
         source: "/student/learning",
         destination: "/learning",
         permanent: false,
