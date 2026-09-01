@@ -1410,6 +1410,78 @@ export async function createPaperExportPackage(draftId: string): Promise<PaperEx
   return request<PaperExportPackage>(`/api/v1/research/paper-drafts/${encodeURIComponent(draftId)}/export-package`, { method: "POST", body: JSON.stringify({ user_confirmed: true }) });
 }
 
+export interface StageBriefingKnowledgePoint {
+  name: string;
+  mastery: number | null;
+}
+
+export interface StageBriefingSummary {
+  topic: string | null;
+  digest: string | null;
+  knowledge_points: StageBriefingKnowledgePoint[] | null;
+}
+
+export interface StageBriefingReproductionEntry {
+  bundle_count: number;
+  pipeline_status: string | null;
+}
+
+export interface StageBriefingEvidenceTrend {
+  keyword: string;
+  paper_count: number;
+  evidence_refs: EvidenceReference[];
+}
+
+export interface StageBriefingResponse {
+  conversation_id: string;
+  has_learning_context: boolean;
+  stage_summary: StageBriefingSummary;
+  reproduction_entry: StageBriefingReproductionEntry;
+  evidence_trends: StageBriefingEvidenceTrend[];
+  generated_by: "rules";
+  generated_at: string;
+}
+
+export interface StudyRecommendationAction {
+  type: "learning_explain" | "practice_set";
+  payload: Record<string, unknown>;
+}
+
+export interface StudyRecommendation {
+  knowledge_point: string;
+  reason: string;
+  mastery_status: "mastered" | "weak" | "unknown";
+  action: StudyRecommendationAction;
+}
+
+export interface StudyRecommendationsResponse {
+  recommendations: StudyRecommendation[];
+  provenance_note: string;
+}
+
+export async function fetchStageBriefing(
+  conversationId: string,
+  includeEvidenceTrends: boolean = false,
+): Promise<StageBriefingResponse> {
+  const query = includeEvidenceTrends ? "?include_evidence_trends=true" : "";
+  return request<StageBriefingResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/stage-briefing${query}`,
+  );
+}
+
+export async function fetchStudyRecommendations(
+  conversationId: string,
+  userConfirmed: boolean = true,
+): Promise<StudyRecommendationsResponse> {
+  return request<StudyRecommendationsResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/study-recommendations`,
+    {
+      method: "POST",
+      body: JSON.stringify({ user_confirmed: userConfirmed }),
+    },
+  );
+}
+
 function validateConversationResponse(data: unknown): ResearchConversationResponse {
   if (!data || typeof data !== "object") {
     throw new ResearchApiError(502, "科研服务返回了无法识别的数据。请刷新后重试。");

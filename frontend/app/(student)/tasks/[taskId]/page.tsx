@@ -57,9 +57,13 @@ export default function TaskPage() {
   const learningHref = `/learning?workspace_id=${encodeURIComponent(task.workspace_id)}&task_id=${encodeURIComponent(task.id)}&return_to=${encodeURIComponent(`/tasks/${task.id}`)}`;
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
-      <Link href={`/workspaces/${task.workspace_id}`} className="inline-flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-950 dark:text-zinc-300 dark:hover:text-white">
-        <ArrowLeft className="h-4 w-4" /> 返回工作区
-      </Link>
+      <nav aria-label="面包屑导航" className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-zinc-400">
+        <Link href="/" className="hover:text-slate-900 dark:hover:text-zinc-100 transition">工作台</Link>
+        <span>&rarr;</span>
+        <Link href={`/workspaces/${task.workspace_id}`} className="hover:text-slate-900 dark:hover:text-zinc-100 transition">工作区</Link>
+        <span>&rarr;</span>
+        <span className="text-slate-900 dark:text-zinc-100 font-bold">任务详情</span>
+      </nav>
       <header className="app-card mt-5 rounded-2xl p-5 sm:p-7">
         <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase dark:text-zinc-400">当前 Task · {task.status}</p>
         <h1 className="mt-2 break-words text-2xl font-bold text-slate-950 dark:text-zinc-50">{task.title}</h1>

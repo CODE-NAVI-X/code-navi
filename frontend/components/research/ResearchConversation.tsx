@@ -59,6 +59,7 @@ import { PaperBlueprintPanel } from "./PaperBlueprintPanel";
 import { ReproductionEvaluationPanel } from "./ReproductionEvaluationPanel";
 import { ResearchWorkflowNav } from "./ResearchWorkflowNav";
 import { PaperDeepAnalysisPanel, type SelectedResearchPaper } from "./PaperDeepAnalysisPanel";
+import { StageBriefingCard } from "./StageBriefingCard";
 
 const LEGACY_STORAGE_KEY = "code-navi.research.session-id";
 
@@ -577,6 +578,8 @@ export function ResearchConversation() {
             )}
           </aside>
         )}
+
+        <StageBriefingCard conversationId={conversation.conversation_id} />
 
         <ResearchWorkflowNav
           conversation={conversation}
