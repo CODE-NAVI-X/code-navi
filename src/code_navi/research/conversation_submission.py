@@ -56,6 +56,7 @@ def build_submission_readiness(
     has_academic_evidence: bool,
     has_experiment_evidence: bool,
     submission_profile: SubmissionProfile | None = None,
+    reproduction_evaluation: dict[str, object] | None = None,
 ) -> SubmissionReadinessCheck:
     """Check only saved local artifacts; no network/model call is made here."""
     blockers: list[SubmissionReadinessItem] = []
@@ -272,6 +273,39 @@ def build_submission_readiness(
                 "submission_profile",
             )
         )
+    if reproduction_evaluation is not None:
+        eval_data = reproduction_evaluation
+        schema_version = eval_data.get("schema_version")
+        if schema_version == "reproduction-project-evaluation.v1":
+            earned = eval_data.get("score_summary", {}).get("earned_score", 0)
+            manual_checks.append(
+                _item(
+                    "historical-reproduction-evaluation",
+                    "复现评估",
+                    (
+                        f"检测到历史口径复现评估（得分：{earned}/100），该快照属于 v1 历史口径，"
+                        "不参与当前 12 分制投稿准备度门控判定；请人工核验或重新触发新版评估。"
+                    ),
+                    "to_verify",
+                    "历史评估快照保留供只读查阅，不参与新版投稿就绪度阈值计算。",
+                    "manual_confirmation",
+                )
+            )
+        elif schema_version == "reproduction-project-evaluation.v2":
+            total_score = eval_data.get("total_score", 0)
+            manual_checks.append(
+                _item(
+                    "reproduction-evaluation-v2-record",
+                    "复现评估",
+                    (
+                        f"最新复现评估已记录（当前记录完整度：{total_score}/12 分）；"
+                        "准则得分仅代表记录完整度与条目规范性，各项实验结论与论文主张仍待作者或导师人工核验。"
+                    ),
+                    "to_verify",
+                    "复现评估基于已保存画像与方案的规则打分，不代表论文录用或复现成功。",
+                    "manual_confirmation",
+                )
+            )
     fact_boundary_notes = [
         _item(
             "fact-boundary",

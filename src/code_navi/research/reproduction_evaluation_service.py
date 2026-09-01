@@ -9,9 +9,13 @@ from typing import Protocol
 from sqlalchemy.orm import Session
 
 from .conversation_schemas import (
+    DatasetRef,
+    ExperimentDesign,
     ExperimentEvidenceBundle,
+    MetricSpec,
     ReproductionPipeline,
     ReproductionPipelineItem,
+    ResearchPlanEntry,
     ResearchProfile,
     SelectedCitation,
 )
@@ -24,13 +28,16 @@ from .models import (
     ResearchReproductionPipelineModel,
     ResearchSelectedCitationModel,
 )
-from .reproduction_evaluation import evaluate_reproduction_project
+from .reproduction_evaluation import evaluate_reproduction_project_v2
 from .reproduction_evaluation_schemas import (
     ReproductionEvaluationDimensionResult,
+    ReproductionEvaluationScoreSummaryV2,
     ReproductionImprovementTask,
     ReproductionPipelineEvaluationView,
     ReproductionPipelineEvidenceEntry,
-    ReproductionProjectEvaluation,
+    ReproductionProjectEvaluationDetail,
+    ReproductionProjectEvaluationV1,
+    ReproductionProjectEvaluationV2,
     UpdateReproductionImprovementTaskRequest,
 )
 
@@ -58,42 +65,87 @@ class ReproductionPipelineReader(Protocol):
 
 
 class StoredReproductionPipelineReader:
-    """Adapt A's latest persisted Pipeline into B's read-only evaluation view."""
+    """Adapt A's latest persisted Pipeline and PR-B's ExperimentDesign into B's evaluation view."""
 
     def load(
         self,
         conversation_id: str,
         db: Session,
     ) -> ReproductionPipelineEvaluationView | None:
-        record = (
+        pipeline_record = (
             db.query(ResearchReproductionPipelineModel)
             .filter(ResearchReproductionPipelineModel.conversation_id == conversation_id)
             .order_by(ResearchReproductionPipelineModel.created_at.desc())
             .first()
         )
-        if record is None:
+
+        conversation = db.get(ResearchConversationModel, conversation_id)
+        dataset_refs: list[DatasetRef] = []
+        metric_specs: list[MetricSpec] = []
+        exp_design: ExperimentDesign | None = None
+        if conversation is not None and conversation.generated_artifacts:
+            exp_data = conversation.generated_artifacts.get("experiment_design")
+            if exp_data:
+                try:
+                    exp_design = ExperimentDesign.model_validate(exp_data)
+                    dataset_refs = list(exp_design.dataset_refs)
+                    metric_specs = list(exp_design.metric_specs)
+                except Exception:
+                    pass
+
+        if pipeline_record is None and exp_design is None:
             return None
-        pipeline = ReproductionPipeline.model_validate(record.pipeline_data)
+
+        if pipeline_record is not None:
+            pipeline = ReproductionPipeline.model_validate(pipeline_record.pipeline_data)
+            return ReproductionPipelineEvaluationView(
+                pipeline_id=pipeline.pipeline_id,
+                target_paper_title=pipeline.selected_paper.title,
+                target_paper_url=pipeline.selected_paper.url,
+                objective_entries=[
+                    self._entry(pipeline.reproduction_goal),
+                    self._entry(pipeline.research_question),
+                ],
+                dataset_entries=self._entries(pipeline.data_and_sample_conditions),
+                dataset_refs=dataset_refs,
+                baseline_entries=self._entries(pipeline.candidate_baselines),
+                metric_entries=self._entries(pipeline.metrics),
+                metric_specs=metric_specs,
+                step_entries=self._entries(pipeline.experiment_steps),
+                resource_entries=self._entries(pipeline.resources),
+                risk_entries=self._entries(pipeline.risks),
+                ethics_entries=self._entries(pipeline.ethics),
+            )
+
+        assert exp_design is not None
         return ReproductionPipelineEvaluationView(
-            pipeline_id=pipeline.pipeline_id,
-            target_paper_title=pipeline.selected_paper.title,
-            target_paper_url=pipeline.selected_paper.url,
-            objective_entries=[
-                self._entry(pipeline.reproduction_goal),
-                self._entry(pipeline.research_question),
-            ],
-            dataset_entries=self._entries(pipeline.data_and_sample_conditions),
-            baseline_entries=self._entries(pipeline.candidate_baselines),
-            metric_entries=self._entries(pipeline.metrics),
-            step_entries=self._entries(pipeline.experiment_steps),
-            resource_entries=self._entries(pipeline.resources),
-            risk_entries=self._entries(pipeline.risks),
-            ethics_entries=self._entries(pipeline.ethics),
+            pipeline_id=f"exp-design-{conversation_id}",
+            target_paper_title="实验设计方案",
+            target_paper_url="",
+            objective_entries=[self._entry_from_plan(exp_design.hypothesis)],
+            dataset_entries=[self._entry_from_plan(d) for d in exp_design.data_sources],
+            dataset_refs=dataset_refs,
+            baseline_entries=[self._entry_from_plan(b) for b in exp_design.baselines],
+            metric_entries=[self._entry_from_plan(m) for m in exp_design.metrics],
+            metric_specs=metric_specs,
+            step_entries=[self._entry_from_plan(s) for s in exp_design.steps],
+            resource_entries=[self._entry_from_plan(r) for r in exp_design.resources],
+            risk_entries=[self._entry_from_plan(rk) for rk in exp_design.risks],
+            ethics_entries=[],
         )
 
     @staticmethod
     def _entry(item: ReproductionPipelineItem) -> ReproductionPipelineEvidenceEntry:
         return ReproductionPipelineEvidenceEntry.model_validate(item.model_dump())
+
+    @staticmethod
+    def _entry_from_plan(item: ResearchPlanEntry) -> ReproductionPipelineEvidenceEntry:
+        return ReproductionPipelineEvidenceEntry(
+            content=item.content,
+            classification=item.classification,
+            basis=item.basis,
+            source_scope="experiment_design",
+        )
 
     @classmethod
     def _entries(
@@ -113,7 +165,7 @@ class ReproductionEvaluationService:
         self,
         conversation_id: str,
         db: Session,
-    ) -> ReproductionProjectEvaluation:
+    ) -> ReproductionProjectEvaluationDetail:
         """Persist one immutable evaluation snapshot after an explicit user action."""
         conversation = db.get(ResearchConversationModel, conversation_id)
         if conversation is None:
@@ -122,21 +174,18 @@ class ReproductionEvaluationService:
         citations = self._selected_citations(conversation_id, db)
         experiment_bundles = self._experiment_bundles(conversation_id, db)
         pipeline = self.pipeline_reader.load(conversation_id, db)
-        dimensions, score_summary = evaluate_reproduction_project(
+        created_at = datetime.now(UTC)
+        evaluation_id = str(uuid.uuid4())
+        criteria, total_score, tasks = evaluate_reproduction_project_v2(
             profile,
             citations,
             experiment_bundles,
             pipeline,
+            conversation_id=conversation_id,
+            evaluation_id=evaluation_id,
+            created_at=created_at,
         )
-        created_at = datetime.now(UTC)
-        evaluation_id = str(uuid.uuid4())
-        tasks = self._build_tasks(
-            evaluation_id,
-            conversation_id,
-            dimensions,
-            created_at,
-        )
-        evaluation = ReproductionProjectEvaluation(
+        evaluation = ReproductionProjectEvaluationV2(
             evaluation_id=evaluation_id,
             conversation_id=conversation_id,
             pipeline_id=pipeline.pipeline_id if pipeline else None,
@@ -149,8 +198,16 @@ class ReproductionEvaluationService:
                 }
             ),
             experiment_record_count=len(experiment_bundles),
-            score_summary=score_summary,
-            dimensions=dimensions,
+            total_score=total_score,
+            score_summary=ReproductionEvaluationScoreSummaryV2(
+                earned_score=total_score,
+                scored_maximum=12,
+                total_maximum=12,
+                scored_criterion_count=len(criteria),
+                unscored_criterion_count=0,
+                display=f"{total_score}/12（共 6 项准则，满分 12 分）",
+            ),
+            criteria=criteria,
             improvement_tasks=tasks,
             created_at=created_at,
             boundary_note=(
@@ -190,7 +247,7 @@ class ReproductionEvaluationService:
         self,
         conversation_id: str,
         db: Session,
-    ) -> list[ReproductionProjectEvaluation]:
+    ) -> list[ReproductionProjectEvaluationDetail]:
         """Restore saved snapshots and current task states without re-running evaluation."""
         if db.get(ResearchConversationModel, conversation_id) is None:
             raise ConversationNotFoundError(conversation_id)
@@ -206,7 +263,7 @@ class ReproductionEvaluationService:
         self,
         evaluation_id: str,
         db: Session,
-    ) -> ReproductionProjectEvaluation:
+    ) -> ReproductionProjectEvaluationDetail:
         record = db.get(ResearchReproductionEvaluationModel, evaluation_id)
         if record is None:
             raise ReproductionEvaluationNotFoundError(evaluation_id)
@@ -246,7 +303,7 @@ class ReproductionEvaluationService:
         self,
         record: ResearchReproductionEvaluationModel,
         db: Session,
-    ) -> ReproductionProjectEvaluation:
+    ) -> ReproductionProjectEvaluationDetail:
         tasks = (
             db.query(ResearchReproductionImprovementTaskModel)
             .filter(
@@ -255,7 +312,15 @@ class ReproductionEvaluationService:
             .order_by(ResearchReproductionImprovementTaskModel.created_at.asc())
             .all()
         )
-        return ReproductionProjectEvaluation.model_validate(
+        schema_version = record.evaluation_data.get("schema_version")
+        if schema_version == "reproduction-project-evaluation.v1":
+            return ReproductionProjectEvaluationV1.model_validate(
+                {
+                    **record.evaluation_data,
+                    "improvement_tasks": [task.task_data for task in tasks],
+                }
+            )
+        return ReproductionProjectEvaluationV2.model_validate(
             {
                 **record.evaluation_data,
                 "improvement_tasks": [task.task_data for task in tasks],

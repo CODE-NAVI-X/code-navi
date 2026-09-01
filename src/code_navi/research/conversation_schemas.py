@@ -1049,7 +1049,7 @@ class PaperBlueprintEntry(BaseModel):
 class PaperBlueprintSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    section: Literal["引言", "相关工作", "方法", "实验", "讨论", "结论"]
+    section: Literal["摘要", "介绍", "文献综述", "方法", "实验"]
     writing_goal: PaperBlueprintEntry
     evidence_references: list[PaperBlueprintReference] = Field(default_factory=list, max_length=24)
     missing_evidence: list[PaperBlueprintEntry] = Field(default_factory=list, max_length=12)
@@ -1059,23 +1059,47 @@ class PaperBlueprintSection(BaseModel):
     )
 
 
+_EXPECTED_BLUEPRINT_SECTIONS = ("摘要", "介绍", "文献综述", "方法", "实验")
+
+
 class PaperBlueprint(BaseModel):
     """A rule-governed writing outline, never a claim that a paper is ready to submit."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["paper-blueprint.v1"] = "paper-blueprint.v1"
+    schema_version: Literal["paper-blueprint.v2"] = "paper-blueprint.v2"
     conversation_id: str
     candidate_titles: list[PaperBlueprintEntry] = Field(min_length=1, max_length=3)
     target_submission_direction: PaperBlueprintEntry
     abstract_requirements: list[PaperBlueprintEntry] = Field(min_length=4, max_length=8)
-    sections: list[PaperBlueprintSection] = Field(min_length=6, max_length=6)
+    sections: list[PaperBlueprintSection] = Field(min_length=5, max_length=5)
     submission_readiness: PaperBlueprintEntry
     gaps: list[PaperBlueprintEntry] = Field(min_length=1, max_length=12)
     provenance_note: str = Field(min_length=1, max_length=1000)
     generation_mode: Literal["llm", "rules", "rules_fallback"] = "rules"
     run_id: str | None = None
     event_count: int = Field(default=0, ge=0)
+
+    @field_validator("sections")
+    @classmethod
+    def _validate_sections_order_and_abstract_length(
+        cls, sections: list[PaperBlueprintSection]
+    ) -> list[PaperBlueprintSection]:
+        if len(sections) != 5:
+            raise ValueError(f"sections 必须包含恰好 5 个段落，实际包含 {len(sections)} 个")
+        actual_order = tuple(s.section for s in sections)
+        if actual_order != _EXPECTED_BLUEPRINT_SECTIONS:
+            raise ValueError(
+                f"sections 必须严格按 {_EXPECTED_BLUEPRINT_SECTIONS} 顺序排列，"
+                f"实际顺序为 {actual_order}"
+            )
+        abstract_section = sections[0]
+        if len(abstract_section.writing_goal.content) > 200:
+            raise ValueError(
+                "摘要段 writing_goal（结构化摘要骨架）长度不得超过 200 字，"
+                f"实际为 {len(abstract_section.writing_goal.content)} 字"
+            )
+        return sections
 
 
 class PaperSection(BaseModel):

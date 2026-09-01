@@ -641,3 +641,13 @@ def test_reading_reports_stay_user_sourced_and_ppt_stays_a_draft() -> None:
     # 写作/引用/投稿/导图保持补充折叠区，不与主流程抢主按钮
     assert "PaperDraftReviewPanel" in workspace_source
     assert "补充能力" in workspace_source
+
+
+def test_research_page_mounts_five_section_blueprint_at_the_content_bottom() -> None:
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+
+    assert 'import { PaperBlueprintPanel } from "./PaperBlueprintPanel";' in workspace_source
+    assert "<PaperBlueprintPanel" in workspace_source
+    assert workspace_source.index("<PaperDraftReviewPanel") < workspace_source.index(
+        "<PaperBlueprintPanel"
+    )

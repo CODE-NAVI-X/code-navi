@@ -283,3 +283,106 @@ def test_export_is_a_safe_pre_submission_package_with_profile_and_gaps(
     assert revision["content"] not in joined
     assert payload["selected_citation_summaries"] == []
     assert payload["submission_profile"]["target_venue"] == "本地演示会议"
+
+
+def test_submission_readiness_consumes_v2_reproduction_evaluation_as_informational_record(
+    client: TestClient,
+) -> None:
+    draft, _ = _review_and_revision(client)
+    conv_id = draft["conversation_id"]
+
+    # 触发并生成 v2 复现评估
+    eval_res = client.post(
+        f"/api/v1/research/conversations/{conv_id}/reproduction-evaluations",
+        json={"user_confirmed": True},
+    )
+    assert eval_res.status_code == 201
+    eval_data = eval_res.json()
+    assert eval_data["schema_version"] == "reproduction-project-evaluation.v2"
+
+    # 生成 submission readiness
+    readiness = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+    assert readiness.status_code == 201
+    data = readiness.json()
+
+    # 断言：v2 复现评估作为 manual_checks 中的信息性记录展示，不作为 warning 或 blocker
+    rec_item = next(
+        (
+            item
+            for item in data["manual_checks"]
+            if item["id"] == "reproduction-evaluation-v2-record"
+        ),
+        None,
+    )
+    assert rec_item is not None
+    assert f"{eval_data['total_score']}/12" in rec_item["message"]
+    assert "当前记录完整度" in rec_item["message"]
+    assert "各项实验结论与论文主张仍待作者或导师人工核验" in rec_item["message"]
+
+    # 反例断言：不得有针对复现评估分数的 warning 或 blocker
+    assert not any("reproduction-evaluation" in item["id"] for item in data["blockers"])
+    assert not any("reproduction-evaluation" in item["id"] for item in data["warnings"])
+
+
+def test_submission_readiness_marks_v1_reproduction_evaluation_as_historical_scope(
+    client: TestClient,
+) -> None:
+    draft, _ = _review_and_revision(client)
+    conv_id = draft["conversation_id"]
+
+    # 手动写入一条 v1 历史评估快照
+    from datetime import UTC, datetime
+
+    from code_navi.db import SessionLocal
+    from code_navi.research.models import ResearchReproductionEvaluationModel
+
+    with SessionLocal() as db:
+        v1_record = ResearchReproductionEvaluationModel(
+            id="v1-eval-test",
+            conversation_id=conv_id,
+            evaluation_data={
+                "schema_version": "reproduction-project-evaluation.v1",
+                "evaluation_id": "v1-eval-test",
+                "conversation_id": conv_id,
+                "pipeline_contract_status": "available",
+                "selected_paper_count": 1,
+                "experiment_record_count": 0,
+                "score_summary": {
+                    "earned_score": 60,
+                    "scored_maximum": 100,
+                    "total_maximum": 100,
+                    "scored_dimension_count": 5,
+                    "unscored_dimension_count": 0,
+                    "display": "60/100",
+                },
+                "dimensions": [],
+                "created_at": datetime.now(UTC).isoformat(),
+                "boundary_note": "v1 边界",
+            },
+            created_at=datetime.now(UTC),
+        )
+        db.add(v1_record)
+        db.commit()
+
+    # 生成 submission readiness
+    readiness = client.post(
+        f"/api/v1/research/paper-drafts/{draft['draft_id']}/submission-readiness",
+        json={"user_confirmed": True},
+    )
+    assert readiness.status_code == 201
+    data = readiness.json()
+    hist_item = next(
+        (
+            item
+            for item in data["manual_checks"]
+            if item["id"] == "historical-reproduction-evaluation"
+        ),
+        None,
+    )
+    assert hist_item is not None
+    assert "历史口径" in hist_item["message"]
+    assert "60/100" in hist_item["message"]
+    assert "不参与当前 12 分制投稿准备度门控判定" in hist_item["message"]
