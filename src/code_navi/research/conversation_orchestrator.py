@@ -311,6 +311,18 @@ def detect_passive_tool_intent(message: str) -> list[str]:
     return matched
 
 
+_OPENING_GREETING_PATTERNS = [
+    r"^(?:你好|您好|hello|hi|嗨|姜姜你好|姜姜好|哈喽|开始|开始科研|进入科研|进入|我想开始做科研|我想做科研|开启科研|初次见面|你好姜姜|你好，姜姜|你好!|你好！)[!！~。.\s]*$",
+    r"^(?:你好|您好|hello|hi|嗨|哈喽)[，,\s]+(?:开始|进入|做)?(?:科研|开始科研)?.*$",
+]
+
+
+def is_opening_greeting_intent(message: str) -> bool:
+    """Check if message expresses a fresh session opening/greeting intent."""
+    msg = message.strip()
+    return any(re.match(p, msg, re.IGNORECASE) for p in _OPENING_GREETING_PATTERNS)
+
+
 def _has_defined_need(
     user_message: str,
     conv: ResearchConversationModel | None,
@@ -321,6 +333,8 @@ def _has_defined_need(
     profile_topic = ((conv.profile_data or {}) if conv else {}).get("topic")
     if profile_topic and isinstance(profile_topic, str) and profile_topic.strip():
         return True
+    if is_opening_greeting_intent(user_message):
+        return False
     msg_cleaned = user_message.strip()
     for pat in _CONFIRMATION_PATTERNS + _HESITATION_PATTERNS:
         msg_cleaned = re.sub(pat, "", msg_cleaned).strip("，。！？,.! ")
@@ -1264,7 +1278,9 @@ class ResearchConversationOrchestrator:
                     completed_subtasks=["明确核心研究主题与研究问题"],
                     next_goals="完善设备与时间画像，生成小目标执行计划",
                 )
-            elif not subtasks.get("need_defined") and not user_message:
+            elif not subtasks.get("need_defined") and (
+                not user_message or is_opening_greeting_intent(user_message)
+            ):
                 tmpl = build_welcome_prompt(
                     learning_context=learning_ctx,
                     direction_cards=cards_resp.cards,
@@ -1338,7 +1354,11 @@ class ResearchConversationOrchestrator:
                 hardware_info=hw,
             )
 
-        system_str = f"{tmpl['system']}\n\n【规则与指引】\n{tmpl['rules']}"
+        system_str = (
+            f"{tmpl['system']}\n\n"
+            f"【当前任务】\n{tmpl['task']}\n\n"
+            f"【规则与指引】\n{tmpl['rules']}"
+        )
         user_str = f"{tmpl['context']}\n\n【当前用户输入】\n{user_message}"
         return {"system_prompt": system_str, "user_prompt": user_str}
 

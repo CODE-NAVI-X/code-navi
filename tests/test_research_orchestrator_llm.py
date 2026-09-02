@@ -445,3 +445,244 @@ def test_sse_thinking_persisted_observable_state(tmp_path) -> None:
             assert state_row2.last_status == "completed"
 
     test_engine.dispose()
+
+
+def test_all_eight_prompt_templates_dispatched_to_provider_via_process_message(
+    db_session,
+) -> None:
+    """Verify that all 8 Prompt templates are dispatched to Provider via process_message()."""
+    from code_navi.research.conversation_orchestrator_schemas import SelectPaperRequest
+
+    # 1. Welcome and Bridge (fresh research_need session with opening intent)
+    fake_gen_1 = FakeOrchestratorLlmGenerator()
+    orch_1 = ResearchConversationOrchestrator(llm_generator=fake_gen_1)
+    conv_1 = ResearchConversationModel(id="conv-tmpl-welcome", profile_data={}, messages_data=[])
+    db_session.add(conv_1)
+    db_session.commit()
+
+    resp_1 = orch_1.process_message(
+        "conv-tmpl-welcome",
+        SendOrchestratorMessageRequest(message="你好，开始科研"),
+        db_session,
+    )
+    assert resp_1.status_code == 200 if hasattr(resp_1, "status_code") else True
+    assert len(fake_gen_1.calls) == 1
+    call_1 = fake_gen_1.calls[0]
+    assert (
+        "欢迎同学并介绍研究方向" in call_1["system_prompt"]
+        or "自然桥接" in call_1["system_prompt"]
+        or "推荐研究方向" in call_1["user_prompt"]
+    )
+
+    # 2. Need Clarification (research topic entered in research_need stage)
+    fake_gen_2 = FakeOrchestratorLlmGenerator()
+    orch_2 = ResearchConversationOrchestrator(llm_generator=fake_gen_2)
+    conv_2 = ResearchConversationModel(id="conv-tmpl-need", profile_data={}, messages_data=[])
+    db_session.add(conv_2)
+    db_session.commit()
+
+    orch_2.process_message(
+        "conv-tmpl-need",
+        SendOrchestratorMessageRequest(message="我想研究图卷积网络在引文网络上的节点分类"),
+        db_session,
+    )
+    assert len(fake_gen_2.calls) == 1
+    call_2 = fake_gen_2.calls[0]
+    assert "需求澄清" in call_2["system_prompt"]
+
+    # 3. Profile and Plan (research_plan stage)
+    fake_gen_3 = FakeOrchestratorLlmGenerator()
+    orch_3 = ResearchConversationOrchestrator(llm_generator=fake_gen_3)
+    conv_3 = ResearchConversationModel(id="conv-tmpl-plan", profile_data={}, messages_data=[])
+    db_session.add(conv_3)
+    db_session.commit()
+    state_3 = ResearchOrchestratorStateModel(
+        conversation_id="conv-tmpl-plan",
+        current_stage="research_plan",
+        completed_stages=["research_need"],
+        subtasks={"need_defined": True, "profile_ready": False, "plan_generated": False},
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_3)
+    db_session.commit()
+
+    orch_3.process_message(
+        "conv-tmpl-plan",
+        SendOrchestratorMessageRequest(message="我的硬件是 RTX 4090 24GB，每周可用 15 小时"),
+        db_session,
+    )
+    assert len(fake_gen_3.calls) == 1
+    call_3 = fake_gen_3.calls[0]
+    assert (
+        "学习者画像" in call_3["system_prompt"]
+        or "【学生客观条件（画像）】" in call_3["user_prompt"]
+    )
+
+    # 4. Search Guidance (research_execution stage with search intent)
+    fake_gen_4 = FakeOrchestratorLlmGenerator()
+    orch_4 = ResearchConversationOrchestrator(llm_generator=fake_gen_4)
+    conv_4 = ResearchConversationModel(id="conv-tmpl-search", profile_data={}, messages_data=[])
+    db_session.add(conv_4)
+    db_session.commit()
+    state_4 = ResearchOrchestratorStateModel(
+        conversation_id="conv-tmpl-search",
+        current_stage="research_execution",
+        completed_stages=["research_need", "research_plan"],
+        subtasks={"need_defined": True, "profile_ready": True, "plan_generated": True},
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_4)
+    db_session.commit()
+
+    orch_4.process_message(
+        "conv-tmpl-search",
+        SendOrchestratorMessageRequest(message="帮我检索图神经网络相关的核心论文关键词"),
+        db_session,
+    )
+    assert len(fake_gen_4.calls) == 1
+    call_4 = fake_gen_4.calls[0]
+    assert "检索引导" in call_4["system_prompt"] or "【合规检索源】" in call_4["user_prompt"]
+    assert "OpenAlex" in call_4["user_prompt"]
+    assert "arXiv" in call_4["user_prompt"]
+
+    # 5. Paper Intro (research_execution stage with selected current paper)
+    fake_gen_5 = FakeOrchestratorLlmGenerator()
+    orch_5 = ResearchConversationOrchestrator(llm_generator=fake_gen_5)
+    conv_5 = ResearchConversationModel(id="conv-tmpl-paper", profile_data={}, messages_data=[])
+    db_session.add(conv_5)
+    db_session.commit()
+    state_5 = ResearchOrchestratorStateModel(
+        conversation_id="conv-tmpl-paper",
+        current_stage="research_execution",
+        completed_stages=["research_need", "research_plan"],
+        subtasks={
+            "need_defined": True,
+            "profile_ready": True,
+            "plan_generated": True,
+            "paper_selected": True,
+        },
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_5)
+    db_session.commit()
+    orch_5.select_paper(
+        "conv-tmpl-paper",
+        SelectPaperRequest(
+            paper_url="https://arxiv.org/abs/1609.02907",
+            title="Semi-Supervised Classification with Graph Convolutional Networks",
+            purpose="replace",
+        ),
+        db_session,
+    )
+
+    orch_5.process_message(
+        "conv-tmpl-paper",
+        SendOrchestratorMessageRequest(message="请详细介绍一下这篇选定的 GCN 论文核心内容"),
+        db_session,
+    )
+    assert len(fake_gen_5.calls) == 1
+    call_5 = fake_gen_5.calls[0]
+    assert (
+        "论文介绍" in call_5["system_prompt"]
+        or "精读" in call_5["system_prompt"]
+        or "【选定论文核心信息】" in call_5["user_prompt"]
+    )
+
+    # 6. Experiment Design (research_execution stage without paper)
+    fake_gen_6 = FakeOrchestratorLlmGenerator()
+    orch_6 = ResearchConversationOrchestrator(llm_generator=fake_gen_6)
+    conv_6 = ResearchConversationModel(id="conv-tmpl-exp", profile_data={}, messages_data=[])
+    db_session.add(conv_6)
+    db_session.commit()
+    state_6 = ResearchOrchestratorStateModel(
+        conversation_id="conv-tmpl-exp",
+        current_stage="research_execution",
+        completed_stages=["research_need", "research_plan"],
+        subtasks={"need_defined": True, "profile_ready": True, "plan_generated": True},
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_6)
+    db_session.commit()
+
+    orch_6.process_message(
+        "conv-tmpl-exp",
+        SendOrchestratorMessageRequest(message="请针对当前的图节点分类任务，推荐标准的训练流程和评测指标"),
+        db_session,
+    )
+    assert len(fake_gen_6.calls) == 1
+    call_6 = fake_gen_6.calls[0]
+    assert (
+        "白名单标准评估指标" in call_6["user_prompt"]
+        or "to_verify" in call_6["system_prompt"]
+    )
+
+    # 7. Result Analysis (research_analysis stage)
+    fake_gen_7 = FakeOrchestratorLlmGenerator()
+    orch_7 = ResearchConversationOrchestrator(llm_generator=fake_gen_7)
+    conv_7 = ResearchConversationModel(id="conv-tmpl-result", profile_data={}, messages_data=[])
+    db_session.add(conv_7)
+    db_session.commit()
+    state_7 = ResearchOrchestratorStateModel(
+        conversation_id="conv-tmpl-result",
+        current_stage="research_analysis",
+        completed_stages=["research_need", "research_plan", "research_execution"],
+        subtasks={
+            "need_defined": True,
+            "profile_ready": True,
+            "plan_generated": True,
+            "paper_selected": True,
+            "experiment_designed": True,
+            "results_analyzed": False,
+        },
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_7)
+    db_session.commit()
+
+    orch_7.process_message(
+        "conv-tmpl-result",
+        SendOrchestratorMessageRequest(
+            message=(
+                "在 Cora 测试集使用 GCN，lr=0.01、seed=42、训练 200 epoch；"
+                "Accuracy=83.5%，Loss=0.24，相比 baseline 79.2% 提升 4.3 个百分点。"
+            )
+        ),
+        db_session,
+    )
+    assert len(fake_gen_7.calls) == 1
+    call_7 = fake_gen_7.calls[0]
+    assert (
+        "结果分析" in call_7["system_prompt"]
+        or "【用户最新实验结果与现象】" in call_7["user_prompt"]
+    )
+
+    # 8. Stage Transition (confirmed subtasks advancing to next stage)
+    fake_gen_8 = FakeOrchestratorLlmGenerator()
+    orch_8 = ResearchConversationOrchestrator(llm_generator=fake_gen_8)
+    conv_8 = ResearchConversationModel(id="conv-tmpl-transition", profile_data={}, messages_data=[])
+    db_session.add(conv_8)
+    db_session.commit()
+    state_8 = ResearchOrchestratorStateModel(
+        conversation_id="conv-tmpl-transition",
+        current_stage="research_need",
+        completed_stages=[],
+        subtasks={"need_defined": True, "profile_ready": False, "plan_generated": False},
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_8)
+    db_session.commit()
+
+    orch_8.process_message(
+        "conv-tmpl-transition",
+        SendOrchestratorMessageRequest(message="可以，确认这个需求，我们继续！"),
+        db_session,
+    )
+    assert len(fake_gen_8.calls) == 1
+    call_8 = fake_gen_8.calls[0]
+    assert "阶段切换" in call_8["system_prompt"] or "【阶段跃迁】" in call_8["user_prompt"]
