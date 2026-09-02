@@ -53,18 +53,32 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 
 ## 6. §2 被动能力清单（保留为按需工具）
 
-现有 §2 规则能力**全部保留，但降级为被动 / 按需**：写进 Prompt，用户主动提问时才触发，不自动进入主流程：
+现有 §2 规则能力**全部保留，但降级为被动 / 按需**：用户主动提问时才触发，不自动进入主流程。
 
-- `stage-briefing`（阶段总结）、`study-recommendations`（为科研而学）
-- `topic-difficulty-analysis`（四区 reducer）、`experiment-design`（指标目录）
-- `paper-blueprint`（五段）、`reproduction-evaluations`（六条）
+| 用户意图示例 | 触发工具 | 触发后行为 |
+| --- | --- | --- |
+| 我现在进展如何 / 总结一下 / 我们到哪了 | `stage-briefing` | 规则生成阶段总结，姜姜自然语言复述 |
+| 我该先学什么 / 要补什么知识 / 学习建议 | `study-recommendations` | 规则生成清单，姜姜逐条介绍 |
+| 这个方向难吗 / 难点在哪 / 有什么困难 | `topic-difficulty-analysis` | 四区 reducer 后按研究目标主轴叙述 |
+| 帮我设计实验 / 实验方案怎么做 / 怎么跑 | `experiment-design` | 指标白名单校验，展示方案并说明 to_verify |
+| 论文结构 / 大纲怎么写 / 五段 | `paper-blueprint` | 五段骨架，不写论文正文 |
+| 评估一下我的复现 / 准备得怎么样 / 还差什么 | `reproduction-evaluations` | 六条 0/1/2，逐条依据与改进项 |
 
-保留红线：fact/inference/to_verify、source_scope、evidence_linked ≠ 复现成功、显式检索、模型失败显式回退。界面不展示密集徽标，改由自然语言说明来源与不确定性（如「根据这篇论文的摘要」）。
+触发与编排规则：
+
+- 关键词与意图识别由编排层确定性规则判定，模型不能自由选择工具。
+- 每轮最多调用一个工具。
+- 一轮同时命中多个工具意图时：不调用任何工具，先由姜姜澄清用户优先事项。
+- 工具缺少输入、返回空态或前置条件不成立时：明确说明缺什么，禁止伪造不存在的工具结果。
+- `study-recommendations` 仍遵守既有显式确认与 409 语义；不能绕过其 `user_confirmed` 约束。
+- 工具输出只是姜姜回复的素材；回复使用自然语言说明来源、依据和不确定性，不堆叠密集徽标。
+- 不修改被调用工具本身的规则算法、事实归类和输出边界。
+- 保留红线：`fact / inference / to_verify`、`source_scope`、`evidence_linked ≠ 复现成功`、显式检索、模型失败显式回退。
 
 ## 7. 学习者画像与持久化
 
-- 画像字段：相关领域熟悉度、开发经验、参与项目、设备与显存、操作系统、Python 环境、每周可投入时间、年级与专业；多轮对话形成；变更时创建新版本。
-- 持久化：对话消息、画像（版本化）、总体/具体计划（最新确认 = 当前，旧版留历史）、单一当前论文 + 用途、阶段/子任务状态、学习端增量。
+- 画像字段：相关领域熟悉度（`domain_familiarity`）、开发经验（`dev_experience`）、参与项目（`projects`）、设备与显存（`hardware`）、操作系统（`os`）、Python 环境（`python_env`）、每周可投入时间（`weekly_hours`）、年级（`grade`）、专业（`major`）；多轮对话形成；每次有效变更创建新版本。
+- 持久化：对话消息、画像（版本化，当前版本与历史版本）、总体/具体计划（最新确认 = 当前，旧版留历史）、单一当前论文 + 用途（`replace` / `compare` / `cite`，仅 `replace` 更新当前论文）、阶段与子任务状态、换方向历史、学习端增量输入。
 
 ## 8. 联网、来源与引用
 
@@ -87,3 +101,215 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 8. 换方向 / 换论文：先澄清用途，旧内容留历史。
 9. DeepSeek 失败：显示失败与重试，阶段不误推进。
 10. 再次进入：自动恢复最近对话并吸收学习端新增内容。
+
+## 10. R1 API 契约（编排与状态层）
+
+所有端点挂载于既有 `/api/v1/research/conversations/{conversation_id}/orchestrator`，遵循现有鉴权、`owner_principal_id` 隔离与 404 隐藏边界。
+
+### 10.1 `POST .../orchestrator/messages` — 会话编排消息交互
+
+- **请求体** (`SendOrchestratorMessageRequest`)：
+  ```json
+  {
+    "message": "string (1..8000 字符)"
+  }
+  ```
+  *(注：schema 配置 `extra="forbid"`，禁止传递未审计字段)*
+- **响应体** (`OrchestratorMessageResponse`)：
+  ```json
+  {
+    "conversation_id": "string",
+    "status": "completed | failed",
+    "reply_message": {
+      "id": "string",
+      "sender": "assistant",
+      "content": "string",
+      "created_at": "iso8601",
+      "passive_tool_called": "string | null"
+    } | null,
+    "state": {
+      "current_stage": "research_need | research_plan | research_execution | research_analysis",
+      "completed_stages": ["string"],
+      "subtasks": {
+        "need_defined": true,
+        "profile_ready": false,
+        "plan_generated": false,
+        "paper_selected": false,
+        "experiment_designed": false,
+        "results_analyzed": false
+      },
+      "direction_history": [{"direction": "string", "timestamp": "iso8601"}],
+      "last_status": "thinking | completed | failed",
+      "last_error": "string | null"
+    },
+    "error": "string | null"
+  }
+  ```
+- **编排顺序**：用户消息 → 确定性意图/确认词/换方向识别 → 至多一个 §2 被动工具 → 选择 Prompt 模板并组装已确认上下文 → DeepSeek 调用 → 校验、持久化回复 → 仅由规则决定的阶段与子任务更新。
+- **错误与失败语义**：
+  - 404：会话不存在或跨 owner；
+  - 422：入参非法或携带未定义字段（所有写请求 schema 严格配置 `extra="forbid"`）；
+  - 模型/Provider 调用失败、不可用、空回复或输出校验异常时：**统一返回 HTTP 200**，`status="failed"`，返回安全可读的 `error` 字段（`reply_message` 为 `null`）；此时严格不创建 assistant 成功消息、不推进阶段、不更新子任务/计划/论文/画像版本；用户可后续通过 `retry-last` 重试。
+
+### 10.2 `POST .../orchestrator/messages/stream` — 思考生命周期 SSE 流式消息
+
+- **响应头**：`Content-Type: text/event-stream`（客户端无需显式携带 `Accept: text/event-stream`）。
+- **请求体**：同 10.1 请求体 (`SendOrchestratorMessageRequest`)。
+- **流式生命周期事件顺序**：
+  1. `event: thinking`：在调用模型生成前发出，并在数据库中持久化 `last_status="thinking"`：
+     ```
+     event: thinking
+     data: {"status": "thinking", "stage": "research_need", "message": "姜姜正在思考..."}
+     ```
+  2. 终态事件（二选一）：
+     - 成功完成时发出 `event: completed`：
+       ```
+       event: completed
+       data: <OrchestratorMessageResponse JSON (status="completed")>
+       ```
+     - 失败/不可用/校验异常时发出 `event: failed`：
+       ```
+       event: failed
+       data: <OrchestratorMessageResponse JSON (status="failed")>
+       ```
+
+### 10.3 `POST .../orchestrator/messages/retry-last` — 失败轮次重试
+
+- **请求体**：无（无需请求体）。
+- **前置条件与规则**：
+  - 仅当会话上一轮处于 `last_status == "failed"` 且存在 `last_failed_user_message` 时允许重试；
+  - 若上一轮非失败状态（如 `completed` 或正在 `thinking`），返回 `HTTP 409 Conflict`；
+  - 复用失败轮次保存的原始用户输入与已确认上下文重新调用编排流程；
+  - 重试成功前严禁推进阶段、更新子任务、修改计划或升级画像版本；
+  - 重试成功后仅发生一次合法的状态更新。
+- **响应体**：同 10.1 `OrchestratorMessageResponse`。
+
+### 10.4 `GET .../orchestrator/state` — 状态机与子任务读取
+
+- **响应体** (`OrchestratorStateResponse`)：
+  ```json
+  {
+    "conversation_id": "string",
+    "current_stage": "research_need | research_plan | research_execution | research_analysis",
+    "completed_stages": ["string"],
+    "subtasks": {
+      "need_defined": "bool",
+      "profile_ready": "bool",
+      "plan_generated": "bool",
+      "paper_selected": "bool",
+      "experiment_designed": "bool",
+      "results_analyzed": "bool"
+    },
+    "direction_history": [{"direction": "string", "timestamp": "iso8601"}],
+    "last_status": "thinking | completed | failed",
+    "last_error": "string | null"
+  }
+  ```
+
+### 10.5 `GET .../orchestrator/direction-cards` — 动态方向卡片读取
+
+- **处理**：根据已接收的 `learned_content` 与 `learning_progress` 动态生成 5 个方向卡片；无输入时诚实返回空数组 `[]`（禁止写死推荐）。
+  ```json
+  {
+    "conversation_id": "string",
+    "learned_content": "string | null",
+    "learning_progress": "string | null",
+    "cards": [
+      {
+        "id": "string",
+        "title": "string",
+        "description": "string",
+        "prerequisite_gap": "string | null",
+        "is_recommended": "bool"
+      }
+    ]
+  }
+  ```
+
+### 10.6 论文管理与用途标记
+
+- `GET .../orchestrator/papers` — 论文列表与历史读取
+  - **响应体** (`OrchestratorPapersResponse`)：
+    ```json
+    {
+      "conversation_id": "string",
+      "current_paper": {
+        "id": "string",
+        "paper_url": "string",
+        "title": "string",
+        "purpose": "replace",
+        "selected_at": "iso8601"
+      } | null,
+      "paper_history": [
+        {
+          "id": "string",
+          "paper_url": "string",
+          "title": "string",
+          "purpose": "replace | compare | cite",
+          "is_current": "bool",
+          "selected_at": "iso8601"
+        }
+      ]
+    }
+    ```
+- `POST .../orchestrator/papers/select` — 论文选择与用途标记
+  - **请求体** (`SelectPaperRequest`，配置 `extra="forbid"`)：
+    ```json
+    {
+      "paper_url": "string",
+      "title": "string",
+      "purpose": "replace | compare | cite",
+      "metadata": {}
+    }
+    ```
+  - **规则**：仅 `replace` 更新 `current_paper`；`compare` 与 `cite` 保留历史记录但不覆盖 `current_paper`。
+
+### 10.7 `GET/PUT .../orchestrator/learner-profiles` — 学习者画像版本化
+
+- `GET .../orchestrator/learner-profiles` 响应：
+  ```json
+  {
+    "current_profile": {
+      "version": 1,
+      "domain_familiarity": "string | null",
+      "dev_experience": "string | null",
+      "projects": "string | null",
+      "hardware": "string | null",
+      "os": "string | null",
+      "python_env": "string | null",
+      "weekly_hours": "string | null",
+      "grade": "string | null",
+      "major": "string | null",
+      "updated_at": "iso8601"
+    } | null,
+    "history": [
+      {
+        "version": 1,
+        "profile_data": {},
+        "change_summary": "string | null",
+        "created_at": "iso8601"
+      }
+    ]
+  }
+  ```
+- `PUT .../orchestrator/learner-profiles` 请求 (`LearnerProfileUpdateRequest`，配置 `extra="forbid"`)：传入需要更新的画像字段，若有实际有效变更则新增 version。
+
+### 10.8 `GET/PUT .../orchestrator/learning-context` — 学习端输入接收与空态
+
+- `PUT .../orchestrator/learning-context` 请求 (`LearningContextInput`，配置 `extra="forbid"`)：
+  ```json
+  {
+    "learned_content": "string | null",
+    "learning_progress": "string | null"
+  }
+  ```
+- `GET .../orchestrator/learning-context` 响应 (`LearningContextState`)：
+  ```json
+  {
+    "conversation_id": "string",
+    "learned_content": "string | null",
+    "learning_progress": "string | null",
+    "updated_at": "iso8601 | null"
+  }
+  ```
+- **规则**：两字段均可空；无数据或空态请求返回 HTTP 200 且不编造学习记录；两字段均可写入与读取；方向卡片读取学习上下文时能读到这两个字段。
