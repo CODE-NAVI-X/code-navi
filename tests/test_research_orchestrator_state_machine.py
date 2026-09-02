@@ -177,25 +177,39 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
     db_session.add(conv)
     db_session.commit()
 
-    state_model = ResearchOrchestratorStateModel(
-        conversation_id="conv-sm-analysis",
-        current_stage="research_analysis",
-        completed_stages=["research_need", "research_plan", "research_execution"],
-        subtasks={
-            "need_defined": True,
-            "profile_ready": True,
-            "plan_generated": True,
-            "paper_selected": True,
-            "experiment_designed": True,
-            "results_analyzed": False,
-        },
-        direction_history=[],
-        plan_history=[],
-    )
-    db_session.add(state_model)
-    db_session.commit()
+    def _create_state():
+        state = db_session.get(ResearchOrchestratorStateModel, "conv-sm-analysis")
+        if not state:
+            state = ResearchOrchestratorStateModel(
+                conversation_id="conv-sm-analysis",
+                current_stage="research_analysis",
+                completed_stages=["research_need", "research_plan", "research_execution"],
+                subtasks={
+                    "need_defined": True,
+                    "profile_ready": True,
+                    "plan_generated": True,
+                    "paper_selected": True,
+                    "experiment_designed": True,
+                    "results_analyzed": False,
+                },
+                direction_history=[],
+                plan_history=[],
+            )
+            db_session.add(state)
+        else:
+            state.subtasks = {
+                "need_defined": True,
+                "profile_ready": True,
+                "plan_generated": True,
+                "paper_selected": True,
+                "experiment_designed": True,
+                "results_analyzed": False,
+            }
+        db_session.commit()
 
-    # Case 1: Plain long message without experiment results -> does NOT set results_analyzed
+    _create_state()
+
+    # Case 1: Plain long message without experiment results -> False
     resp1 = orchestrator.process_message(
         "conv-sm-analysis",
         SendOrchestratorMessageRequest(message="这是一段很长的普通的讨论文本，我们接下来应该讨论什么呢？"),
@@ -203,7 +217,7 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
     )
     assert resp1.state.subtasks.results_analyzed is False
 
-    # Case 2: Pure confirmation word -> does NOT set results_analyzed
+    # Case 2: Pure confirmation word -> False
     resp2 = orchestrator.process_message(
         "conv-sm-analysis",
         SendOrchestratorMessageRequest(message="可以，确认"),
@@ -211,7 +225,7 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
     )
     assert resp2.state.subtasks.results_analyzed is False
 
-    # Case 3: Vague description without metrics or concrete logs -> does NOT set results_analyzed
+    # Case 3: Vague description without metrics or concrete logs -> False
     resp3 = orchestrator.process_message(
         "conv-sm-analysis",
         SendOrchestratorMessageRequest(message="我昨天在服务器上跑了实验，感觉运行得很顺利"),
@@ -219,15 +233,59 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
     )
     assert resp3.state.subtasks.results_analyzed is False
 
-    # Case 4: Message with traceable experiment results (metrics & values) -> sets subtask
+    # Case 4: Isolated metric value -> False
+    _create_state()
     resp4 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(message="Accuracy: 83.5%"),
+        db_session,
+    )
+    assert resp4.state.subtasks.results_analyzed is False
+
+    # Case 5: Isolated baseline number -> False
+    _create_state()
+    resp5 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(message="基线 79.2%"),
+        db_session,
+    )
+    assert resp5.state.subtasks.results_analyzed is False
+
+    # Case 6: Metrics and result but NO experimental config/context -> False
+    _create_state()
+    resp6 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(
+            message="评测结果出来了，Accuracy=83.5%，Loss=0.24，相比 baseline 79.2% 有明显提升"
+        ),
+        db_session,
+    )
+    assert resp6.state.subtasks.results_analyzed is False
+
+    # Case 7: Metrics and config but NO observation/trend/baseline comparison -> False
+    _create_state()
+    resp7 = orchestrator.process_message(
         "conv-sm-analysis",
         SendOrchestratorMessageRequest(
             message=(
-                "我们在测试集上完成了评测，Accuracy 达到 83.5%，"
-                "Loss 降到了 0.24，相比 Baseline 79.2% 有提升"
+                "在 Cora 测试集使用 GCN 模型，lr=0.01、seed=42、训练 200 epoch；"
+                "Accuracy=83.5%，Loss=0.24"
             )
         ),
         db_session,
     )
-    assert resp4.state.subtasks.results_analyzed is True
+    assert resp7.state.subtasks.results_analyzed is False
+
+    # Case 8: Complete evidence (metrics + config + comparison/observation) -> True
+    _create_state()
+    resp8 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(
+            message=(
+                "在 Cora 测试集使用 GCN，lr=0.01、seed=42、训练 200 epoch；"
+                "Accuracy=83.5%，Loss=0.24，相比 baseline 79.2% 提升。"
+            )
+        ),
+        db_session,
+    )
+    assert resp8.state.subtasks.results_analyzed is True

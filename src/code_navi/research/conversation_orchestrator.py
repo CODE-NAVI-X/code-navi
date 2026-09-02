@@ -332,13 +332,14 @@ def _has_defined_need(
 def _has_traceable_experiment_results(user_message: str) -> bool:
     """Check if user message provides verifiable, traceable experimental results evidence.
 
-    Must NOT be merely a confirmation word, vague sentiment, or question without data.
-    Requires concrete quantitative metrics, evaluation values, training logs, or explicit
-    baseline comparison figures.
+    To satisfy R1 safety bounds, results_analyzed is only set when the user provides:
+    1. Quantifiable results (metrics with explicit values, e.g. Accuracy=83.5%, Loss=0.24);
+    2. Traceable experimental context/configuration (dataset, architecture, or hyperparameters);
+    3. Analyzable observation, trend, or baseline comparison (e.g. vs baseline, improvement/drop).
     """
     msg = user_message.lower()
 
-    # 1. Pure questions or inquiries without actual data reporting are not results
+    # 1. Pure questions/inquiries without assertive evidence are rejected
     if any(q in msg for q in ["怎么", "如何", "一般用什么", "应该怎么", "哪个好", "？", "?"]):
         if not re.search(
             r"(?:acc(?:uracy)?|loss|f1|bleu|rouge|mrr|map|准确率|损失)\s*[:=达到提升是为]\s*\d+",
@@ -346,35 +347,74 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
         ):
             return False
 
-    # 2. Check for metric names paired with numerical values / percentages
-    metric_with_number_pattern = re.search(
-        r"(?:accuracy|acc|macro-f1|micro-f1|f1|loss|bleu|rouge|mrr|map|auc|recall|precision"
-        r"|top-1|top-5|准确率|损失|召回率|精确率)"
-        r"[^\w\n]{0,10}"
-        r"(?:[:=达到为是提升降低超]|\s+)?\s*"
-        r"\d+(?:\.\d+)?%?",
-        msg,
+    # 2. Quantifiable results check (metrics with concrete values / logs)
+    has_metrics = bool(
+        re.search(
+            r"(?:accuracy|acc|macro-f1|micro-f1|f1|loss|bleu|rouge|mrr|map|auc|recall|precision"
+            r"|top-1|top-5|准确率|损失|召回率|精确率)"
+            r"[^\w\n]{0,10}"
+            r"(?:[:=达到为是提升降低超]|\s+)?\s*"
+            r"\d+(?:\.\d+)?%?",
+            msg,
+        )
+        or re.search(r"(?:epoch|iter(?:ation)?)\s*\d+.*(?:loss|acc|eval|val)\s*[:=]\s*\d+", msg)
     )
-    if metric_with_number_pattern:
-        return True
+    if not has_metrics:
+        return False
 
-    # 3. Check for explicit percentage result changes vs baseline
-    baseline_comp_pattern = re.search(
-        r"(?:baseline|基线|对照组)[^\n]{0,20}\d+(?:\.\d+)?%",
-        msg,
+    # 3. Traceable experimental context / config (dataset, model, or hyperparameters)
+    has_dataset = bool(
+        re.search(
+            r"(?:cora|citeseer|pubmed|ogb|mnist|cifar|imagenet|glue|squad|cmmlu|ceval|humaneval"
+            r"|测试集|验证集|训练集|数据集|test\s*set|val\s*set|dataset|benchmark)",
+            msg,
+        )
     )
-    if baseline_comp_pattern:
-        return True
-
-    # 4. Check for structured training / evaluation log outputs
-    log_pattern = re.search(
-        r"(?:epoch|iter(?:ation)?)\s*\d+.*(?:loss|acc|eval|val)",
-        msg,
+    has_hyperparam = bool(
+        re.search(
+            r"(?:lr|learning\s*rate|学习率|batch_size|batch\s*size|bs|epoch|轮数|轮次|step|步数"
+            r"|seed|随机种子|种子|weight_decay|dropout|optimizer|优化器|adam|sgd)\s*[:=为是\s]\s*\d+",
+            msg,
+        )
+        or re.search(r"(?:训练|跑了|跑完)\s*\d+\s*(?:个)?\s*(?:epoch|轮|步)", msg)
     )
-    if log_pattern:
-        return True
+    has_model = bool(
+        re.search(
+            r"(?:gcn|gat|graphsage|gin|bert|roberta|transformer|llama|qwen|resnet|yolo"
+            r"|模型|网络|算法|架构)",
+            msg,
+        )
+    )
+    has_config = (has_dataset or has_hyperparam) and (has_dataset or has_model or has_hyperparam)
+    if not has_config:
+        return False
 
-    return False
+    # 4. Analyzable observation, trend, or baseline comparison
+    has_baseline = bool(
+        re.search(
+            r"(?:baseline|基线|对照组|对比组|sota|原始模型|benchmark\s*baseline)"
+            r"[^\n]{0,25}"
+            r"(?:\d+(?:\.\d+)?%?|提升|降低|增加|减少|高|低|差距|对比|胜过|超越)",
+            msg,
+        )
+        or re.search(
+            r"(?:相比|对比|相较于|高于|低于|超过)\s*(?:baseline|基线|对照组|sota|原始模型)",
+            msg,
+        )
+    )
+    has_phenomenon = bool(
+        re.search(
+            r"(?:明显提升|显著提升|大幅提升|持续下降|收敛|过拟合|欠拟合|泛化能力|梯度消失|梯度爆炸"
+            r"|消融实验|误差分析|性能瓶颈|表现稳定|快速收敛|波动较大|未见收敛|提升明显|提升了|降低了"
+            r"|提升|下降|改善|退化|瓶颈|improvement|converge|overfitting|ablation|gap)",
+            msg,
+        )
+    )
+    has_analysis_evidence = has_baseline or has_phenomenon
+    if not has_analysis_evidence:
+        return False
+
+    return True
 
 
 def generate_dynamic_direction_cards(
