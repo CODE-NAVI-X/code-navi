@@ -422,6 +422,9 @@ export interface ResearchConversationMessage {
   suggested_answers: string[];
   candidate_questions: string[];
   recommended_action: RecommendedAction | null;
+  triggered_tool?: string | null;
+  passive_tool_called?: string | null;
+  stage_at_time?: string | null;
 }
 
 export interface ConfirmedContextProvenance {
@@ -1480,6 +1483,336 @@ export async function fetchStudyRecommendations(
       body: JSON.stringify({ user_confirmed: userConfirmed }),
     },
   );
+}
+
+// Four-stage state machine orchestrator types
+export type OrchestratorStage =
+  | "research_need"
+  | "research_plan"
+  | "research_execution"
+  | "research_analysis";
+
+export const STAGE_DISPLAY_NAMES: Record<OrchestratorStage, string> = {
+  research_need: "研究需求确定",
+  research_plan: "研究计划生成",
+  research_execution: "研究开展",
+  research_analysis: "研究结果分析",
+};
+
+export const STAGE_SEQUENCE: OrchestratorStage[] = [
+  "research_need",
+  "research_plan",
+  "research_execution",
+  "research_analysis",
+];
+
+export type PaperUsage = "replace" | "compare" | "cite";
+
+export interface OrchestratorSubtasks {
+  need_defined: boolean;
+  profile_ready: boolean;
+  plan_generated: boolean;
+  paper_selected: boolean;
+  experiment_designed: boolean;
+  results_analyzed: boolean;
+}
+
+export interface DirectionHistoryEntry {
+  direction: string;
+  timestamp: string;
+}
+
+export interface DirectionCard {
+  id: string;
+  title: string;
+  description: string;
+  prerequisite_gap: string | null;
+  is_recommended: boolean;
+}
+
+export interface DirectionCardsResponse {
+  conversation_id: string;
+  learned_content: string | null;
+  learning_progress: string | null;
+  cards: DirectionCard[];
+}
+
+export interface OrchestratorStateResponse {
+  conversation_id: string;
+  current_stage: OrchestratorStage;
+  completed_stages: OrchestratorStage[];
+  subtasks: OrchestratorSubtasks;
+  direction_history: DirectionHistoryEntry[];
+  last_status: "thinking" | "completed" | "failed";
+  last_error: string | null;
+}
+
+export interface OrchestratorMessageReply {
+  id: string;
+  sender: "assistant";
+  content: string;
+  created_at: string;
+  passive_tool_called: string | null;
+}
+
+export interface OrchestratorMessageResponse {
+  conversation_id: string;
+  status: "completed" | "failed";
+  reply_message: OrchestratorMessageReply | null;
+  state: OrchestratorStateResponse;
+  error: string | null;
+}
+
+export interface OrchestratorPaper {
+  id: string;
+  paper_url: string;
+  title: string;
+  purpose: PaperUsage;
+  is_current: boolean;
+  metadata_snapshot: Record<string, unknown>;
+  selected_at: string;
+}
+
+export interface CurrentPaperCard {
+  id: string;
+  paper_url: string;
+  title: string;
+  purpose: PaperUsage;
+  metadata_snapshot: Record<string, unknown>;
+  selected_at: string;
+}
+
+export interface OrchestratorPapersResponse {
+  conversation_id: string;
+  current_paper: CurrentPaperCard | null;
+  paper_history: OrchestratorPaper[];
+}
+
+export interface SelectPaperRequest {
+  paper_url: string;
+  title: string;
+  purpose?: PaperUsage;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LearnerProfileData {
+  domain_familiarity?: string | null;
+  dev_experience?: string | null;
+  projects?: string | null;
+  hardware?: string | null;
+  os?: string | null;
+  python_env?: string | null;
+  weekly_hours?: string | null;
+  grade?: string | null;
+  major?: string | null;
+}
+
+export interface LearnerProfileVersion {
+  version: number;
+  profile_data: LearnerProfileData;
+  change_summary: string | null;
+  created_at: string;
+  is_current: boolean;
+}
+
+export interface LearnerProfileResponse {
+  conversation_id: string;
+  current_profile: LearnerProfileData | null;
+  current_version: number | null;
+  history: LearnerProfileVersion[];
+}
+
+export interface LearningContextState {
+  conversation_id: string;
+  learned_content: string | null;
+  learning_progress: string | null;
+  updated_at: string | null;
+}
+
+export async function getOrchestratorState(
+  conversationId: string,
+): Promise<OrchestratorStateResponse> {
+  return request<OrchestratorStateResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/state`,
+  );
+}
+
+export async function getOrchestratorDirectionCards(
+  conversationId: string,
+): Promise<DirectionCardsResponse> {
+  return request<DirectionCardsResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/direction-cards`,
+  );
+}
+
+export async function getOrchestratorPapers(
+  conversationId: string,
+): Promise<OrchestratorPapersResponse> {
+  return request<OrchestratorPapersResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/papers`,
+  );
+}
+
+export async function selectOrchestratorPaper(
+  conversationId: string,
+  payload: SelectPaperRequest,
+): Promise<OrchestratorPapersResponse> {
+  return request<OrchestratorPapersResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/papers/select`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function getOrchestratorLearnerProfiles(
+  conversationId: string,
+): Promise<LearnerProfileResponse> {
+  return request<LearnerProfileResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/learner-profiles`,
+  );
+}
+
+export async function updateOrchestratorLearnerProfile(
+  conversationId: string,
+  payload: Partial<LearnerProfileData> & { change_summary?: string },
+): Promise<LearnerProfileResponse> {
+  return request<LearnerProfileResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/learner-profiles`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function getOrchestratorLearningContext(
+  conversationId: string,
+): Promise<LearningContextState> {
+  return request<LearningContextState>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/learning-context`,
+  );
+}
+
+export async function updateOrchestratorLearningContext(
+  conversationId: string,
+  payload: { learned_content?: string | null; learning_progress?: string | null },
+): Promise<LearningContextState> {
+  return request<LearningContextState>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/learning-context`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function sendOrchestratorMessage(
+  conversationId: string,
+  message: string,
+): Promise<OrchestratorMessageResponse> {
+  return request<OrchestratorMessageResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    },
+    MODEL_TURN_TIMEOUT_MS,
+  );
+}
+
+export async function retryLastOrchestratorMessage(
+  conversationId: string,
+): Promise<OrchestratorMessageResponse> {
+  return request<OrchestratorMessageResponse>(
+    `/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/messages/retry-last`,
+    {
+      method: "POST",
+    },
+    MODEL_TURN_TIMEOUT_MS,
+  );
+}
+
+export async function streamOrchestratorMessage(
+  conversationId: string,
+  message: string,
+  callbacks: {
+    onThinking?: (data: { status: string; stage: string; message: string }) => void;
+    onCompleted?: (response: OrchestratorMessageResponse) => void;
+    onFailed?: (response: OrchestratorMessageResponse) => void;
+    onError?: (error: Error) => void;
+  },
+): Promise<void> {
+  const url = `${API_BASE}/api/v1/research/conversations/${encodeURIComponent(conversationId)}/orchestrator/messages/stream`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  };
+  const csrf = getStoredCsrfToken();
+  if (csrf) {
+    headers["X-CSRF-Token"] = csrf;
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify({ message }),
+  });
+  if (!response.ok) {
+    const info = await errorInfo(response);
+    throw new ResearchApiError(
+      response.status,
+      info.message ?? `科研服务流式请求失败（HTTP ${response.status}）。`,
+    );
+  }
+  if (!response.body) {
+    throw new ResearchApiError(502, "科研服务未返回流式响应体。");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        const lines = part.split("\n");
+        let eventType = "message";
+        let dataStr = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventType = line.slice("event:".length).trim();
+          } else if (line.startsWith("data:")) {
+            dataStr = line.slice("data:".length).trim();
+          }
+        }
+        if (!dataStr) continue;
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (eventType === "thinking") {
+            callbacks.onThinking?.(parsed);
+          } else if (eventType === "completed") {
+            callbacks.onCompleted?.(parsed as OrchestratorMessageResponse);
+          } else if (eventType === "failed") {
+            callbacks.onFailed?.(parsed as OrchestratorMessageResponse);
+          }
+        } catch (parseError) {
+          console.error("SSE parse error", parseError, dataStr);
+        }
+      }
+    }
+  } catch (streamError) {
+    if (streamError instanceof Error) {
+      callbacks.onError?.(streamError);
+    }
+    throw streamError;
+  }
 }
 
 function validateConversationResponse(data: unknown): ResearchConversationResponse {
