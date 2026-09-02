@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isPracticeContextV1, type PracticeContextV1 } from "@/lib/practice-context";
 
 export interface FlowPayload {
   sessionId: string;
@@ -13,6 +14,12 @@ export interface FlowPayload {
     /** Seed topic handed to the research conversation, when leaving from learning. */
     researchTopic?: string;
   };
+  /**
+   * §3.1 practice-context.v1 upgrade of the legacy topic-only hand-off.
+   * Optional: payloads written before the upgrade (and payloads for the
+   * research target) keep working unchanged.
+   */
+  practiceContext?: PracticeContextV1;
 }
 
 interface FlowState {
@@ -52,6 +59,12 @@ export function getPersistedFlowPayload(): FlowPayload | null {
       typeof parsed.masteredKnowledgePoint?.id !== "string" ||
       typeof parsed.masteredKnowledgePoint?.name !== "string"
     ) return null;
+    // Backward compat: payloads cached before the practice-context.v1 upgrade
+    // have no context block; a corrupted one is dropped without invalidating
+    // the rest of the payload.
+    if (parsed.practiceContext !== undefined && !isPracticeContextV1(parsed.practiceContext)) {
+      delete parsed.practiceContext;
+    }
     return parsed as FlowPayload;
   } catch {
     return null;

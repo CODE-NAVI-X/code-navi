@@ -7,10 +7,24 @@
  * knowledge/session and workspace context query params. Centralising that keeps
  * the three call sites (ExplanationCard, SlideViewer, DownstreamGoCard) from
  * drifting apart.
+ *
+ * For practice the payload now carries the §3.1 ``practice-context.v1``
+ * structure (see ``@/lib/practice-context``) in addition to the legacy
+ * topic-only fields; the URL stays a light pointer — the full body is submitted
+ * through ``POST /api/v1/practice/sets/generate``'s ``context`` field.
  */
 
 import { createLearningToResearchContext } from "@/lib/api/context-transfers";
 import { setFlowPayload } from "@/lib/store/flow-store";
+import { type PracticeContextV1 } from "@/lib/practice-context";
+
+export {
+  buildPracticeContextV1,
+  fetchKnowledgePointMastery,
+  PRACTICE_CONTEXT_VERSION,
+  type PracticeContextKnowledgePoint,
+  type PracticeContextV1,
+} from "@/lib/practice-context";
 
 export const LEARNING_PRACTICE_ROUTE = "/learning/practice";
 const LEARNING_CONTEXT_QUERY_KEYS = [
@@ -52,6 +66,8 @@ export interface PracticeFlowOptions {
   sessionId: string;
   exerciseIds?: string[];
   currentSearchParams?: SearchParamsLike;
+  /** §3.1 structured context; omit for the legacy topic-only hand-off. */
+  practiceContext?: PracticeContextV1;
 }
 
 function currentBrowserSearchParams(): URLSearchParams | null {
@@ -95,6 +111,7 @@ export function navigateToPractice(
     payloadData: {
       exerciseIds: options.exerciseIds,
     },
+    practiceContext: options.practiceContext,
   });
   navigator.push(buildPracticeHref(options));
 }

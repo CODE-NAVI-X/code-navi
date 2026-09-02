@@ -3,10 +3,15 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getLearningSessionId } from "@/lib/api/learning";
+import { getLocalProfileId } from "@/lib/api/workspaces";
 import {
+  buildPracticeContextV1,
+  fetchKnowledgePointMastery,
   navigateToPractice,
   navigateToResearch,
+  type PracticeContextV1,
 } from "@/lib/learning-context";
+import { PracticeContextDialog } from "@/components/learning/PracticeContextDialog";
 import {
   BookOpenCheck,
   GraduationCap,
@@ -35,17 +40,73 @@ export function DownstreamGoCard({
   const router = useRouter();
   const [researching, setResearching] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
+  const [practiceDraft, setPracticeDraft] = useState<PracticeContextV1 | null>(null);
+  const [practiceDraftBusy, setPracticeDraftBusy] = useState(false);
+  const [practiceDraftError, setPracticeDraftError] = useState<string | null>(null);
 
   const handleGoToPractice = useCallback(() => {
     // Resolved on click, so an unmounted-yet parent never forwards an empty id.
     const effectiveSessionId = sessionId || getLearningSessionId();
-    navigateToPractice(router, {
-      knowledgePoint,
-      knowledgePointId,
-      sessionId: effectiveSessionId,
-      exerciseIds: ["ex_practice_01", "ex_practice_02"],
-    });
+    setPracticeDraftError(null);
+    setPracticeDraftBusy(true);
+    // Build the §3.1 draft before the jump: mastery comes only from the real
+    // portrait (null when the portrait has no sufficient sample), the objective
+    // is the user's own topic wording, and the explain record is the source ref.
+    void (async () => {
+      try {
+        const mastery = await fetchKnowledgePointMastery(getLocalProfileId(), [
+          knowledgePoint,
+        ]);
+        const draft = buildPracticeContextV1({
+          sourceSessionId: effectiveSessionId,
+          knowledgePoints: [
+            {
+              name: knowledgePoint,
+              sourceRef: knowledgePointId || knowledgePoint,
+              mastery: mastery[knowledgePoint.trim().toLowerCase()] ?? null,
+            },
+          ],
+          objective: knowledgePoint,
+        });
+        if (draft) {
+          setPracticeDraft(draft);
+        } else {
+          navigateToPractice(router, {
+            knowledgePoint,
+            knowledgePointId,
+            sessionId: effectiveSessionId,
+            exerciseIds: ["ex_practice_01", "ex_practice_02"],
+          });
+        }
+      } catch {
+        // Portrait lookup must never block the jump: fall back to the legacy
+        // topic-only hand-off.
+        navigateToPractice(router, {
+          knowledgePoint,
+          knowledgePointId,
+          sessionId: effectiveSessionId,
+          exerciseIds: ["ex_practice_01", "ex_practice_02"],
+        });
+      } finally {
+        setPracticeDraftBusy(false);
+      }
+    })();
   }, [knowledgePoint, knowledgePointId, sessionId, router]);
+
+  const confirmPracticeContext = useCallback(
+    (context: PracticeContextV1 | null) => {
+      const effectiveSessionId = sessionId || getLearningSessionId();
+      setPracticeDraft(null);
+      navigateToPractice(router, {
+        knowledgePoint,
+        knowledgePointId,
+        sessionId: effectiveSessionId,
+        exerciseIds: ["ex_practice_01", "ex_practice_02"],
+        practiceContext: context ?? undefined,
+      });
+    },
+    [knowledgePoint, knowledgePointId, sessionId, router],
+  );
 
   const handleGoToResearch = useCallback(async () => {
     const effectiveSessionId = sessionId || getLearningSessionId();
@@ -89,7 +150,7 @@ export function DownstreamGoCard({
       <div className="flex flex-wrap gap-2">
         <button
           onClick={handleGoToPractice}
-          disabled={researching}
+          disabled={researching || practiceDraftBusy}
             className="app-button-primary flex cursor-pointer items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium transition hover:bg-slate-800 active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
         >
           <Terminal className="h-3.5 w-3.5" strokeWidth={1.5} />
@@ -125,6 +186,17 @@ export function DownstreamGoCard({
           {researchError}
         </p>
       )}
+
+      {practiceDraft ? (
+        <PracticeContextDialog
+          context={practiceDraft}
+          busy={practiceDraftBusy}
+          error={practiceDraftError}
+          onConfirm={(confirmed) => confirmPracticeContext(confirmed)}
+          onClear={() => confirmPracticeContext(null)}
+          onCancel={() => setPracticeDraft(null)}
+        />
+      ) : null}
     </section>
   );
 }
