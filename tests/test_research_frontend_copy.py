@@ -421,7 +421,15 @@ def test_research_page_groups_paper_analysis_and_mindmap_before_the_workbench() 
 
 
 def test_research_primary_content_does_not_use_ten_or_eleven_pixel_text() -> None:
-    for path in (WORKSPACE, PROFILE, WORKFLOW, PAPER_ANALYSIS, PROGRESS, DIRECTION_CARDS, CANDIDATE_PAPER):
+    for path in (
+        WORKSPACE,
+        PROFILE,
+        WORKFLOW,
+        PAPER_ANALYSIS,
+        PROGRESS,
+        DIRECTION_CARDS,
+        CANDIDATE_PAPER,
+    ):
         source = path.read_text(encoding="utf-8")
         assert "text-[10px]" not in source
         assert "text-[11px]" not in source
