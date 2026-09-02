@@ -298,9 +298,20 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
     )
     assert resp9.state.subtasks.results_analyzed is False
 
-    # Case 10: Complete evidence with explicit occurred baseline comparison -> True
+    # Case 10: Listing baseline value without comparative conclusion + inquiry -> False
     _create_state()
     resp10 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(
+            message="在 Cora 测试集使用 GCN，lr=0.01，Accuracy=83.5%，baseline=79.2%，如何提升？"
+        ),
+        db_session,
+    )
+    assert resp10.state.subtasks.results_analyzed is False
+
+    # Case 11: Complete evidence with explicit occurred baseline comparison -> True
+    _create_state()
+    resp11 = orchestrator.process_message(
         "conv-sm-analysis",
         SendOrchestratorMessageRequest(
             message=(
@@ -310,4 +321,4 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
         ),
         db_session,
     )
-    assert resp10.state.subtasks.results_analyzed is True
+    assert resp11.state.subtasks.results_analyzed is True

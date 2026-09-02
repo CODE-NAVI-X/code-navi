@@ -384,19 +384,6 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
         return False
 
     # 3. Asserted, already-occurred observation, trend, or baseline comparison
-    has_baseline = bool(
-        re.search(
-            r"(?:baseline|基线|对照组|对比组|sota|原始模型|benchmark\s*baseline)"
-            r"[^\n]{0,30}"
-            r"(?:\d+(?:\.\d+)?%?|提升|降低|增加|减少|高|低|差距|对比|胜过|超越)",
-            msg,
-        )
-        or re.search(
-            r"(?:相比|对比|相较于|高于|低于|超过)\s*(?:baseline|基线|对照组|sota|原始模型)",
-            msg,
-        )
-    )
-
     # Exclude future desires or inquiry phrases from counting as asserted observations
     cleaned_for_phenomenon = re.sub(
         r"(?:如何|怎样|怎么|如何去|怎么去|还需要|需要|还要|希望|能否|想|打算|准备)\s*"
@@ -404,6 +391,26 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
         "",
         msg,
     )
+
+    # Must contain an explicit comparative relation / predicate against baseline
+    # Merely listing "baseline=79.2%" or "基线 79%" without a comparative predicate does not qualify
+    has_baseline = bool(
+        re.search(
+            r"(?:相比|对比|相较于|较|比)\s*(?:baseline|基线|对照组|对比组|sota|原始模型)"
+            r"[^\n]{0,30}"
+            r"(?:提升|提高|增加|降低|减少|高出|低出|胜过|超越|超出|落后|改善|优于|差于|好于)",
+            cleaned_for_phenomenon,
+        )
+        or re.search(
+            r"(?:高于|低于|超过|胜过|落后于|好于|差于|优于)\s*(?:baseline|基线|对照组|对比组|sota|原始模型)",
+            cleaned_for_phenomenon,
+        )
+        or re.search(
+            r"(?:提升|提高|增加|高出|超出|降低|减少)\s*(?:了)?\s*\d+(?:\.\d+)?\s*(?:%|个百分点)",
+            cleaned_for_phenomenon,
+        )
+    )
+
     has_phenomenon = bool(
         re.search(
             r"(?:明显提升|显著提升|大幅提升|提升明显|提升了|提高了|下降了|降低了|持续下降"
