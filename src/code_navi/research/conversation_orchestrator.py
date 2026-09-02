@@ -335,19 +335,13 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
     To satisfy R1 safety bounds, results_analyzed is only set when the user provides:
     1. Quantifiable results (metrics with explicit values, e.g. Accuracy=83.5%, Loss=0.24);
     2. Traceable experimental context/configuration (dataset, architecture, or hyperparameters);
-    3. Analyzable observation, trend, or baseline comparison (e.g. vs baseline, improvement/drop).
+    3. Asserted, already-occurred observation, trend, or explicit baseline comparison.
+
+    Ungrounded desires ("还需要提升"), inquiries ("如何提升？"), or isolated numbers do not qualify.
     """
     msg = user_message.lower()
 
-    # 1. Pure questions/inquiries without assertive evidence are rejected
-    if any(q in msg for q in ["怎么", "如何", "一般用什么", "应该怎么", "哪个好", "？", "?"]):
-        if not re.search(
-            r"(?:acc(?:uracy)?|loss|f1|bleu|rouge|mrr|map|准确率|损失)\s*[:=达到提升是为]\s*\d+",
-            msg,
-        ):
-            return False
-
-    # 2. Quantifiable results check (metrics with concrete values / logs)
+    # 1. Quantifiable results check (metrics with concrete values / logs)
     has_metrics = bool(
         re.search(
             r"(?:accuracy|acc|macro-f1|micro-f1|f1|loss|bleu|rouge|mrr|map|auc|recall|precision"
@@ -362,7 +356,7 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
     if not has_metrics:
         return False
 
-    # 3. Traceable experimental context / config (dataset, model, or hyperparameters)
+    # 2. Traceable experimental context / config (dataset, model, or hyperparameters)
     has_dataset = bool(
         re.search(
             r"(?:cora|citeseer|pubmed|ogb|mnist|cifar|imagenet|glue|squad|cmmlu|ceval|humaneval"
@@ -389,11 +383,11 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
     if not has_config:
         return False
 
-    # 4. Analyzable observation, trend, or baseline comparison
+    # 3. Asserted, already-occurred observation, trend, or baseline comparison
     has_baseline = bool(
         re.search(
             r"(?:baseline|基线|对照组|对比组|sota|原始模型|benchmark\s*baseline)"
-            r"[^\n]{0,25}"
+            r"[^\n]{0,30}"
             r"(?:\d+(?:\.\d+)?%?|提升|降低|增加|减少|高|低|差距|对比|胜过|超越)",
             msg,
         )
@@ -402,14 +396,24 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
             msg,
         )
     )
+
+    # Exclude future desires or inquiry phrases from counting as asserted observations
+    cleaned_for_phenomenon = re.sub(
+        r"(?:如何|怎样|怎么|如何去|怎么去|还需要|需要|还要|希望|能否|想|打算|准备)\s*"
+        r"(?:提升|提高|改进|优化|改善|调整)",
+        "",
+        msg,
+    )
     has_phenomenon = bool(
         re.search(
-            r"(?:明显提升|显著提升|大幅提升|持续下降|收敛|过拟合|欠拟合|泛化能力|梯度消失|梯度爆炸"
-            r"|消融实验|误差分析|性能瓶颈|表现稳定|快速收敛|波动较大|未见收敛|提升明显|提升了|降低了"
-            r"|提升|下降|改善|退化|瓶颈|improvement|converge|overfitting|ablation|gap)",
-            msg,
+            r"(?:明显提升|显著提升|大幅提升|提升明显|提升了|提高了|下降了|降低了|持续下降"
+            r"|收敛于|快速收敛|平稳收敛|未见收敛|收敛稳定|出现过拟合|发生欠拟合|过拟合现象"
+            r"|梯度消失|梯度爆炸|消融实验表明|误差分析发现|性能瓶颈在"
+            r"|converged|overfitting|ablation)",
+            cleaned_for_phenomenon,
         )
     )
+
     has_analysis_evidence = has_baseline or has_phenomenon
     if not has_analysis_evidence:
         return False

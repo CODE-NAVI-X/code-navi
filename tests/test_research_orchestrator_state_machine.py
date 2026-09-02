@@ -276,16 +276,38 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
     )
     assert resp7.state.subtasks.results_analyzed is False
 
-    # Case 8: Complete evidence (metrics + config + comparison/observation) -> True
+    # Case 8: Questions asking how to improve without asserted baseline/trend -> False
     _create_state()
     resp8 = orchestrator.process_message(
         "conv-sm-analysis",
         SendOrchestratorMessageRequest(
+            message="在 Cora 测试集使用 GCN，lr=0.01、seed=42，Accuracy=83.5%，如何提升？"
+        ),
+        db_session,
+    )
+    assert resp8.state.subtasks.results_analyzed is False
+
+    # Case 9: Future intention / desires without asserted baseline/trend -> False
+    _create_state()
+    resp9 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(
+            message="在测试集上 Accuracy=83.5%，结果还需要提升"
+        ),
+        db_session,
+    )
+    assert resp9.state.subtasks.results_analyzed is False
+
+    # Case 10: Complete evidence with explicit occurred baseline comparison -> True
+    _create_state()
+    resp10 = orchestrator.process_message(
+        "conv-sm-analysis",
+        SendOrchestratorMessageRequest(
             message=(
                 "在 Cora 测试集使用 GCN，lr=0.01、seed=42、训练 200 epoch；"
-                "Accuracy=83.5%，Loss=0.24，相比 baseline 79.2% 提升。"
+                "Accuracy=83.5%，Loss=0.24，相比 baseline 79.2% 提升 4.3 个百分点。"
             )
         ),
         db_session,
     )
-    assert resp8.state.subtasks.results_analyzed is True
+    assert resp10.state.subtasks.results_analyzed is True
