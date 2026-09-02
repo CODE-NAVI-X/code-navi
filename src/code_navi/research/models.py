@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Column, DateTime, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String
 
 from code_navi.db import Base
 
@@ -201,3 +201,60 @@ class ResearchSubmissionProfileModel(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class ResearchOrchestratorStateModel(Base):
+    """Four-stage state machine, subtasks, direction history, and learning context."""
+
+    __tablename__ = "research_orchestrator_states"
+
+    conversation_id = Column(String(36), primary_key=True)
+    current_stage = Column(String(32), nullable=False, default="research_need")
+    completed_stages = Column(JSON, nullable=False, default=list)
+    subtasks = Column(JSON, nullable=False, default=dict)
+    direction_history = Column(JSON, nullable=False, default=list)
+    current_plan = Column(JSON, nullable=True)
+    plan_history = Column(JSON, nullable=False, default=list)
+    learning_context = Column(JSON, nullable=True)
+    last_status = Column(String(32), nullable=False, default="completed")
+    last_error = Column(String(1000), nullable=True)
+    last_failed_user_message = Column(String(8000), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+    owner_principal_id = Column(String(36), nullable=True, index=True)
+
+
+class ResearchLearnerProfileModel(Base):
+    """Versioned learner profile history with single current active version."""
+
+    __tablename__ = "research_learner_profiles"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String(36), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    is_current = Column(Boolean, nullable=False, default=True)
+    profile_data = Column(JSON, nullable=False, default=dict)
+    change_summary = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    owner_principal_id = Column(String(36), nullable=True, index=True)
+
+
+class ResearchOrchestratorPaperModel(Base):
+    """Single current paper and usage tracking (replace, compare, cite)."""
+
+    __tablename__ = "research_orchestrator_papers"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String(36), nullable=False, index=True)
+    paper_url = Column(String(1000), nullable=False)
+    title = Column(String(500), nullable=False)
+    purpose = Column(String(32), nullable=False, default="replace")
+    is_current = Column(Boolean, nullable=False, default=True)
+    metadata_snapshot = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    owner_principal_id = Column(String(36), nullable=True, index=True)

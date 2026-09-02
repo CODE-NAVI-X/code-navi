@@ -22,6 +22,22 @@ from .conversation_guidance_schemas import (
     StudyRecommendationRequest,
     StudyRecommendationsResponse,
 )
+from .conversation_orchestrator import (
+    OrchestratorRetryNotApplicableError,
+    ResearchConversationOrchestrator,
+)
+from .conversation_orchestrator_schemas import (
+    DirectionCardsResponse,
+    LearnerProfileResponse,
+    LearnerProfileUpdateRequest,
+    LearningContextInput,
+    LearningContextState,
+    OrchestratorMessageResponse,
+    OrchestratorPapersResponse,
+    OrchestratorStateResponse,
+    SelectPaperRequest,
+    SendOrchestratorMessageRequest,
+)
 from .conversation_schemas import (
     AnalyzeConversationPaperRequest,
     ApplyRevisionSuggestionRequest,
@@ -128,6 +144,7 @@ _conversation_service = ResearchConversationService()
 _conversation_guidance_service = ResearchConversationGuidanceService()
 _conversation_search_service = ResearchConversationSearchService()
 _reproduction_evaluation_service = ReproductionEvaluationService()
+_conversation_orchestrator = ResearchConversationOrchestrator()
 _db_dependency = Depends(get_db)
 _opt_principal_dep = Depends(get_optional_principal)
 
@@ -1310,3 +1327,256 @@ def create_evidence_bundle(
         ) from error
     except ResearchPlanRequiredError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/orchestrator/messages",
+    response_model=OrchestratorMessageResponse,
+)
+def send_orchestrator_message(
+    conversation_id: str,
+    request: SendOrchestratorMessageRequest,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> OrchestratorMessageResponse:
+    """Send a message to Jiang Jiang with deterministic state machine and tool orchestration."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.process_message(
+            conversation_id,
+            request,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/orchestrator/messages/retry-last",
+    response_model=OrchestratorMessageResponse,
+)
+def retry_last_orchestrator_message(
+    conversation_id: str,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> OrchestratorMessageResponse:
+    """Retry the last failed turn in the conversation orchestrator."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.retry_last_message(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+    except OrchestratorRetryNotApplicableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/orchestrator/state",
+    response_model=OrchestratorStateResponse,
+)
+def get_orchestrator_state(
+    conversation_id: str,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> OrchestratorStateResponse:
+    """Read the four-stage state machine and subtasks status for a conversation."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.get_or_create_state(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/orchestrator/direction-cards",
+    response_model=DirectionCardsResponse,
+)
+def get_orchestrator_direction_cards(
+    conversation_id: str,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> DirectionCardsResponse:
+    """Get dynamically generated direction cards based on learning input."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.get_direction_cards(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/orchestrator/papers",
+    response_model=OrchestratorPapersResponse,
+)
+def get_orchestrator_papers(
+    conversation_id: str,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> OrchestratorPapersResponse:
+    """Get current active paper and full selection history."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.get_papers(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/orchestrator/papers/select",
+    response_model=OrchestratorPapersResponse,
+)
+def select_orchestrator_paper(
+    conversation_id: str,
+    request: SelectPaperRequest,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> OrchestratorPapersResponse:
+    """Select a paper with explicit purpose (replace, compare, cite)."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.select_paper(
+            conversation_id,
+            request,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/orchestrator/learner-profiles",
+    response_model=LearnerProfileResponse,
+)
+def get_orchestrator_learner_profiles(
+    conversation_id: str,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> LearnerProfileResponse:
+    """Get current learner profile version and history."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.get_learner_profiles(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.put(
+    "/conversations/{conversation_id}/orchestrator/learner-profiles",
+    response_model=LearnerProfileResponse,
+)
+def update_orchestrator_learner_profile(
+    conversation_id: str,
+    request: LearnerProfileUpdateRequest,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> LearnerProfileResponse:
+    """Update learner profile, creating a new version."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.update_learner_profile(
+            conversation_id,
+            request,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.get(
+    "/conversations/{conversation_id}/orchestrator/learning-context",
+    response_model=LearningContextState,
+)
+def get_orchestrator_learning_context(
+    conversation_id: str,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> LearningContextState:
+    """Get learning input context or empty state."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.get_learning_context(
+            conversation_id,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.put(
+    "/conversations/{conversation_id}/orchestrator/learning-context",
+    response_model=LearningContextState,
+)
+def update_orchestrator_learning_context(
+    conversation_id: str,
+    request: LearningContextInput,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> LearningContextState:
+    """Receive and store learning context inputs."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        return _conversation_orchestrator.update_learning_context(
+            conversation_id,
+            request,
+            db,
+            owned_ids=owned_ids,
+        )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error

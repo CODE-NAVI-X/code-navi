@@ -826,5 +826,80 @@ def test_classroom_member_note_migration(
     command.upgrade(config, "head")
 
 
+def test_research_orchestrator_migration_adds_tables_on_current_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision 0025 adds research orchestrator tables and drops them on downgrade."""
+    database_url = f"sqlite:///{tmp_path / 'orchestrator-upgrade.db'}"
+    monkeypatch.setenv("CODE_NAVI_DATABASE_URL", database_url)
+    config = _alembic_config(database_url)
+    command.upgrade(config, "research_artifacts_and_practice_heads_v1")
 
+    engine = create_engine(database_url)
+    try:
+        tables_before = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
 
+    assert "research_orchestrator_states" not in tables_before
+    assert "research_learner_profiles" not in tables_before
+    assert "research_orchestrator_papers" not in tables_before
+
+    # Upgrade to head (0025_research_orchestrator_state_v1)
+    command.upgrade(config, "head")
+
+    engine = create_engine(database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        with engine.begin() as connection:
+            from sqlalchemy import text
+
+            connection.execute(
+                text(
+                    "INSERT INTO research_orchestrator_states "
+                    "(conversation_id, current_stage, completed_stages, subtasks, "
+                    "direction_history, plan_history, last_status, created_at, updated_at) "
+                    "VALUES ('conv-orch-1', 'research_need', '[]', '{}', '[]', '[]', "
+                    "'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO research_learner_profiles "
+                    "(id, conversation_id, version, is_current, profile_data, created_at) "
+                    "VALUES ('prof-orch-1', 'conv-orch-1', 1, 1, '{}', CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO research_orchestrator_papers "
+                    "(id, conversation_id, paper_url, title, purpose, is_current, "
+                    "metadata_snapshot, created_at) "
+                    "VALUES ('paper-orch-1', 'conv-orch-1', 'https://arxiv.org/abs/1234', "
+                    "'Test Paper', 'replace', 1, '{}', CURRENT_TIMESTAMP)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    assert {
+        "research_orchestrator_states",
+        "research_learner_profiles",
+        "research_orchestrator_papers",
+    } <= tables
+
+    # Downgrade to research_artifacts_and_practice_heads_v1
+    command.downgrade(config, "research_artifacts_and_practice_heads_v1")
+    engine = create_engine(database_url)
+    try:
+        tables_after = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+    assert "research_orchestrator_states" not in tables_after
+    assert "research_learner_profiles" not in tables_after
+    assert "research_orchestrator_papers" not in tables_after
+
+    # Re-upgrade to head
+    command.upgrade(config, "head")
