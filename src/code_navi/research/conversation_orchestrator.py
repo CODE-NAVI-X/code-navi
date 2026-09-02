@@ -329,6 +329,54 @@ def _has_defined_need(
     return False
 
 
+def _has_traceable_experiment_results(user_message: str) -> bool:
+    """Check if user message provides verifiable, traceable experimental results evidence.
+
+    Must NOT be merely a confirmation word, vague sentiment, or question without data.
+    Requires concrete quantitative metrics, evaluation values, training logs, or explicit
+    baseline comparison figures.
+    """
+    msg = user_message.lower()
+
+    # 1. Pure questions or inquiries without actual data reporting are not results
+    if any(q in msg for q in ["怎么", "如何", "一般用什么", "应该怎么", "哪个好", "？", "?"]):
+        if not re.search(
+            r"(?:acc(?:uracy)?|loss|f1|bleu|rouge|mrr|map|准确率|损失)\s*[:=达到提升是为]\s*\d+",
+            msg,
+        ):
+            return False
+
+    # 2. Check for metric names paired with numerical values / percentages
+    metric_with_number_pattern = re.search(
+        r"(?:accuracy|acc|macro-f1|micro-f1|f1|loss|bleu|rouge|mrr|map|auc|recall|precision"
+        r"|top-1|top-5|准确率|损失|召回率|精确率)"
+        r"[^\w\n]{0,10}"
+        r"(?:[:=达到为是提升降低超]|\s+)?\s*"
+        r"\d+(?:\.\d+)?%?",
+        msg,
+    )
+    if metric_with_number_pattern:
+        return True
+
+    # 3. Check for explicit percentage result changes vs baseline
+    baseline_comp_pattern = re.search(
+        r"(?:baseline|基线|对照组)[^\n]{0,20}\d+(?:\.\d+)?%",
+        msg,
+    )
+    if baseline_comp_pattern:
+        return True
+
+    # 4. Check for structured training / evaluation log outputs
+    log_pattern = re.search(
+        r"(?:epoch|iter(?:ation)?)\s*\d+.*(?:loss|acc|eval|val)",
+        msg,
+    )
+    if log_pattern:
+        return True
+
+    return False
+
+
 def generate_dynamic_direction_cards(
     learned_content: str | None,
     learning_progress: str | None,
@@ -1112,7 +1160,7 @@ class ResearchConversationOrchestrator:
                 state_model.completed_stages = completed_stages
 
         elif current_stage == "research_analysis":
-            if is_confirmed or len(user_message) > 10:
+            if _has_traceable_experiment_results(user_message):
                 subtasks["results_analyzed"] = True
                 state_model.subtasks = subtasks
 

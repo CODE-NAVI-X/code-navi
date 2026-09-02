@@ -84,7 +84,7 @@ class LearnerProfileResponse(BaseModel):
 
 
 class LearnerProfileUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     domain_familiarity: str | None = None
     dev_experience: str | None = None
@@ -130,7 +130,7 @@ class OrchestratorPapersResponse(BaseModel):
 
 
 class SelectPaperRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     paper_url: str = Field(min_length=1, max_length=1000)
     title: str = Field(min_length=1, max_length=500)
@@ -139,7 +139,7 @@ class SelectPaperRequest(BaseModel):
 
 
 class LearningContextInput(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     learned_content: str | None = None
     learning_progress: str | None = None
@@ -187,7 +187,6 @@ class OrchestratorStateResponse(BaseModel):
 
 class SendOrchestratorMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     message: str = Field(min_length=1, max_length=8000)
 
 

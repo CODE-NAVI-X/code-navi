@@ -393,3 +393,101 @@ def test_retry_last_requires_failed_state_or_returns_409(client: TestClient) -> 
     # 4. Now state is completed -> next retry-last returns 409 again
     resp3 = client.post(retry_url)
     assert resp3.status_code == 409
+
+
+def test_select_paper_rejects_extra_fields(client: TestClient) -> None:
+    """SelectPaperRequest must reject unknown extra fields with 422 (extra='forbid')."""
+    conv = _create_conversation(client, id="conv-api-paper-extra")
+    resp = client.post(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/papers/select",
+        json={
+            "paper_url": "https://arxiv.org/abs/1710.10903",
+            "title": "GAT Paper",
+            "purpose": "replace",
+            "extra_unauthorized_param": "forbidden_value",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_learner_profile_update_rejects_extra_fields(client: TestClient) -> None:
+    """LearnerProfileUpdateRequest must reject unknown extra fields with 422 (extra='forbid')."""
+    conv = _create_conversation(client, id="conv-api-profile-extra")
+    resp = client.put(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/learner-profiles",
+        json={
+            "hardware": "RTX 4090 24GB",
+            "weekly_hours": "15h",
+            "injected_fake_field": "disallowed",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_learning_context_input_rejects_extra_fields(client: TestClient) -> None:
+    """LearningContextInput must reject unknown extra fields with 422 (extra='forbid')."""
+    conv = _create_conversation(client, id="conv-api-learning-extra")
+    resp = client.put(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/learning-context",
+        json={
+            "learned_content": "图卷积网络基础",
+            "learning_progress": "已完成第 3 节",
+            "unexpected_property": "bad",
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_learning_context_progress_and_content_roundtrip_and_direction_cards(
+    client: TestClient,
+) -> None:
+    """Learning context accepts progress/content, supports empty 200, and feeds direction cards."""
+    conv = _create_conversation(client, id="conv-api-lc-roundtrip")
+
+    # 1. Initial state: GET returns empty state (null fields) with HTTP 200 without fabricating data
+    get_resp1 = client.get(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/learning-context"
+    )
+    assert get_resp1.status_code == 200
+    data1 = get_resp1.json()
+    assert data1["learned_content"] is None
+    assert data1["learning_progress"] is None
+
+    # Empty direction cards
+    cards_resp1 = client.get(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/direction-cards"
+    )
+    assert cards_resp1.status_code == 200
+    assert cards_resp1.json()["cards"] == []
+
+    # 2. PUT with both fields populated
+    put_resp = client.put(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/learning-context",
+        json={
+            "learned_content": "图神经网络与 GCN 消息传递机制",
+            "learning_progress": "完成 80% 学习进度，已跑通基础练习",
+        },
+    )
+    assert put_resp.status_code == 200
+    put_data = put_resp.json()
+    assert put_data["learned_content"] == "图神经网络与 GCN 消息传递机制"
+    assert put_data["learning_progress"] == "完成 80% 学习进度，已跑通基础练习"
+
+    # 3. GET reflects both updated fields
+    get_resp2 = client.get(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/learning-context"
+    )
+    assert get_resp2.status_code == 200
+    data2 = get_resp2.json()
+    assert data2["learned_content"] == "图神经网络与 GCN 消息传递机制"
+    assert data2["learning_progress"] == "完成 80% 学习进度，已跑通基础练习"
+
+    # 4. Direction cards read both fields and return dynamic recommendations
+    cards_resp2 = client.get(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/direction-cards"
+    )
+    assert cards_resp2.status_code == 200
+    cards_data = cards_resp2.json()
+    assert cards_data["learned_content"] == "图神经网络与 GCN 消息传递机制"
+    assert cards_data["learning_progress"] == "完成 80% 学习进度，已跑通基础练习"
+    assert len(cards_data["cards"]) > 0

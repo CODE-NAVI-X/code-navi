@@ -146,12 +146,14 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   }
   ```
 - **编排顺序**：用户消息 → 确定性意图/确认词/换方向识别 → 至多一个 §2 被动工具 → 选择 Prompt 模板并组装已确认上下文 → DeepSeek 调用 → 校验、持久化回复 → 仅由规则决定的阶段与子任务更新。
-- **错误码**：404（会话不存在或跨 owner）、422（入参非法或携带未定义字段）、503（Provider 不可用时返回 `failed` 状态结构或安全错误）。
+- **错误与失败语义**：
+  - 404：会话不存在或跨 owner；
+  - 422：入参非法或携带未定义字段（所有写请求 schema 严格配置 `extra="forbid"`）；
+  - 模型/Provider 调用失败、不可用、空回复或输出校验异常时：**统一返回 HTTP 200**，`status="failed"`，返回安全可读的 `error` 字段（`reply_message` 为 `null`）；此时严格不创建 assistant 成功消息、不推进阶段、不更新子任务/计划/论文/画像版本；用户可后续通过 `retry-last` 重试。
 
 ### 10.2 `POST .../orchestrator/messages/stream` — 思考生命周期 SSE 流式消息
 
-- **请求头**：`Accept: text/event-stream`
-- **响应头**：`Content-Type: text/event-stream`
+- **响应头**：`Content-Type: text/event-stream`（客户端无需显式携带 `Accept: text/event-stream`）。
 - **请求体**：同 10.1 请求体 (`SendOrchestratorMessageRequest`)。
 - **流式生命周期事件顺序**：
   1. `event: thinking`：在调用模型生成前发出，并在数据库中持久化 `last_status="thinking"`：
@@ -163,7 +165,7 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
      - 成功完成时发出 `event: completed`：
        ```
        event: completed
-       data: <OrchestratorMessageResponse JSON>
+       data: <OrchestratorMessageResponse JSON (status="completed")>
        ```
      - 失败/不可用/校验异常时发出 `event: failed`：
        ```
@@ -224,41 +226,43 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   }
   ```
 
-### 10.6 `GET/POST .../orchestrator/papers` & `.../papers/select` — 论文管理与用途标记
+### 10.6 论文管理与用途标记
 
-- `GET .../orchestrator/papers` 响应 (`OrchestratorPapersResponse`)：
-  ```json
-  {
-    "conversation_id": "string",
-    "current_paper": {
-      "id": "string",
-      "paper_url": "string",
-      "title": "string",
-      "purpose": "replace",
-      "selected_at": "iso8601"
-    } | null,
-    "paper_history": [
-      {
+- `GET .../orchestrator/papers` — 论文列表与历史读取
+  - **响应体** (`OrchestratorPapersResponse`)：
+    ```json
+    {
+      "conversation_id": "string",
+      "current_paper": {
         "id": "string",
         "paper_url": "string",
         "title": "string",
-        "purpose": "replace | compare | cite",
-        "is_current": "bool",
+        "purpose": "replace",
         "selected_at": "iso8601"
-      }
-    ]
-  }
-  ```
-- `POST .../orchestrator/papers/select` 请求：
-  ```json
-  {
-    "paper_url": "string",
-    "title": "string",
-    "purpose": "replace | compare | cite",
-    "metadata": {}
-  }
-  ```
-- **规则**：仅 `replace` 更新 `current_paper`；`compare` 与 `cite` 保留历史记录但不覆盖 `current_paper`。
+      } | null,
+      "paper_history": [
+        {
+          "id": "string",
+          "paper_url": "string",
+          "title": "string",
+          "purpose": "replace | compare | cite",
+          "is_current": "bool",
+          "selected_at": "iso8601"
+        }
+      ]
+    }
+    ```
+- `POST .../orchestrator/papers/select` — 论文选择与用途标记
+  - **请求体** (`SelectPaperRequest`，配置 `extra="forbid"`)：
+    ```json
+    {
+      "paper_url": "string",
+      "title": "string",
+      "purpose": "replace | compare | cite",
+      "metadata": {}
+    }
+    ```
+  - **规则**：仅 `replace` 更新 `current_paper`；`compare` 与 `cite` 保留历史记录但不覆盖 `current_paper`。
 
 ### 10.7 `GET/PUT .../orchestrator/learner-profiles` — 学习者画像版本化
 
@@ -288,14 +292,24 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
     ]
   }
   ```
-- `PUT .../orchestrator/learner-profiles` 请求：传入需要更新的画像字段，若有实际有效变更则新增 version。
+- `PUT .../orchestrator/learner-profiles` 请求 (`LearnerProfileUpdateRequest`，配置 `extra="forbid"`)：传入需要更新的画像字段，若有实际有效变更则新增 version。
 
 ### 10.8 `GET/PUT .../orchestrator/learning-context` — 学习端输入接收与空态
 
-- `PUT .../orchestrator/learning-context` 请求：
+- `PUT .../orchestrator/learning-context` 请求 (`LearningContextInput`，配置 `extra="forbid"`)：
   ```json
   {
     "learned_content": "string | null",
+    "learning_progress": "string | null"
   }
   ```
-- `GET .../orchestrator/learning-context` 响应：返回当前保存的学习端输入或空态（无数据时返回 null 字段，HTTP 200）。
+- `GET .../orchestrator/learning-context` 响应 (`LearningContextState`)：
+  ```json
+  {
+    "conversation_id": "string",
+    "learned_content": "string | null",
+    "learning_progress": "string | null",
+    "updated_at": "iso8601 | null"
+  }
+  ```
+- **规则**：两字段均可空；无数据或空态请求返回 HTTP 200 且不编造学习记录；两字段均可写入与读取；方向卡片读取学习上下文时能读到这两个字段。
