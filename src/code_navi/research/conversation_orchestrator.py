@@ -450,31 +450,54 @@ def generate_dynamic_direction_cards(
     """Dynamically generate direction cards only when learning input exists."""
     content_raw = (learned_content or "").strip()
     progress_raw = (learning_progress or "").strip()
+    combined_raw = f"{content_raw} {progress_raw}".strip()
 
     # Empty state: when no learning input, return empty list (no hardcoded fake cards)
-    if not content_raw and not progress_raw:
+    if not combined_raw:
         return []
 
-    content_lower = content_raw.lower()
+    combined_lower = combined_raw.lower()
     is_gnn = (
-        "图" in content_raw
-        or "gcn" in content_lower
-        or "gnn" in content_lower
-        or "graph" in content_lower
+        "图网络" in combined_raw
+        or "图神经" in combined_raw
+        or "图卷积" in combined_raw
+        or "图结构" in combined_raw
+        or "图注意力" in combined_raw
+        or "拓扑" in combined_raw
+        or "知识图谱" in combined_raw
+        or "异质图" in combined_raw
+        or "引文网络" in combined_raw
+        or "节点分类" in combined_raw
+        or "gcn" in combined_lower
+        or "gat" in combined_lower
+        or "gnn" in combined_lower
+        or "graph" in combined_lower
     )
     is_nlp = (
-        "transformer" in content_lower
-        or "语言" in content_raw
-        or "nlp" in content_lower
-        or "bert" in content_lower
-        or "大模型" in content_raw
+        "transformer" in combined_lower
+        or "语言" in combined_raw
+        or "文本" in combined_raw
+        or "nlp" in combined_lower
+        or "bert" in combined_lower
+        or "大模型" in combined_raw
+        or "llm" in combined_lower
+        or "rag" in combined_lower
+        or "词向量" in combined_raw
     )
     is_cv = (
-        "视觉" in content_raw
-        or "cv" in content_lower
-        or "cnn" in content_lower
-        or "yolo" in content_lower
-        or "segmentation" in content_lower
+        "视觉" in combined_raw
+        or "图像" in combined_raw
+        or "卷积" in combined_raw
+        or "目标检测" in combined_raw
+        or "检测" in combined_raw
+        or "分割" in combined_raw
+        or "特征金字塔" in combined_raw
+        or "cv" in combined_lower
+        or "cnn" in combined_lower
+        or "yolo" in combined_lower
+        or "resnet" in combined_lower
+        or "segmentation" in combined_lower
+        or "detection" in combined_lower
     )
 
     if is_gnn:
@@ -756,12 +779,11 @@ class ResearchConversationOrchestrator:
     ) -> LearningContextState:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         now_dt = datetime.now(UTC)
-        ctx = {
-            "learned_content": request.learned_content,
-            "learning_progress": request.learning_progress,
-            "updated_at": now_dt.isoformat(),
-        }
-        state_model.learning_context = ctx
+        existing_ctx = dict(state_model.learning_context or {})
+        existing_ctx["learned_content"] = request.learned_content
+        existing_ctx["learning_progress"] = request.learning_progress
+        existing_ctx["updated_at"] = now_dt.isoformat()
+        state_model.learning_context = existing_ctx
         db.commit()
         return LearningContextState(
             conversation_id=conversation_id,
@@ -1271,6 +1293,27 @@ class ResearchConversationOrchestrator:
         profiles_resp = self.get_learner_profiles(conversation_id, db, owned_ids=owned_ids)
         papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
 
+        state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        raw_learning_ctx = state_model.learning_context or {}
+        consumed_snapshot = raw_learning_ctx.get("last_consumed_snapshot")
+        curr_learned = raw_learning_ctx.get("learned_content")
+        curr_progress = raw_learning_ctx.get("learning_progress")
+
+        increment_note: str | None = None
+        if consumed_snapshot is not None:
+            prev_learned = consumed_snapshot.get("learned_content")
+            prev_progress = consumed_snapshot.get("learning_progress")
+            if (curr_learned != prev_learned or curr_progress != prev_progress) and (
+                curr_learned or curr_progress
+            ):
+                increment_note = (
+                    "【学习端输入增量更新（相较上次交流）】\n"
+                    f"- 最新已学内容：{curr_learned or '无'}\n"
+                    f"- 最新学习进度：{curr_progress or '无'}\n"
+                    "指引：姜姜可自然提及学习端的新增输入及其与当前研究探讨的关联，"
+                    "但不得说“已经掌握”或“具备科研能力”。"
+                )
+
         if current_stage == "research_need":
             if is_confirmed and subtasks.get("need_defined"):
                 tmpl = build_stage_transition_prompt(
@@ -1285,12 +1328,14 @@ class ResearchConversationOrchestrator:
                 tmpl = build_welcome_prompt(
                     learning_context=learning_ctx,
                     direction_cards=cards_resp.cards,
+                    extra_note=increment_note,
                 )
             else:
                 tmpl = build_need_clarification_prompt(
                     selected_direction=user_message,
                     user_message=user_message,
                     learned_content=learning_ctx.learned_content,
+                    extra_context=increment_note,
                 )
 
         elif current_stage == "research_plan":
@@ -1354,6 +1399,9 @@ class ResearchConversationOrchestrator:
                 baseline_metrics=None,
                 hardware_info=hw,
             )
+
+        if increment_note and increment_note not in tmpl["context"]:
+            tmpl["context"] = f"{tmpl['context']}\n\n{increment_note}\n"
 
         system_str = (
             f"{tmpl['system']}\n\n"
@@ -1668,6 +1716,14 @@ class ResearchConversationOrchestrator:
             "created_at": now_dt.isoformat(),
         })
         conv.messages_data = msgs
+
+        # Update last_consumed_snapshot in learning_context upon successful turn completion
+        raw_learning_ctx = dict(state_model.learning_context or {})
+        raw_learning_ctx["last_consumed_snapshot"] = {
+            "learned_content": raw_learning_ctx.get("learned_content"),
+            "learning_progress": raw_learning_ctx.get("learning_progress"),
+        }
+        state_model.learning_context = raw_learning_ctx
 
         # Clear error state on success
         state_model.last_status = "completed"
