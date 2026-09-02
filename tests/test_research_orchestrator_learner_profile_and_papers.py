@@ -187,7 +187,7 @@ def test_learning_context_persistence_and_empty_state(db_session) -> None:
 
 
 def test_failed_message_and_retry(db_session) -> None:
-    from tests.test_research_orchestrator_llm import FakeOrchestratorLlmGenerator
+    from test_research_orchestrator_llm import FakeOrchestratorLlmGenerator
 
     fake_generator = FakeOrchestratorLlmGenerator(
         responses=[
