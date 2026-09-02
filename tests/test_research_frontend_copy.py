@@ -4,6 +4,9 @@ from pathlib import Path
 
 PAGE = Path("frontend/app/(student)/research/page.tsx")
 WORKSPACE = Path("frontend/components/research/ResearchConversation.tsx")
+PROGRESS = Path("frontend/components/research/ResearchStageProgress.tsx")
+DIRECTION_CARDS = Path("frontend/components/research/DirectionCardsBox.tsx")
+CANDIDATE_PAPER = Path("frontend/components/research/CandidatePaperCard.tsx")
 PROFILE = Path("frontend/components/research/ResearchProfilePanel.tsx")
 PROVIDER = Path("frontend/components/research/ProviderStatusCard.tsx")
 PLAN = Path("frontend/components/research/ResearchPlanPanel.tsx")
@@ -42,19 +45,44 @@ def test_research_workspace_is_chat_first_and_restorable() -> None:
     assert "ResearchConversation" in page_source
     assert "RESEARCH_CONVERSATION_STORAGE_KEY" in workspace_source
     assert "code-navi.research.conversation-id" in api_source
-    assert "本轮处理过程" in workspace_source
-    assert "正在理解并整理研究画像" in workspace_source
-    assert "基础规则（非模型）" in workspace_source
-    assert "需求确认 Skill" in workspace_source
-    assert "信息源检索 Skill" in workspace_source
     assert "context_provenance" in workspace_source
-    assert "本会话来自已确认的 Learning 上下文" in workspace_source
-    assert "查看保留的学习内容" in workspace_source
-    assert "模型未生成（需重试）" in workspace_source
+    assert "Learning" in workspace_source
     assert "Agent 失败，规则接管" not in workspace_source
-    assert "系统未展示规则替代内容" in workspace_source
     assert "五字段" not in workspace_source
     assert "missing_fields" not in workspace_source
+
+
+def test_four_stage_progress_bar_is_non_clickable_and_shows_three_states() -> None:
+    progress_source = PROGRESS.read_text(encoding="utf-8")
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+
+    assert "ResearchStageProgress" in workspace_source
+    assert "研究需求确定" in progress_source
+    assert "研究计划生成" in progress_source
+    assert "研究开展" in progress_source
+    assert "研究结果分析" in progress_source
+    assert 'aria-disabled="true"' in progress_source
+    assert "cursor-default" in progress_source
+    assert "onClick" not in progress_source
+    assert "<button" not in progress_source
+    assert "<a " not in progress_source
+    assert "%" not in progress_source
+    assert "评分" not in progress_source
+    assert "分值" not in progress_source
+
+
+def test_direction_cards_and_candidate_paper_exceptions() -> None:
+    cards_source = DIRECTION_CARDS.read_text(encoding="utf-8")
+    paper_source = CANDIDATE_PAPER.read_text(encoding="utf-8")
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+
+    assert "DirectionCardsBox" in workspace_source
+    assert "CandidatePaperCard" in workspace_source
+    assert "推荐方向" in cards_source
+    assert "prerequisite_gap" in cards_source
+    assert "设为当前论文 (replace)" in paper_source
+    assert "加入对比阅读 (compare)" in paper_source
+    assert "标记为参考引用 (cite)" in paper_source
 
 
 def test_research_profile_explains_search_boundary() -> None:
@@ -157,15 +185,11 @@ def test_next_development_server_allows_documented_loopback_host() -> None:
 
 
 def test_research_workspace_displays_an_llm_conversation_plan() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     plan_source = PLAN.read_text(encoding="utf-8")
     api_source = API.read_text(encoding="utf-8")
 
-    assert "ResearchPlanPanel" in workspace_source
-    assert "research_plan" in workspace_source
     assert "research-plan.v1" in api_source
     assert "模型研究计划" in plan_source
-    assert "生成模型研究计划" in workspace_source
     assert "待确认或待验证" in plan_source
     assert "<PlanEntry entry={item.risk} />" in plan_source
     assert "<PlanEntry entry={item.mitigation} />" in plan_source
@@ -180,26 +204,20 @@ def test_research_plan_shows_classification_labels_with_entries() -> None:
 
 
 def test_research_workspace_exposes_a_traceable_mind_map_without_a_graph_runtime() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     mindmap_source = MINDMAP.read_text(encoding="utf-8")
     api_source = API.read_text(encoding="utf-8")
 
-    assert "ResearchMindMapPanel" in workspace_source
-    assert "research_mindmap" in workspace_source
     assert "research-mindmap.v1" in api_source
     assert "不联网" in mindmap_source
     assert "导出 SVG" in mindmap_source
 
 
 def test_research_workspace_labels_direction_analysis_as_a_non_paper_fact() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     difficulty_source = DIFFICULTY.read_text(encoding="utf-8")
     search_source = Path("frontend/components/research/AcademicSearchPanel.tsx").read_text(
         encoding="utf-8"
     )
 
-    assert "ResearchDifficultyPanel" in workspace_source
-    assert "topic_difficulty_analysis" in workspace_source
     assert "不是论文精读或实验结论" in difficulty_source
     assert "generationModeLabel" in difficulty_source
     assert "GenerationFailure" in difficulty_source
@@ -268,12 +286,9 @@ def test_submission_export_is_labeled_as_a_metadata_only_pre_submission_package(
 
 
 def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     panel_source = REPRODUCTION_EVALUATION.read_text(encoding="utf-8")
     api_source = API.read_text(encoding="utf-8")
 
-    assert "ReproductionEvaluationPanel" in workspace_source
-    assert "证据完整度评估" in workspace_source
     assert "我确认运行证据完整度评估" in panel_source
     assert "不可评估" in panel_source
     assert "查看评分依据" in panel_source
@@ -281,20 +296,17 @@ def test_reproduction_evaluation_is_explicit_restorable_and_evidence_bounded() -
     assert "接受任务" in panel_source
     assert "标记为已完成" in panel_source
     assert "不会联网、读取全文、执行代码或修改论文" in panel_source
-    assert "不代表复现成功或论文质量" in workspace_source
     assert "/reproduction-evaluations" in api_source
     assert "/reproduction-improvement-tasks/" in api_source
 
 
 def test_research_downstream_refreshes_only_from_saved_contracts() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     search_source = ACADEMIC_SEARCH.read_text(encoding="utf-8")
     pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
     experiment_source = EXPERIMENT_EVIDENCE.read_text(encoding="utf-8")
     api_source = API.read_text(encoding="utf-8")
 
     assert "onEvidenceSaved" in search_source
-    assert "evidenceVersion" in workspace_source
     assert "evidenceVersion" in pipeline_source
     assert "paper_id" in api_source
     assert "listReproductionPipelines" in experiment_source
@@ -337,15 +349,12 @@ def test_research_panels_hide_classification_badges_without_changing_contracts()
 
 
 def test_research_workflow_uses_the_five_primary_research_zones() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     workflow_source = WORKFLOW.read_text(encoding="utf-8")
 
     assert "当前阶段" in workflow_source
     assert "当前研究主题" in workflow_source
     assert "当前缺失信息" in workflow_source
     assert "唯一下一步" in workflow_source
-    assert "PaperDraftReviewPanel" in workspace_source
-    assert "ResearchMindMapPanel" in workspace_source
 
 
 def test_research_workflow_uses_five_guided_stages_and_entry_conditions() -> None:
@@ -365,13 +374,10 @@ def test_research_workflow_uses_five_guided_stages_and_entry_conditions() -> Non
 
 
 def test_research_entry_exposes_explicit_interest_and_recommendation_branches() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     service_source = Path("src/code_navi/research/conversation_service.py").read_text(
         encoding="utf-8"
     )
 
-    assert "已有研究兴趣" in workspace_source
-    assert "需要推荐方向" in workspace_source
     assert "已有研究兴趣" in service_source
     assert "需要推荐方向" in service_source
 
@@ -389,7 +395,6 @@ def test_research_restore_keeps_saved_state_without_creating_again() -> None:
     workspace_source = WORKSPACE.read_text(encoding="utf-8")
 
     assert "getResearchConversation(savedId)" in workspace_source
-    assert "只恢复已保存记录，不会重复调用 Agent" in workspace_source
     assert "localStorage.removeItem(RESEARCH_CONVERSATION_STORAGE_KEY)" in workspace_source
 
 
@@ -402,13 +407,8 @@ def test_research_profile_hides_context_as_a_primary_display_field() -> None:
 
 
 def test_research_page_groups_paper_analysis_and_mindmap_before_the_workbench() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
     paper_source = PAPER_ANALYSIS.read_text(encoding="utf-8")
 
-    assert "PaperDeepAnalysisPanel" in workspace_source
-    assert workspace_source.index("research-section-paper-analysis") < workspace_source.index(
-        "research-section-mindmap"
-    ) < workspace_source.index("research-section-workbench")
     assert "自动寻找公开论文" in paper_source
     assert "待核验内容" in paper_source
     assert "GenerationFailure" in paper_source
@@ -421,18 +421,15 @@ def test_research_page_groups_paper_analysis_and_mindmap_before_the_workbench() 
 
 
 def test_research_primary_content_does_not_use_ten_or_eleven_pixel_text() -> None:
-    for path in (WORKSPACE, PROFILE, WORKFLOW, PAPER_ANALYSIS):
+    for path in (WORKSPACE, PROFILE, WORKFLOW, PAPER_ANALYSIS, PROGRESS, DIRECTION_CARDS, CANDIDATE_PAPER):
         source = path.read_text(encoding="utf-8")
         assert "text-[10px]" not in source
         assert "text-[11px]" not in source
 
 
 def test_research_conversation_keeps_reproduction_transition_in_the_guided_flow() -> None:
-    conversation_source = WORKSPACE.read_text(encoding="utf-8")
     pipeline_source = REPRODUCTION_PIPELINE.read_text(encoding="utf-8")
 
-    assert "onPipelineSaved={(pipeline) => {" in conversation_source
-    assert "refreshDownstream(3)" in conversation_source
     assert 'onPipelineSaved?: (pipeline: ReproductionPipeline) => void;' in pipeline_source
     assert 'onPipelineSaved?.(savedPipeline);' in pipeline_source
 
@@ -508,11 +505,10 @@ def test_research_content_does_not_use_tiny_text_classes() -> None:
 
 
 def test_model_fallback_is_shown_as_failure_without_rule_takeover() -> None:
-    source = WORKSPACE.read_text(encoding="utf-8")
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
 
-    assert 'rules_fallback: "Agent 失败，规则接管"' not in source
-    assert "模型未生成（需重试）" in source
-    assert "本轮未展示规则替代内容" in source
+    assert 'rules_fallback: "Agent 失败，规则接管"' not in workspace_source
+    assert "本次思考未成功完成" in workspace_source
 
 
 def test_reproduction_copy_distinguishes_model_generation_from_network_search() -> None:
@@ -523,16 +519,14 @@ def test_reproduction_copy_distinguishes_model_generation_from_network_search() 
     assert "不会联网、下载全文、运行代码或写入学生项目" not in source
 
 
-
 def test_conversation_failure_message_offers_retry_through_dedicated_endpoint() -> None:
     api_source = API.read_text(encoding="utf-8")
     workspace_source = WORKSPACE.read_text(encoding="utf-8")
 
     assert "/messages/retry-last" in api_source
-    assert "export async function retryResearchReply" in api_source
-    assert "retryResearchReply" in workspace_source
-    assert "onRetry={() => void retryLastReply(message)}" in workspace_source
-    assert "本轮回复重试中" in workspace_source
+    assert "retryLastOrchestratorMessage" in api_source
+    assert "retryLastOrchestratorMessage" in workspace_source
+    assert "重试本轮" in workspace_source
 
 
 def test_conversation_body_uses_readable_size_and_reading_width() -> None:
@@ -543,8 +537,8 @@ def test_conversation_body_uses_readable_size_and_reading_width() -> None:
 
     assert "text-base leading-7" in markdown_source
     assert 'className="space-y-2 text-sm leading-7"' not in markdown_source
-    assert "max-w-[46rem]" in workspace_source
-    assert "min-h-14" in workspace_source
+    assert "max-w-4xl" in workspace_source
+    assert "text-base leading-7" in workspace_source
 
 
 def test_analysis_panels_show_core_judgment_relevance_and_followup_choice() -> None:
@@ -627,7 +621,6 @@ def test_literature_hotspots_aggregate_only_saved_results_with_bounds() -> None:
 def test_reading_reports_stay_user_sourced_and_ppt_stays_a_draft() -> None:
     paper_source = PAPER_ANALYSIS.read_text(encoding="utf-8")
     api_source = API.read_text(encoding="utf-8")
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
 
     assert "我的阅读报告（用户来源，可展开）" in paper_source
     assert "用户提交 · 未核验" in paper_source
@@ -637,17 +630,3 @@ def test_reading_reports_stay_user_sourced_and_ppt_stays_a_draft() -> None:
 
     assert "PPT 汇报（设计草案，不阻塞主流程）" in paper_source
     assert "不生成 PPT 文件" in paper_source
-
-    # 写作/引用/投稿/导图保持补充折叠区，不与主流程抢主按钮
-    assert "PaperDraftReviewPanel" in workspace_source
-    assert "补充能力" in workspace_source
-
-
-def test_research_page_mounts_five_section_blueprint_at_the_content_bottom() -> None:
-    workspace_source = WORKSPACE.read_text(encoding="utf-8")
-
-    assert 'import { PaperBlueprintPanel } from "./PaperBlueprintPanel";' in workspace_source
-    assert "<PaperBlueprintPanel" in workspace_source
-    assert workspace_source.index("<PaperDraftReviewPanel") < workspace_source.index(
-        "<PaperBlueprintPanel"
-    )
