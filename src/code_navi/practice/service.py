@@ -32,6 +32,7 @@ from ..learning.models import NotebookItemModel
 from ..learning.quiz.schemas import QuizQuestion
 from ..providers import ProviderSettings, create_provider
 from .models import (
+    CodeProjectModel,
     CodeFillAttemptModel,
     CodeUploadAnalysisModel,
     PracticeSetItemModel,
@@ -46,6 +47,10 @@ from .prompts import (
     static_grade_user_prompt,
 )
 from .schemas import (
+    CodeProjectFile,
+    CodeProjectFileResponse,
+    CodeProjectResponse,
+    CodeProjectUploadRequest,
     CodeFillGradeRequest,
     CodeFillGradeResponse,
     CodeFillGradeResultItem,
@@ -89,6 +94,7 @@ _CODE_FILL_BLANK_MAX_SCORE = 1
 _MAX_UPLOAD_BYTES = 256 * 1024
 _DEFAULT_MODEL_TIMEOUT = 60.0
 _DEFAULT_MAX_TOKENS = 4096
+_MAX_PROJECT_BYTES = 2 * 1024 * 1024
 
 
 class PracticeSetNotFoundError(Exception):
@@ -765,6 +771,79 @@ class PracticeSetService:
         )
         db.commit()
         return response
+
+    def upload_code_project(
+        self, request: CodeProjectUploadRequest, db: Session, *, owner_principal_id: str | None = None
+    ) -> CodeProjectResponse:
+        """Validate and archive a small project, retaining only allowed text files."""
+        import posixpath
+
+        total = 0
+        files: list[dict] = []
+        seen: set[str] = set()
+        for item in request.files:
+            path = item.path.replace("\\", "/").strip("/")
+            if not path or path in seen or path.startswith("../") or "/../" in path:
+                raise UploadValidationError("项目文件路径无效或重复", status_code=400)
+            path = posixpath.normpath(path)
+            parts = path.split("/")
+            if ".." in parts or "data" in {part.lower() for part in parts}:
+                raise UploadValidationError("不支持 data 目录或越界路径", status_code=400)
+            lower = path.lower()
+            if not (lower.endswith(".py") or lower.endswith(".md")):
+                raise UploadValidationError("项目仅支持 .py 或 .md 文件", status_code=415)
+            try:
+                content = base64.b64decode(item.content_base64, validate=True).decode("utf-8")
+            except Exception as exc:
+                raise UploadValidationError("文件内容不是有效的 base64 文本", status_code=400) from exc
+            size = len(content.encode("utf-8"))
+            total += size
+            if total > _MAX_PROJECT_BYTES:
+                raise UploadValidationError("项目超过 2MB 限制", status_code=413)
+            if _looks_like_dataset_content(content):
+                raise UploadValidationError("仅支持核心代码或文档文件，不支持数据集文件", status_code=400)
+            if lower.endswith(".py"):
+                analysis = self._analyze_python_upload(path, content, "", "tmp")
+            else:
+                analysis = self._analyze_markdown_upload(path, content, "", "tmp")
+            files.append({"path": path, "content": content, "kind": analysis.kind,
+                          "size": size, "symbols": [s.model_dump(mode="json") for s in analysis.symbols]})
+            seen.add(path)
+        project_id = str(uuid4())
+        metrics = {"files": len(files), "bytes": total,
+                   "lines": sum(len(f["content"].splitlines()) for f in files)}
+        db.add(CodeProjectModel(project_id=project_id, name=request.name.strip(), files=files,
+                                metrics=metrics, owner_principal_id=owner_principal_id))
+        db.commit()
+        return CodeProjectResponse(project_id=project_id, name=request.name.strip(),
+                                   files=[CodeProjectFile(**{k: f[k] for k in ("path", "kind", "size", "symbols")}) for f in files],
+                                   metrics=metrics)
+
+    @staticmethod
+    def get_code_project(project_id: str, db: Session, *, owned_ids: list[str] | None = None) -> CodeProjectResponse:
+        query = db.query(CodeProjectModel).filter(CodeProjectModel.project_id == project_id)
+        if owned_ids:
+            query = query.filter(CodeProjectModel.owner_principal_id.in_(owned_ids))
+        project = query.first()
+        if project is None:
+            raise UploadNotFoundError(f"project {project_id} not found")
+        files = [CodeProjectFile(**{k: f[k] for k in ("path", "kind", "size", "symbols")}) for f in (project.files or [])]
+        return CodeProjectResponse(project_id=project.project_id, name=project.name, files=files, metrics=project.metrics or {})
+
+    @staticmethod
+    def get_code_project_file(project_id: str, file_path: str, db: Session, *, owned_ids: list[str] | None = None) -> CodeProjectFileResponse:
+        query = db.query(CodeProjectModel).filter(CodeProjectModel.project_id == project_id)
+        if owned_ids:
+            query = query.filter(CodeProjectModel.owner_principal_id.in_(owned_ids))
+        project = query.first()
+        if project is None:
+            raise UploadNotFoundError(f"project {project_id} not found")
+        normalized = file_path.replace("\\", "/").strip("/")
+        for item in project.files or []:
+            if item.get("path") == normalized:
+                return CodeProjectFileResponse(project_id=project_id, path=normalized,
+                                               content=item.get("content", ""), symbols=item.get("symbols", []))
+        raise UploadNotFoundError(f"project file {normalized} not found")
 
     @staticmethod
     def _analyze_python_upload(

@@ -274,6 +274,37 @@ class CodeUploadAnalysisResponse(BaseModel):
     explanation_source: Literal["rules"]
 
 
+class CodeProjectFile(BaseModel):
+    path: str = Field(..., min_length=1, max_length=255)
+    kind: Literal["python", "markdown"]
+    size: int = Field(..., ge=0)
+    symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
+
+
+class CodeProjectFileInput(BaseModel):
+    path: str = Field(..., min_length=1, max_length=255)
+    content_base64: str = Field(..., min_length=1)
+
+
+class CodeProjectUploadRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    files: list[CodeProjectFileInput] = Field(..., min_length=1, max_length=50)
+
+
+class CodeProjectResponse(BaseModel):
+    project_id: str
+    name: str
+    files: list[CodeProjectFile]
+    metrics: dict[str, int]
+
+
+class CodeProjectFileResponse(BaseModel):
+    project_id: str
+    path: str
+    content: str
+    symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
+
+
 class ExplainSymbol(BaseModel):
     """A symbol to explain (contract §1.6).
 
@@ -346,6 +377,11 @@ __all__ = [
     "CodeUploadAnalysisResponse",
     "CodeUploadAnalyzeRequest",
     "CodeUploadSymbol",
+    "CodeProjectFile",
+    "CodeProjectFileInput",
+    "CodeProjectUploadRequest",
+    "CodeProjectResponse",
+    "CodeProjectFileResponse",
     "ExplainSymbol",
     "ExplainSymbolRequest",
     "ExplainSymbolResponse",

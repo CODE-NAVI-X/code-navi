@@ -25,6 +25,9 @@ from .schemas import (
     CodeFillGradeResponse,
     CodeUploadAnalysisResponse,
     CodeUploadAnalyzeRequest,
+    CodeProjectFileResponse,
+    CodeProjectResponse,
+    CodeProjectUploadRequest,
     ExplainSymbolRequest,
     ExplainSymbolResponse,
     PracticeSetGenerateRequest,
@@ -241,6 +244,51 @@ async def analyze_code_upload(
         )
     except UploadValidationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/projects", response_model=CodeProjectResponse, status_code=200)
+async def upload_code_project(
+    request: CodeProjectUploadRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> CodeProjectResponse:
+    """Upload a bounded .py/.md project and return its navigation tree."""
+    try:
+        return _practice_service.upload_code_project(
+            request, db, owner_principal_id=principal.principal_id if principal else None
+        )
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}", response_model=CodeProjectResponse, status_code=200)
+async def get_code_project(
+    project_id: str,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> CodeProjectResponse:
+    try:
+        return _practice_service.get_code_project(
+            project_id, db, owned_ids=get_owned_principal_ids(principal, db) if principal else None
+        )
+    except UploadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/files/{file_path:path}", response_model=CodeProjectFileResponse)
+async def get_code_project_file(
+    project_id: str,
+    file_path: str,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> CodeProjectFileResponse:
+    try:
+        return _practice_service.get_code_project_file(
+            project_id, file_path, db,
+            owned_ids=get_owned_principal_ids(principal, db) if principal else None,
+        )
+    except UploadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post(
