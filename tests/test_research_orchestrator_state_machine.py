@@ -23,7 +23,8 @@ from code_navi.research.models import (
 
 
 @pytest.fixture
-def db_session(tmp_path):
+def db_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
     database_url = f"sqlite:///{tmp_path / 'test_sm.db'}"
     engine = create_engine(database_url)
     Base.metadata.create_all(engine)

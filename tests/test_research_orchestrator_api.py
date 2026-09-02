@@ -18,7 +18,8 @@ from code_navi.server import app
 
 
 @pytest.fixture
-def client(tmp_path) -> Generator[TestClient, None, None]:
+def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
     get_rate_limiter().reset()
     db_file = tmp_path / "test_api_orch.db"
     test_engine = create_engine(
@@ -71,11 +72,11 @@ def test_orchestrator_state_and_direction_cards_api(client: TestClient) -> None:
     assert data["current_stage"] == "research_need"
     assert data["completed_stages"] == []
 
-    # 2. Get direction cards (empty state initially)
+    # 2. Get direction cards (empty state initially when no learning context)
     resp = client.get(f"/api/v1/research/conversations/{conv.id}/orchestrator/direction-cards")
     assert resp.status_code == 200
     cards_data = resp.json()
-    assert len(cards_data["cards"]) == 5
+    assert len(cards_data["cards"]) == 0
 
 
 def test_orchestrator_learning_context_api(client: TestClient) -> None:

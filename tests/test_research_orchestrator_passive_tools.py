@@ -20,7 +20,8 @@ from code_navi.research.models import (
 
 
 @pytest.fixture
-def db_session(tmp_path):
+def db_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
     database_url = f"sqlite:///{tmp_path / 'test_pt.db'}"
     engine = create_engine(database_url)
     Base.metadata.create_all(engine)
@@ -114,3 +115,45 @@ def test_tool_empty_state_does_not_hallucinate(db_session) -> None:
         or "未开始" in resp.reply_message.content
         or "开始" in resp.reply_message.content
     )
+
+
+def test_study_recommendations_passive_tool_real_call(db_session) -> None:
+    orchestrator = ResearchConversationOrchestrator()
+    conv = ResearchConversationModel(
+        id="conv-pt-rec",
+        profile_data={"topic": "图卷积网络"},
+        messages_data=[],
+    )
+    db_session.add(conv)
+    db_session.commit()
+
+    resp = orchestrator.process_message(
+        "conv-pt-rec",
+        SendOrchestratorMessageRequest(message="我应该先学什么知识，有什么学习建议？"),
+        db_session,
+    )
+    assert resp.reply_message.passive_tool_called == "study-recommendations"
+    assert "补学建议" in resp.reply_message.content or "学习建议" in resp.reply_message.content
+
+
+def test_reproduction_evaluations_tool_empty_pipeline_state(db_session) -> None:
+    orchestrator = ResearchConversationOrchestrator()
+    conv = ResearchConversationModel(
+        id="conv-pt-eval-empty",
+        profile_data={"topic": "Transformer 文本分类"},
+        messages_data=[],
+    )
+    db_session.add(conv)
+    db_session.commit()
+
+    resp = orchestrator.process_message(
+        "conv-pt-eval-empty",
+        SendOrchestratorMessageRequest(message="评估一下我的复现，准备得怎么样了，还差什么？"),
+        db_session,
+    )
+    assert resp.reply_message.passive_tool_called == "reproduction-evaluations"
+    # When no pipeline, must report lack of pipeline truthfully without asserting "准备度良好"
+    assert "复现准备度" in resp.reply_message.content
+    assert "尚未建立" in resp.reply_message.content or "缺少" in resp.reply_message.content
+    assert "复现准备度良好" not in resp.reply_message.content
+    assert "8GB" not in resp.reply_message.content

@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import uuid
+from collections.abc import Callable, Generator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, Protocol
 
 from sqlalchemy.orm import Session
 
+from code_navi.providers import ProviderSettings, create_provider
+
 from .conversation_guidance import (
     ResearchConversationGuidanceService,
+    StudyRecommendationsNotConfirmedError,
 )
-from .conversation_guidance_schemas import StudyRecommendationRequest
+from .conversation_guidance_schemas import (
+    StudyRecommendationRequest,
+)
 from .conversation_orchestrator_schemas import (
     STAGE_DISPLAY_NAMES,
     CurrentPaperCard,
@@ -35,12 +44,21 @@ from .conversation_orchestrator_schemas import (
     SendOrchestratorMessageRequest,
 )
 from .conversation_prompt_templates import (
+    build_experiment_design_prompt,
+    build_need_clarification_prompt,
+    build_paper_intro_prompt,
+    build_profile_and_plan_prompt,
+    build_result_analysis_prompt,
+    build_search_guidance_prompt,
+    build_stage_transition_prompt,
+    build_welcome_prompt,
     validate_jiangjiang_output,
 )
 from .conversation_service import (
     ConversationNotFoundError,
     ResearchConversationService,
 )
+from .llm import DEEPSEEK_DEFAULT_MODEL, DeepSeekGuidanceProvider
 from .models import (
     ResearchConversationModel,
     ResearchLearnerProfileModel,
@@ -52,6 +70,105 @@ from .reproduction_evaluation_service import ReproductionEvaluationService
 
 class OrchestratorRetryNotApplicableError(RuntimeError):
     """Raised when retrying a conversation turn that is not in a failed state."""
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestratorLlmOutcome:
+    """Result of an orchestrator LLM completion request."""
+
+    status: Literal["generated", "unavailable", "failed"]
+    reply_text: str | None = None
+    reason: str | None = None
+
+
+class OrchestratorLlmGenerator(Protocol):
+    """Application boundary for orchestrator Agent wording."""
+
+    def generate(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        conversation_history: Sequence[dict[str, object]] = (),
+        conversation_id: str,
+    ) -> OrchestratorLlmOutcome: ...
+
+
+class RuntimeOrchestratorLlmGenerator:
+    """Invokes real configured provider (DeepSeek/OpenAI) using existing provider configuration."""
+
+    def __init__(
+        self,
+        provider_factory: Callable[[], object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self.provider_factory = provider_factory
+        self.timeout_seconds = timeout_seconds
+
+    def generate(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        conversation_history: Sequence[dict[str, object]] = (),
+        conversation_id: str,
+    ) -> OrchestratorLlmOutcome:
+        try:
+            provider = self._resolve_provider()
+            if provider is None:
+                return OrchestratorLlmOutcome(
+                    status="unavailable",
+                    reason="Provider not configured",
+                )
+
+            if hasattr(provider, "generate_chat_completion"):
+                text = provider.generate_chat_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    history=conversation_history,
+                )
+                return OrchestratorLlmOutcome(status="generated", reply_text=text)
+
+            # OpenAI or DeepSeek client
+            client = getattr(provider, "client", provider)
+            if hasattr(client, "chat") and hasattr(client.chat, "completions"):
+                messages = [{"role": "system", "content": system_prompt}]
+                for msg in conversation_history:
+                    role = "assistant" if msg.get("role") == "assistant" else "user"
+                    content = str(msg.get("content") or "")
+                    if content:
+                        messages.append({"role": role, "content": content})
+                messages.append({"role": "user", "content": user_prompt})
+
+                model = getattr(provider, "model", DEEPSEEK_DEFAULT_MODEL)
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=1500,
+                )
+                text = response.choices[0].message.content
+                return OrchestratorLlmOutcome(status="generated", reply_text=text)
+
+            return OrchestratorLlmOutcome(status="unavailable", reason="Unknown provider shape")
+        except (TimeoutError, Exception) as err:
+            return OrchestratorLlmOutcome(status="failed", reason=str(err))
+
+    def _resolve_provider(self) -> object | None:
+        if self.provider_factory is not None:
+            return self.provider_factory()
+        settings = ProviderSettings.resolve(timeout=self.timeout_seconds)
+        if settings.name == "deepseek":
+            if not os.getenv("DEEPSEEK_API_KEY"):
+                return None
+            return DeepSeekGuidanceProvider(timeout_seconds=self.timeout_seconds)
+        if settings.name == "openai":
+            if not os.getenv("OPENAI_API_KEY"):
+                return None
+            return create_provider(settings)
+        return None
 
 
 _CONFIRMATION_PATTERNS = [
@@ -214,8 +331,14 @@ def generate_dynamic_direction_cards(
     learned_content: str | None,
     learning_progress: str | None,
 ) -> list[DirectionCard]:
-    """Dynamically generate 5 direction cards based on learning input."""
-    content_raw = learned_content or ""
+    """Dynamically generate direction cards only when learning input exists."""
+    content_raw = (learned_content or "").strip()
+    progress_raw = (learning_progress or "").strip()
+
+    # Empty state: when no learning input, return empty list (no hardcoded fake cards)
+    if not content_raw and not progress_raw:
+        return []
+
     content_lower = content_raw.lower()
     is_gnn = (
         "图" in content_raw
@@ -242,35 +365,35 @@ def generate_dynamic_direction_cards(
         return [
             DirectionCard(
                 id="dir-gnn-1",
-                title="图卷积网络在引文网络上的半监督节点分类",
-                description="基于 Cora / Citeseer 数据集复现 GCN 算法，分析半监督分类能力。",
+                title="图神经网络在引文网络上的节点分类",
+                description="针对图拓扑结构复现基础图神经网络，分析节点分类表现。",
                 prerequisite_gap="需掌握邻接矩阵归一化与消息传递机制",
                 is_recommended=True,
             ),
             DirectionCard(
                 id="dir-gnn-2",
-                title="图注意力网络 (GAT) 动态权重机制探究",
+                title="图注意力机制动态权重探究",
                 description="探索自注意力在图邻居聚合中的作用与异质图泛化性。",
                 prerequisite_gap="需熟悉多头注意力机制与 GPU 显存优化",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-gnn-3",
-                title="大规模图采样算法 (GraphSAGE / Cluster-GCN)",
+                title="大规模图采样算法",
                 description="针对无法整图加载的大规模图结构，研究归纳式图表示学习。",
                 prerequisite_gap="需了解邻居采样与小批量图训练机制",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-gnn-4",
-                title="图对比学习与无监督分子表征",
-                description="研究分子图上的自监督预训练与下游性质预测。",
+                title="图对比学习与无监督表征",
+                description="研究图结构上的自监督预训练与下游性质预测。",
                 prerequisite_gap="需掌握数据增强与对比损失函数设计",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-gnn-5",
-                title="时空图卷积在交通流预测中的应用",
+                title="时空图卷积网络应用",
                 description="结合时序模型与空间图卷积实现复杂网络动态建模。",
                 prerequisite_gap="需熟悉时序循环网络与空间图卷积的串联结构",
                 is_recommended=False,
@@ -280,35 +403,35 @@ def generate_dynamic_direction_cards(
         return [
             DirectionCard(
                 id="dir-nlp-1",
-                title="小型大语言模型的参数高效微调 (LoRA / QLoRA)",
-                description="在消费级显卡上使用 LoRA 微调 7B 模型并评测下游任务表现。",
+                title="语言模型的参数高效微调",
+                description="在有限显存资源下对模型进行下游任务微调并评测表现。",
                 prerequisite_gap="需了解低秩矩阵分解与梯度反向传播原理",
                 is_recommended=True,
             ),
             DirectionCard(
                 id="dir-nlp-2",
-                title="检索增强生成 (RAG) 知识召回与重排优化",
-                description="结合密集检索向量库与 Cross-Encoder 重排器提升问答准确率。",
+                title="检索增强生成 (RAG) 知识召回优化",
+                description="结合密集检索向量库与重排器提升问答准确率。",
                 prerequisite_gap="需了解向量数据库索引与分块策略",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-nlp-3",
-                title="大语言模型思维链 (Chain-of-Thought) 推理探索",
-                description="分析不同提示工程对复杂数学与逻辑推理能力的影响。",
+                title="提示工程与思维链推理探索",
+                description="分析不同提示策略对复杂逻辑推理能力的影响。",
                 prerequisite_gap="需掌握 Prompt 评估基准与测试集构建方法",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-nlp-4",
-                title="多语言文本分类与跨语言迁移",
+                title="跨语言迁移与文本分类",
                 description="利用多语言预训练模型评估零样本跨语言迁移能力。",
                 prerequisite_gap="需了解跨语言 Tokenizer 与对齐微调方法",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-nlp-5",
-                title="轻量化语义相似度匹配与知识蒸馏",
+                title="轻量化语义匹配与知识蒸馏",
                 description="通过模型蒸馏将大模型知识转移到小型双塔网络。",
                 prerequisite_gap="需了解 KL 散度蒸馏损失与双塔向量架构",
                 is_recommended=False,
@@ -318,75 +441,77 @@ def generate_dynamic_direction_cards(
         return [
             DirectionCard(
                 id="dir-cv-1",
-                title="轻量级目标检测模型结构剪枝与量化",
-                description="针对边缘设备复现 YOLO 系列轻量检测算法并对比 FPS 与 mAP。",
-                prerequisite_gap="需熟悉模型剪枝与 INT8 量化工具链",
+                title="轻量级目标检测模型剪枝与量化",
+                description="针对边缘设备复现轻量检测算法并对比帧率与精度。",
+                prerequisite_gap="需熟悉模型剪枝与量化工具链",
                 is_recommended=True,
             ),
             DirectionCard(
                 id="dir-cv-2",
-                title="视觉-语言多模态图文检索 (CLIP)",
+                title="多模态图文检索与特征对齐",
                 description="微调轻量双塔视觉多模态模型并评测跨模态检索准确率。",
                 prerequisite_gap="需掌握对比学习与多模态数据对齐原理",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-cv-3",
-                title="小样本图像分类中的元学习方法",
+                title="小样本图像分类元学习方法",
                 description="研究在极少标注样本条件下的快速泛化分类算法。",
-                prerequisite_gap="需了解原型网络 (ProtoNet) 与 Episode 训练机制",
+                prerequisite_gap="需了解元学习与 Episode 训练机制",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-cv-4",
-                title="基于轻量 Transformer 的图像超分辨率重建",
-                description="复现轻量超分辨率算法并分析 PSNR/SSIM 评价指标。",
+                title="图像超分辨率重建算法探究",
+                description="复现轻量超分辨率算法并分析评价指标。",
                 prerequisite_gap="需掌握退化模型与残差特征提取架构",
                 is_recommended=False,
             ),
             DirectionCard(
                 id="dir-cv-5",
-                title="医学影像弱监督语义分割",
-                description="在仅有边界框或图像级标签情况下实现精细器官/病灶分割。",
-                prerequisite_gap="需了解 CAM 类激活图与伪标签生成技术",
+                title="弱监督图像语义分割",
+                description="在仅有弱标注情况下实现精细目标分割。",
+                prerequisite_gap="需了解类激活图与伪标签生成技术",
                 is_recommended=False,
             ),
         ]
     else:
+        # General adaptive directions based on user's text
+        base_title = content_raw[:15]
         return [
             DirectionCard(
-                id="dir-gen-1",
-                title="图卷积神经网络在小规模引文网络上的节点分类",
-                description="在 Cora 引文图上复现 GCN 基础模型，探究消息传递与半监督分类。",
-                prerequisite_gap="需了解图结构与邻接矩阵基础",
+                id="dir-adp-1",
+                title=f"{base_title} 基础算法复现与评测",
+                description=f"围绕「{content_raw[:30]}」构建基础模型并完成标准评测。",
+                prerequisite_gap="需熟悉相关基础理论与 Python 深度学习框架",
                 is_recommended=True,
             ),
             DirectionCard(
-                id="dir-gen-2",
-                title="轻量级大语言模型参数高效微调 (LoRA)",
-                description="在有限显卡资源下对开源小模型进行下游任务微调。",
-                prerequisite_gap="需了解 Transformer 基本架构与 Python 深度学习框架",
+                id="dir-adp-2",
+                title=f"{base_title} 轻量化与效率优化",
+                description="在受限硬件条件下探究模型的计算与显存优化。",
+                prerequisite_gap="需掌握模型量化或剪枝技术",
                 is_recommended=False,
             ),
             DirectionCard(
-                id="dir-gen-3",
-                title="多模态图文特征对齐与跨模态检索",
-                description="利用预训练双塔模型评测图片与文本的跨模态匹配精度。",
-                prerequisite_gap="需了解向量相似度计算与损失函数",
+                id="dir-adp-3",
+                title=f"{base_title} 特征增强与鲁棒性分析",
+                description="探究数据扰动与特征提取对下游任务稳定性的影响。",
+                prerequisite_gap="需了解数据增强与鲁棒性评测基准",
                 is_recommended=False,
             ),
             DirectionCard(
-                id="dir-gen-4",
-                title="基于对比学习的无监督表征算法探究",
-                description="研究无需人工标注标签的自监督特征提取机制。",
-                prerequisite_gap="需掌握数据增强策略与对比损失计算",
+                id="dir-adp-4",
+                title=f"{base_title} 无监督与自监督表征探究",
+                description="研究在无大量人工标注条件下的特征学习能力。",
+                prerequisite_gap="需掌握对比学习与自监督损失设计",
                 is_recommended=False,
             ),
             DirectionCard(
-                id="dir-gen-5",
-                title="时序数据异常检测与轻量化预测模型",
-                description="基于滑动窗口与卷积/循环结构检测指标异常波动。",
-                prerequisite_gap="需了解时序特征预处理与平稳性检验",
+                id="dir-adp-5",
+                title=f"{base_title} 跨领域迁移与泛化性验证",
+                description="评估模型在不同分布测试集上的泛化表现。",
+                prerequisite_gap="需熟悉域适应与迁移学习策略",
                 is_recommended=False,
             ),
         ]
@@ -400,10 +525,12 @@ class ResearchConversationOrchestrator:
         guidance_service: ResearchConversationGuidanceService | None = None,
         conversation_service: ResearchConversationService | None = None,
         evaluation_service: ReproductionEvaluationService | None = None,
+        llm_generator: OrchestratorLlmGenerator | None = None,
     ) -> None:
         self.guidance_service = guidance_service or ResearchConversationGuidanceService()
         self.conversation_service = conversation_service or ResearchConversationService()
         self.evaluation_service = evaluation_service or ReproductionEvaluationService()
+        self.llm_generator = llm_generator or RuntimeOrchestratorLlmGenerator()
 
     def get_or_create_state(
         self,
@@ -512,19 +639,19 @@ class ResearchConversationOrchestrator:
         owned_ids: list[str] | None = None,
     ) -> LearningContextState:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
-        now_str = datetime.now(UTC).isoformat()
-        state_model.learning_context = {
+        now_dt = datetime.now(UTC)
+        ctx = {
             "learned_content": request.learned_content,
             "learning_progress": request.learning_progress,
-            "updated_at": now_str,
+            "updated_at": now_dt.isoformat(),
         }
+        state_model.learning_context = ctx
         db.commit()
-        db.refresh(state_model)
         return LearningContextState(
             conversation_id=conversation_id,
             learned_content=request.learned_content,
             learning_progress=request.learning_progress,
-            updated_at=datetime.fromisoformat(now_str),
+            updated_at=now_dt,
         )
 
     def get_learner_profiles(
@@ -541,27 +668,33 @@ class ResearchConversationOrchestrator:
             .order_by(ResearchLearnerProfileModel.version.asc())
             .all()
         )
-        if not rows:
-            return LearnerProfileResponse(conversation_id=conversation_id)
-
-        history: list[LearnerProfileVersion] = []
         current_profile: LearnerProfileData | None = None
         current_version: int | None = None
+        history: list[LearnerProfileVersion] = []
 
         for row in rows:
-            p_data = LearnerProfileData.model_validate(row.profile_data or {})
-            history.append(
-                LearnerProfileVersion(
-                    version=row.version,
-                    profile_data=p_data,
-                    change_summary=row.change_summary,
-                    created_at=row.created_at,
-                    is_current=row.is_current,
-                )
+            p_data = row.profile_data or {}
+            history_item = LearnerProfileVersion(
+                version=row.version,
+                profile_data=LearnerProfileData(**p_data),
+                change_summary=row.change_summary,
+                created_at=row.created_at,
+                is_current=row.is_current,
             )
+            history.append(history_item)
             if row.is_current:
-                current_profile = p_data
                 current_version = row.version
+                current_profile = LearnerProfileData(
+                    domain_familiarity=p_data.get("domain_familiarity"),
+                    dev_experience=p_data.get("dev_experience"),
+                    projects=p_data.get("projects"),
+                    hardware=p_data.get("hardware"),
+                    os=p_data.get("os"),
+                    python_env=p_data.get("python_env"),
+                    weekly_hours=p_data.get("weekly_hours"),
+                    grade=p_data.get("grade"),
+                    major=p_data.get("major"),
+                )
 
         return LearnerProfileResponse(
             conversation_id=conversation_id,
@@ -588,54 +721,50 @@ class ResearchConversationOrchestrator:
         ):
             raise ConversationNotFoundError(conversation_id)
 
-        existing_rows = (
+        existing_profiles = (
             db.query(ResearchLearnerProfileModel)
             .filter(ResearchLearnerProfileModel.conversation_id == conversation_id)
             .order_by(ResearchLearnerProfileModel.version.desc())
             .all()
         )
-        latest_version = existing_rows[0].version if existing_rows else 0
-        current_data = (
-            LearnerProfileData.model_validate(existing_rows[0].profile_data or {})
-            if existing_rows
-            else LearnerProfileData()
-        )
 
-        # Merge new updates
-        updates = request.model_dump(exclude_unset=True, exclude={"change_summary"})
-        merged_dict = current_data.model_dump()
+        current_row = existing_profiles[0] if existing_profiles else None
+        current_data = dict(current_row.profile_data or {}) if current_row else {}
+
+        # Merge updates
+        updates = request.model_dump(exclude_unset=True)
+        has_change = False
         for k, v in updates.items():
-            if v is not None:
-                merged_dict[k] = v
+            if v is not None and current_data.get(k) != v:
+                current_data[k] = v
+                has_change = True
 
-        # Mark all previous rows as not current
-        for row in existing_rows:
-            row.is_current = False
+        if has_change or not current_row:
+            for p in existing_profiles:
+                p.is_current = False
 
-        new_row = ResearchLearnerProfileModel(
-            conversation_id=conversation_id,
-            version=latest_version + 1,
-            is_current=True,
-            profile_data=merged_dict,
-            change_summary=request.change_summary,
-            created_at=datetime.now(UTC),
-            owner_principal_id=conv.owner_principal_id,
-        )
-        db.add(new_row)
+            next_version = (current_row.version + 1) if current_row else 1
+            new_profile_row = ResearchLearnerProfileModel(
+                conversation_id=conversation_id,
+                version=next_version,
+                is_current=True,
+                profile_data=current_data,
+                change_summary=f"更新了画像字段: {', '.join(updates.keys())}",
+                created_at=datetime.now(UTC),
+                owner_principal_id=conv.owner_principal_id,
+            )
+            db.add(new_profile_row)
 
-        # Update subtasks in state
-        state_model = db.get(ResearchOrchestratorStateModel, conversation_id)
-        if state_model:
-            subtasks = dict(state_model.subtasks or {})
-            if (
-                merged_dict.get("hardware")
-                or merged_dict.get("python_env")
-                or merged_dict.get("dev_experience")
-            ):
-                subtasks["profile_ready"] = True
+            # Update subtasks in state
+            state_model = db.get(ResearchOrchestratorStateModel, conversation_id)
+            if state_model:
+                subtasks = dict(state_model.subtasks or {})
+                if current_data.get("hardware") or current_data.get("dev_experience"):
+                    subtasks["profile_ready"] = True
                 state_model.subtasks = subtasks
 
-        db.commit()
+            db.commit()
+
         return self.get_learner_profiles(conversation_id, db, owned_ids=owned_ids)
 
     def get_papers(
@@ -732,6 +861,29 @@ class ResearchConversationOrchestrator:
         db.commit()
         return self.get_papers(conversation_id, db, owned_ids=owned_ids)
 
+    def stream_message(
+        self,
+        conversation_id: str,
+        request: SendOrchestratorMessageRequest,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> Generator[str, None, None]:
+        """Stream orchestrator thinking lifecycle events (thinking -> completed/failed)."""
+        state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        thinking_payload = {
+            "status": "thinking",
+            "stage": state_model.current_stage,
+            "message": "姜姜正在思考...",
+        }
+        yield f"event: thinking\ndata: {json.dumps(thinking_payload, ensure_ascii=False)}\n\n"
+
+        outcome = self.process_message(conversation_id, request, db, owned_ids=owned_ids)
+        if outcome.status == "completed":
+            yield f"event: completed\ndata: {outcome.model_dump_json()}\n\n"
+        else:
+            yield f"event: failed\ndata: {outcome.model_dump_json()}\n\n"
+
     def process_message(
         self,
         conversation_id: str,
@@ -739,7 +891,6 @@ class ResearchConversationOrchestrator:
         db: Session,
         *,
         owned_ids: list[str] | None = None,
-        force_failure: str | None = None,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -753,20 +904,6 @@ class ResearchConversationOrchestrator:
 
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         user_message = request.message.strip()
-
-        # Check for simulated or real provider failure
-        if force_failure:
-            state_model.last_status = "failed"
-            state_model.last_error = force_failure
-            state_model.last_failed_user_message = user_message
-            db.commit()
-            return OrchestratorMessageResponse(
-                conversation_id=conversation_id,
-                status="failed",
-                reply_message=None,
-                state=self._model_to_state_response(state_model),
-                error=force_failure,
-            )
 
         # Step 1: Detect history inquiry
         if is_history_inquiry(user_message):
@@ -784,6 +921,15 @@ class ResearchConversationOrchestrator:
                 "timestamp": datetime.now(UTC).isoformat(),
             })
             state_model.direction_history = dir_history
+            # Reset active workflow subtasks for new direction while keeping history
+            subtasks = dict(state_model.subtasks or {})
+            subtasks["need_defined"] = False
+            subtasks["plan_generated"] = False
+            subtasks["paper_selected"] = False
+            subtasks["experiment_designed"] = False
+            subtasks["results_analyzed"] = False
+            state_model.subtasks = subtasks
+
             reply_content = (
                 f"# 换个新方向重新出发 (•̀ᴗ•́)و ̑̑\n\n"
                 f"好的，我们把当前焦点切换到新方向：「{user_message}」！\n\n"
@@ -829,6 +975,49 @@ class ResearchConversationOrchestrator:
         completed_stages = list(state_model.completed_stages or [])
         is_confirmed = detect_confirmation_intent(user_message)
 
+        # Build prompt from one of 8 templates with confirmed context
+        prompt_data = self._select_prompt_template(
+            conversation_id, current_stage, subtasks, user_message, is_confirmed, db, owned_ids
+        )
+
+        history_msgs = conv.messages_data or []
+        outcome = self.llm_generator.generate(
+            system_prompt=prompt_data["system_prompt"],
+            user_prompt=prompt_data["user_prompt"],
+            conversation_history=history_msgs,
+            conversation_id=conversation_id,
+        )
+
+        # Handle LLM failure: do not advance stage or subtasks!
+        if outcome.status == "failed":
+            state_model.last_status = "failed"
+            state_model.last_error = outcome.reason or "Model provider failure"
+            state_model.last_failed_user_message = user_message
+            db.commit()
+            return OrchestratorMessageResponse(
+                conversation_id=conversation_id,
+                status="failed",
+                reply_message=None,
+                state=self._model_to_state_response(state_model),
+                error=outcome.reason or "Model provider failure",
+            )
+
+        # If LLM generated output, validate and use it
+        reply_content: str
+        if outcome.status == "generated" and outcome.reply_text:
+            reply_content = outcome.reply_text.strip()
+            # Persona validation: if contains emoji or forbidden phrases, strip/sanitize
+            valid, _ = validate_jiangjiang_output(reply_content)
+            if not valid:
+                for phrase in ["复现成功", "核心判断", "当前聚焦于", "完成百分比"]:
+                    reply_content = reply_content.replace(phrase, "")
+        else:
+            # Safe fallback text for offline mode when no provider configured
+            reply_content = self._generate_rule_reply_fallback(
+                current_stage, subtasks, is_confirmed, user_message, conv
+            )
+
+        # State machine advancement (deterministic rules)
         if current_stage == "research_need":
             has_need = _has_defined_need(user_message, conv, subtasks)
             if has_need:
@@ -840,7 +1029,162 @@ class ResearchConversationOrchestrator:
                 if "research_need" not in completed_stages:
                     completed_stages.append("research_need")
                 state_model.completed_stages = completed_stages
-                reply_content = (
+
+        elif current_stage == "research_plan":
+            # Plan generated check: only true if artifacts or profile exists
+            profile_ready = subtasks.get("profile_ready")
+            plan_gen = subtasks.get("plan_generated")
+            if is_confirmed and profile_ready and plan_gen:
+                state_model.current_stage = "research_execution"
+                if "research_plan" not in completed_stages:
+                    completed_stages.append("research_plan")
+                state_model.completed_stages = completed_stages
+
+        elif current_stage == "research_execution":
+            paper_ready = subtasks.get("paper_selected")
+            exp_ready = subtasks.get("experiment_designed")
+            if is_confirmed and (paper_ready or exp_ready):
+                state_model.current_stage = "research_analysis"
+                if "research_execution" not in completed_stages:
+                    completed_stages.append("research_execution")
+                state_model.completed_stages = completed_stages
+
+        elif current_stage == "research_analysis":
+            if is_confirmed or len(user_message) > 10:
+                subtasks["results_analyzed"] = True
+                state_model.subtasks = subtasks
+
+        return self._finalize_reply(
+            conversation_id, state_model, user_message, reply_content, None, db
+        )
+
+    def retry_last_message(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> OrchestratorMessageResponse:
+        state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        if state_model.last_status != "failed" or not state_model.last_failed_user_message:
+            raise OrchestratorRetryNotApplicableError(
+                "No failed message to retry in this conversation."
+            )
+
+        failed_msg = state_model.last_failed_user_message
+        return self.process_message(
+            conversation_id,
+            SendOrchestratorMessageRequest(message=failed_msg),
+            db,
+            owned_ids=owned_ids,
+        )
+
+    def _select_prompt_template(
+        self,
+        conversation_id: str,
+        current_stage: str,
+        subtasks: dict[str, Any],
+        user_message: str,
+        is_confirmed: bool,
+        db: Session,
+        owned_ids: list[str] | None,
+    ) -> dict[str, str]:
+        """Select and assemble one of the 8 Prompt templates with confirmed context."""
+        learning_ctx = self.get_learning_context(conversation_id, db, owned_ids=owned_ids)
+        cards_resp = self.get_direction_cards(conversation_id, db, owned_ids=owned_ids)
+        profiles_resp = self.get_learner_profiles(conversation_id, db, owned_ids=owned_ids)
+        papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
+
+        if current_stage == "research_need":
+            if is_confirmed and subtasks.get("need_defined"):
+                tmpl = build_stage_transition_prompt(
+                    from_stage="research_need",
+                    to_stage="research_plan",
+                    completed_subtasks=["明确核心研究主题与研究问题"],
+                    next_goals="完善设备与时间画像，生成小目标执行计划",
+                )
+            elif not subtasks.get("need_defined") and not user_message:
+                tmpl = build_welcome_prompt(
+                    learning_context=learning_ctx,
+                    direction_cards=cards_resp.cards,
+                )
+            else:
+                tmpl = build_need_clarification_prompt(
+                    selected_direction=user_message,
+                    user_message=user_message,
+                    learned_content=learning_ctx.learned_content,
+                )
+
+        elif current_stage == "research_plan":
+            if is_confirmed and subtasks.get("profile_ready") and subtasks.get("plan_generated"):
+                tmpl = build_stage_transition_prompt(
+                    from_stage="research_plan",
+                    to_stage="research_execution",
+                    completed_subtasks=["学习者画像已建立", "小目标执行计划已生成"],
+                    next_goals="文献精准检索、论文精读介绍与实验方案设计",
+                )
+            else:
+                prof = profiles_resp.current_profile or LearnerProfileData(version=1)
+                tmpl = build_profile_and_plan_prompt(
+                    research_goal=user_message or "研究课题规划",
+                    profile=prof,
+                    plan_candidate=None,
+                )
+
+        elif current_stage == "research_execution":
+            paper_or_exp = subtasks.get("paper_selected") or subtasks.get("experiment_designed")
+            if is_confirmed and paper_or_exp:
+                tmpl = build_stage_transition_prompt(
+                    from_stage="research_execution",
+                    to_stage="research_analysis",
+                    completed_subtasks=["选定核心论文或完成实验方案设计"],
+                    next_goals="运行实验指标记录，进行客观归因与对比分析",
+                )
+            elif any(k in user_message for k in ["检索", "找论文", "搜索", "关键词"]):
+                tmpl = build_search_guidance_prompt(
+                    research_goal=user_message,
+                    candidate_queries=[user_message],
+                    sources=["arXiv", "Semantic Scholar", "DBLP"],
+                )
+            elif papers_resp.current_paper is not None:
+                tmpl = build_paper_intro_prompt(
+                    paper=papers_resp.current_paper,
+                    profile=profiles_resp.current_profile,
+                    research_goal="论文精读与复现",
+                )
+            else:
+                prof = profiles_resp.current_profile or LearnerProfileData(version=1)
+                tmpl = build_experiment_design_prompt(
+                    paper=papers_resp.current_paper,
+                    profile=prof,
+                    standard_metrics=["Accuracy", "Macro-F1", "Loss"],
+                )
+
+        else:  # research_analysis
+            hw = profiles_resp.current_profile.hardware if profiles_resp.current_profile else None
+            tmpl = build_result_analysis_prompt(
+                user_results=user_message,
+                baseline_metrics=None,
+                hardware_info=hw,
+            )
+
+        system_str = f"{tmpl['system']}\n\n【规则与指引】\n{tmpl['rules']}"
+        user_str = f"{tmpl['context']}\n\n【当前用户输入】\n{user_message}"
+        return {"system_prompt": system_str, "user_prompt": user_str}
+
+    def _generate_rule_reply_fallback(
+        self,
+        current_stage: str,
+        subtasks: dict[str, Any],
+        is_confirmed: bool,
+        user_message: str,
+        conv: ResearchConversationModel,
+    ) -> str:
+        """Safe deterministic fallback wording when offline."""
+        if current_stage == "research_need":
+            has_need = _has_defined_need(user_message, conv, subtasks)
+            if is_confirmed and has_need:
+                return (
                     "# 第一阶段「研究需求确定」已顺利完成 (＾▽＾)\n\n"
                     "### 完成的具体工作\n"
                     "- 明确了核心研究主题与研究问题。\n\n"
@@ -850,14 +1194,14 @@ class ResearchConversationOrchestrator:
                     "- 接下来我们进入「研究计划生成」阶段。我们需要完善你的学习者画像"
                     "（设备显存、可用时间与环境），并为你量身定制可落地的小目标与执行计划！"
                 )
-            elif is_confirmed and not subtasks.get("need_defined"):
-                reply_content = (
+            elif is_confirmed and not has_need:
+                return (
                     "(｡･ω･｡) 姜姜也想尽快带你进入下一阶段！"
                     "不过我们还需要先明确具体的研究主题或研究问题哦。\n\n"
-                    "你最感兴趣的研究方向是什么呢？可以直接告诉我或选择上方的方向卡片！"
+                    "你最感兴趣的研究方向是什么呢？可以直接告诉我！"
                 )
             else:
-                reply_content = (
+                return (
                     f"# 研究需求梳理 (•̀ᴗ•́)و ̑̑\n\n"
                     f"收到你的想法：「{user_message}」！\n\n"
                     f"这个方向非常值得探索。针对这个目标，我们接下来可以收敛具体的实验场景和对比基线。"
@@ -868,11 +1212,7 @@ class ResearchConversationOrchestrator:
             profile_ready = subtasks.get("profile_ready")
             plan_gen = subtasks.get("plan_generated")
             if is_confirmed and profile_ready and plan_gen:
-                state_model.current_stage = "research_execution"
-                if "research_plan" not in completed_stages:
-                    completed_stages.append("research_plan")
-                state_model.completed_stages = completed_stages
-                reply_content = (
+                return (
                     "# 第二阶段「研究计划生成」已顺利完成 (＾▽＾)\n\n"
                     "### 完成的具体工作\n"
                     "- 建立了学习者画像，生成了务实可落地的小目标与执行计划。\n\n"
@@ -888,15 +1228,12 @@ class ResearchConversationOrchestrator:
                     missing.append("设备/显存与环境画像")
                 if not plan_gen:
                     missing.append("总体研究计划")
-                reply_content = (
+                return (
                     f"(｡･ω･｡) 计划还在完善中哦，我们目前还缺少：{'、'.join(missing)}。\n\n"
-                    f"你可以告诉我你的 GPU 显存大小（例如 8GB / 16GB）以及每周能投入多少时间，"
-                    f"姜姜马上为你生成适配的执行计划！"
+                    f"你可以告诉我你的 GPU 显存大小以及每周可用时间，姜姜马上为你生成适配计划！"
                 )
             else:
-                subtasks["plan_generated"] = True
-                state_model.subtasks = subtasks
-                reply_content = (
+                return (
                     f"# 计划与画像确认 (•̀ᴗ•́)و ̑̑\n\n"
                     f"姜姜已记录你的条件与想法：「{user_message}」。\n\n"
                     f"建议我们分三步走：① 选取轻量基线论文精读；"
@@ -908,11 +1245,7 @@ class ResearchConversationOrchestrator:
             paper_ready = subtasks.get("paper_selected")
             exp_ready = subtasks.get("experiment_designed")
             if is_confirmed and (paper_ready or exp_ready):
-                state_model.current_stage = "research_analysis"
-                if "research_execution" not in completed_stages:
-                    completed_stages.append("research_execution")
-                state_model.completed_stages = completed_stages
-                reply_content = (
+                return (
                     "# 第三阶段「研究开展」已顺利完成 (＾▽＾)\n\n"
                     "### 完成的具体工作\n"
                     "- 选定了当前核心论文并完成了实验指标方案设计。\n\n"
@@ -923,13 +1256,13 @@ class ResearchConversationOrchestrator:
                     "当你运行完实验后，把结果指标或遇到的现象告诉我，我们一起来归因分析！"
                 )
             elif is_confirmed and not (paper_ready or exp_ready):
-                reply_content = (
+                return (
                     "(｡･ω･｡) 在进入结果分析前，"
                     "我们还需要先选定一篇当前论文或生成实验设计方案哦！\n\n"
                     "你可以告诉我你想复现哪篇论文，或者让我帮你想想检索词！"
                 )
             else:
-                reply_content = (
+                return (
                     f"# 研究开展与方案推进 (•̀ᴗ•́)و ̑̑\n\n"
                     f"收到你的消息：「{user_message}」。\n\n"
                     f"在这一阶段，你可以随时让我帮你「设计实验方案」或对已选论文做「精读介绍」。"
@@ -937,43 +1270,14 @@ class ResearchConversationOrchestrator:
                 )
 
         else:  # research_analysis
-            subtasks["results_analyzed"] = True
-            state_model.subtasks = subtasks
-            reply_content = (
+            return (
                 f"# 实验结果客观分析与归因 (•̀ᴗ•́)و ̑̑\n\n"
                 f"已收到你提交的结果记录：「{user_message}」。\n\n"
                 f"### 结果分析要点\n"
                 f"- 我们将你的指标与论文 Baseline 进行客观比对；\n"
                 f"- 重点排查超参数、随机种子与训练轮次对稳定性的影响；\n"
-                f"- 如果缺少测试集细分指标，建议补充混淆矩阵或 Loss 曲线进一步定位！"
+                f"- 如果缺少测试集细分指标，建议补充混淆矩阵进一步定位！"
             )
-
-        return self._finalize_reply(
-            conversation_id, state_model, user_message, reply_content, None, db
-        )
-
-    def retry_last_message(
-        self,
-        conversation_id: str,
-        db: Session,
-        *,
-        owned_ids: list[str] | None = None,
-        force_failure: str | None = None,
-    ) -> OrchestratorMessageResponse:
-        state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
-        if state_model.last_status != "failed" or not state_model.last_failed_user_message:
-            raise OrchestratorRetryNotApplicableError(
-                "No failed message to retry in this conversation."
-            )
-
-        failed_msg = state_model.last_failed_user_message
-        return self.process_message(
-            conversation_id,
-            SendOrchestratorMessageRequest(message=failed_msg),
-            db,
-            owned_ids=owned_ids,
-            force_failure=force_failure,
-        )
 
     def _execute_passive_tool(
         self,
@@ -982,7 +1286,7 @@ class ResearchConversationOrchestrator:
         db: Session,
         owned_ids: list[str] | None,
     ) -> str:
-        """Call existing §2 passive tool and format natural language reply."""
+        """Call existing §2 passive tool and format natural language reply from real return data."""
         if tool_name == "stage-briefing":
             briefing = self.guidance_service.stage_briefing(
                 conversation_id,
@@ -1021,7 +1325,7 @@ class ResearchConversationOrchestrator:
                 if not rec_resp.recommendations:
                     return (
                         "# 为科研而学 · 补学建议 (｡･ω･｡)\n\n"
-                        "根据你目前已确认的画像与计划，暂未发现明显的知识盲区。你可以随时自由探索！"
+                        "根据你目前已确认的研究计划与画像，暂未发现明显的知识盲区。你可以随时自由探索！"
                     )
                 items_str = "\n".join(
                     f"- 【{r.knowledge_point}】（掌握状态：{r.mastery_status}）：{r.reason}"
@@ -1033,56 +1337,138 @@ class ResearchConversationOrchestrator:
                     f"{items_str}\n\n"
                     f"你可以点击相应知识点进行针对性学习或练习！"
                 )
-            except Exception:
+            except StudyRecommendationsNotConfirmedError:
                 return (
-                    "# 学习建议 (｡･ω･｡)\n\n"
-                    "目前科研画像还在收集中，暂无法提取针对性方法知识点。建议先完善研究方法或画像！"
+                    "# 补学建议 (｡･ω･｡)\n\n"
+                    "生成补学建议需要你的明确确认。请确认后重新请求！"
+                )
+            except Exception as err:
+                return (
+                    f"# 学习建议 (｡･ω･｡)\n\n"
+                    f"目前科研画像还在收集中（{err}），暂无法提取针对性方法知识点。建议先完善研究方法或画像！"
                 )
 
         elif tool_name == "topic-difficulty-analysis":
-            return (
-                "# 课题难点与温故知新分析 (•̀ᴗ•́)و ̑̑\n\n"
-                "针对当前课题，核心难点通常集中在四个维度：\n\n"
-                "1. **研究目标**：明确要解决的边界与指标提升空间；\n"
-                "2. **研究动机**：现有方法的瓶颈（如过度平滑、显存瓶颈）；\n"
-                "3. **方法难点**：消息传递矩阵计算复杂度与超参数敏感度；\n"
-                "4. **数据实操难点**：小样本数据划分泄漏与环境依赖配置。\n\n"
-                "不用担心，姜姜会一步步陪你拆解这些挑战！"
-            )
+            try:
+                analysis = self.conversation_service.generate_topic_difficulty_analysis(
+                    conversation_id, db
+                )
+                items_by_area: dict[str, list[str]] = {}
+                for item in analysis.items:
+                    items_by_area.setdefault(item.area, []).append(
+                        f"- [{item.classification}] {item.content} (依据: {item.basis})"
+                    )
+                sections_text = "\n\n".join(
+                    f"### {area}\n" + "\n".join(lines)
+                    for area, lines in items_by_area.items()
+                )
+                return (
+                    f"# 课题难点分析 (•̀ᴗ•́)و ̑̑\n\n"
+                    f"**总体判断**：{analysis.core_judgment}\n\n"
+                    f"{sections_text}\n\n"
+                    f"**下一步建议**：{analysis.next_action}\n\n"
+                    f"> {analysis.provenance_note}"
+                )
+            except Exception as err:
+                return (
+                    "# 课题难点分析 (｡･ω･｡)\n\n"
+                    f"目前无法生成课题难点分析：{err}。\n"
+                    "建议我们先明确研究主题与画像！"
+                )
 
         elif tool_name == "experiment-design":
-            return (
-                "# 实验方案与指标设计方案 (•̀ᴗ•́)و ̑̑\n\n"
-                "### 标准评估指标（白名单）\n"
-                "- **准确率 (ACC)** 与 **Macro-F1**：用于衡量整体与不平衡类别的分类效果；\n"
-                "- **Precision / Recall**：细化分析各类误判率。\n\n"
-                "### 方案建议\n"
-                "- 建议使用 60%/20%/20% 的 Train/Val/Test 划分；\n"
-                "- 初始设置学习率 0.01，Weight Decay 5e-4，训练 200 轮，"
-                "配合 Early Stopping 避免过拟合。"
-            )
+            try:
+                design = self.conversation_service.generate_experiment_design(
+                    conversation_id, db
+                )
+                if design is None:
+                    return (
+                        "# 实验方案设计 (｡･ω･｡)\n\n"
+                        "目前尚未达到实验方案生成条件，请先完善研究画像与计划！"
+                    )
+                baselines_text = (
+                    "\n".join(f"- {b.content}" for b in design.baselines)
+                    or "- 暂无预设 Baseline"
+                )
+                metrics_text = "\n".join(
+                    f"- **{m.name}**：{m.definition} ({'待验证' if m.to_verify else '标准指标'})"
+                    for m in design.metric_specs
+                ) or "- 暂无指标定义"
+                steps_text = (
+                    "\n".join(f"{i+1}. {s.content}" for i, s in enumerate(design.steps))
+                    or "- 暂无实验步骤"
+                )
+                resources_text = (
+                    "\n".join(f"- {r.content}" for r in design.resources)
+                    or "- 暂无资源要求"
+                )
+                return (
+                    f"# 实验方案与指标设计 (•̀ᴗ•́)و ̑̑\n\n"
+                    f"### 核心假设\n- {design.hypothesis.content}\n\n"
+                    f"### 对比基线 (Baselines)\n{baselines_text}\n\n"
+                    f"### 评测指标 (Metrics)\n{metrics_text}\n\n"
+                    f"### 实验步骤\n{steps_text}\n\n"
+                    f"### 计算资源需求\n{resources_text}"
+                )
+            except Exception as err:
+                return (
+                    "# 实验方案设计 (｡･ω･｡)\n\n"
+                    f"目前无法生成实验方案：{err}。\n"
+                    "建议我们先明确研究计划与选定核心论文！"
+                )
 
         elif tool_name == "paper-blueprint":
-            return (
-                "# 论文结构标准五段骨架 (•̀ᴗ•́)و ̑̑\n\n"
-                "1. **摘要 (Abstract)**：简述研究背景、核心痛点、所提方法与主要实验收益；\n"
-                "2. **介绍 (Introduction)**：立项依据、研究问题与核心贡献列表；\n"
-                "3. **文献综述 (Related Work)**：已有代表性工作演进与本文差异；\n"
-                "4. **方法 (Method)**：算法数学定义、架构图与消息传递细节；\n"
-                "5. **实验 (Experiments)**：数据集说明、Baseline 对比表格、消融实验等。"
-            )
+            try:
+                blueprint = self.conversation_service.generate_paper_blueprint(
+                    conversation_id, db
+                )
+                sections_text = "\n\n".join(
+                    f"### {sec.title}\n- 写作要点：{sec.guidance}\n"
+                    f"- 关联证据引用：{len(sec.evidence_references)} 条"
+                    for sec in blueprint.sections
+                )
+                return (
+                    f"# 论文大纲蓝图 (•̀ᴗ•́)و ̑̑\n\n"
+                    f"**论文标题构想**：{blueprint.title}\n\n"
+                    f"{sections_text}\n\n"
+                    f"> {blueprint.provenance_note}"
+                )
+            except Exception as err:
+                return (
+                    "# 论文大纲蓝图 (｡･ω･｡)\n\n"
+                    f"目前无法生成论文大纲：{err}。\n"
+                    "建议先完善研究计划或保存文献证据！"
+                )
 
         elif tool_name == "reproduction-evaluations":
-            return (
-                "# 复现准备度六维度评估 (•̀ᴗ•́)و ̑̑\n\n"
-                "1. **研究问题与假设**：明确清晰；\n"
-                "2. **方法可执行性**：具备明确超参数与优化器配置；\n"
-                "3. **数据可得性**：依赖公开基准数据集（如 Cora）；\n"
-                "4. **指标与统计方法**：命中服务端标准目录（ACC/F1）；\n"
-                "5. **计算资源可行性**：显存需求 ≤8GB，符合你的硬件条件；\n"
-                "6. **结果核验路径**：具备基线对照区间。\n\n"
-                "你的复现准备度良好，建议按步骤执行！"
-            )
+            try:
+                eval_detail = self.evaluation_service.create(conversation_id, db)
+                if eval_detail.pipeline_contract_status != "available":
+                    return (
+                        "# 复现准备度评估 (｡･ω･｡)\n\n"
+                        "目前尚未建立复现 Pipeline 或生成实验设计方案，"
+                        "复现准备度评估暂缺少实验基线与数据条件。\n\n"
+                        "建议我们先选定核心论文或完成实验方案设计！"
+                    )
+                dims_text = "\n".join(
+                    f"- **{dim.dimension}**：{dim.status} (得分: {dim.score})"
+                    for dim in eval_detail.dimension_results
+                )
+                tasks_text = "\n".join(
+                    f"{i+1}. [{t.priority}] {t.title}：{t.description}"
+                    for i, t in enumerate(eval_detail.tasks[:3])
+                )
+                return (
+                    f"# 复现准备度六维度评估 (•̀ᴗ•́)و ̑̑\n\n"
+                    f"### 六维度评估结果\n{dims_text}\n\n"
+                    f"### 待改进任务 (Top 3)\n{tasks_text or '- 暂无待改进任务'}"
+                )
+            except Exception as err:
+                return (
+                    "# 复现准备度评估 (｡･ω･｡)\n\n"
+                    f"目前无法生成复现评估：{err}。\n"
+                    "建议我们先选定核心论文或完成实验方案设计！"
+                )
 
         return f"姜姜收到你的工具请求：「{tool_name}」，已为你整理好相关材料 (＾▽＾)。"
 
@@ -1098,19 +1484,21 @@ class ResearchConversationOrchestrator:
         completed_names = [
             STAGE_DISPLAY_NAMES.get(s, s) for s in (state_model.completed_stages or [])
         ]
-        completed_str = "、".join(completed_names) if completed_names else "暂无"
-        dir_history = state_model.direction_history or []
-        dir_str = (
-            f"历史方向切换过 {len(dir_history)} 次，最近方向为「{dir_history[-1]['direction']}」"
-            if dir_history
-            else "尚未切换过方向"
+        history_str = (
+            "、".join(f"「{name}」" for name in completed_names)
+            if completed_names
+            else "尚无已完成的前置阶段"
         )
+        subtasks = state_model.subtasks or {}
+        done_subs = [k for k, v in subtasks.items() if v]
+        done_str = ", ".join(done_subs) if done_subs else "正在收集基础条件"
+
         return (
-            f"# 历史讨论回顾 (｡･ω･｡)\n\n"
-            f"- **当前所处阶段**：{current_stage_name}\n"
-            f"- **已完成阶段**：{completed_str}\n"
-            f"- **方向记录**：{dir_str}\n\n"
-            f"我们当前仍在「{current_stage_name}」阶段，你可以继续提问或推进下一步！"
+            f"# 历史讨论与进度回顾 (•̀ᴗ•́)و ̑̑\n\n"
+            f"### 当前所处阶段\n- 我们当前正在**「{current_stage_name}」**推进。\n\n"
+            f"### 已完成阶段\n- {history_str}。\n\n"
+            f"### 已达成的子目标\n- 已确认事项：{done_str}。\n\n"
+            f"所有历史记录均已完好保存，你可以随时继续当前阶段的讨论！"
         )
 
     def _finalize_reply(
@@ -1119,63 +1507,56 @@ class ResearchConversationOrchestrator:
         state_model: ResearchOrchestratorStateModel,
         user_message: str,
         reply_content: str,
-        tool_called: str | None,
+        triggered_tool: str | None,
         db: Session,
     ) -> OrchestratorMessageResponse:
-        # Validate persona
-        is_valid, _ = validate_jiangjiang_output(reply_content)
-        if not is_valid:
-            # Clean forbidden emojis if any
-            clean_content = re.sub(
-                r"[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50\u2b55\u200d\ufe0f]",
-                "",
-                reply_content,
-            )
-            for phrase in ["复现成功率已达到", "核心判断：", "当前聚焦于："]:
-                clean_content = clean_content.replace(phrase, "")
-            reply_content = clean_content
-
-        # Update conversation messages
         conv = db.get(ResearchConversationModel, conversation_id)
-        if conv:
-            msgs = list(conv.messages_data or [])
-            now_iso = datetime.now(UTC).isoformat()
-            user_msg_id = str(uuid.uuid4())
-            assistant_msg_id = str(uuid.uuid4())
-            msgs.append({
-                "id": user_msg_id,
-                "sender": "user",
-                "content": user_message,
-                "created_at": now_iso,
-            })
-            msgs.append({
-                "id": assistant_msg_id,
-                "sender": "assistant",
-                "content": reply_content,
-                "created_at": now_iso,
-                "passive_tool_called": tool_called,
-            })
-            conv.messages_data = msgs
+        if conv is None:
+            raise ConversationNotFoundError(conversation_id)
 
-        # Update orchestrator state status
+        now_dt = datetime.now(UTC)
+        msgs = list(conv.messages_data or [])
+
+        # User message
+        msgs.append({
+            "id": str(uuid.uuid4()),
+            "role": "user",
+            "content": user_message,
+            "created_at": now_dt.isoformat(),
+        })
+
+        # Assistant message
+        assistant_msg_id = str(uuid.uuid4())
+        msgs.append({
+            "id": assistant_msg_id,
+            "role": "assistant",
+            "content": reply_content,
+            "triggered_tool": triggered_tool,
+            "stage_at_time": state_model.current_stage,
+            "created_at": now_dt.isoformat(),
+        })
+        conv.messages_data = msgs
+
+        # Clear error state on success
         state_model.last_status = "completed"
         state_model.last_error = None
         state_model.last_failed_user_message = None
+
         db.commit()
         db.refresh(state_model)
 
-        reply_obj = OrchestratorMessageReply(
-            id=assistant_msg_id if conv else str(uuid.uuid4()),
+        reply_msg = OrchestratorMessageReply(
+            id=assistant_msg_id,
             sender="assistant",
             content=reply_content,
-            created_at=datetime.now(UTC),
-            passive_tool_called=tool_called,
+            passive_tool_called=triggered_tool,
+            created_at=now_dt,
         )
 
         return OrchestratorMessageResponse(
             conversation_id=conversation_id,
             status="completed",
-            reply_message=reply_obj,
+            reply_message=reply_msg,
             state=self._model_to_state_response(state_model),
             error=None,
         )
@@ -1184,24 +1565,28 @@ class ResearchConversationOrchestrator:
         self,
         model: ResearchOrchestratorStateModel,
     ) -> OrchestratorStateResponse:
-        dir_entries: list[DirectionHistoryEntry] = []
-        for item in (model.direction_history or []):
-            if isinstance(item, dict) and "direction" in item:
-                ts = (
-                    datetime.fromisoformat(item["timestamp"])
-                    if "timestamp" in item
-                    else datetime.now(UTC)
-                )
-                dir_entries.append(
-                    DirectionHistoryEntry(direction=item["direction"], timestamp=ts)
-                )
-
+        dir_history = [
+            DirectionHistoryEntry(
+                direction=item["direction"],
+                timestamp=datetime.fromisoformat(item["timestamp"]),
+            )
+            for item in (model.direction_history or [])
+        ]
+        subtasks_data = model.subtasks or {}
+        subtasks_obj = OrchestratorSubtasks(
+            need_defined=bool(subtasks_data.get("need_defined")),
+            profile_ready=bool(subtasks_data.get("profile_ready")),
+            plan_generated=bool(subtasks_data.get("plan_generated")),
+            paper_selected=bool(subtasks_data.get("paper_selected")),
+            experiment_designed=bool(subtasks_data.get("experiment_designed")),
+            results_analyzed=bool(subtasks_data.get("results_analyzed")),
+        )
         return OrchestratorStateResponse(
             conversation_id=model.conversation_id,
             current_stage=model.current_stage,  # type: ignore
-            completed_stages=list(model.completed_stages or []),  # type: ignore
-            subtasks=OrchestratorSubtasks.model_validate(model.subtasks or {}),
-            direction_history=dir_entries,
-            last_status=model.last_status,  # type: ignore
+            completed_stages=model.completed_stages or [],
+            subtasks=subtasks_obj,
+            direction_history=dir_history,
+            last_status=model.last_status or "completed",  # type: ignore
             last_error=model.last_error,
         )

@@ -147,13 +147,29 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 - **编排顺序**：用户消息 → 确定性意图/确认词/换方向识别 → 至多一个 §2 被动工具 → 选择 Prompt 模板并组装已确认上下文 → DeepSeek 调用 → 校验、持久化回复 → 仅由规则决定的阶段与子任务更新。
 - **错误码**：404（会话不存在或跨 owner）、422（入参非法）、503（Provider 不可用时返回 `failed` 状态结构或安全错误）。
 
-### 10.2 `POST .../orchestrator/messages/retry-last` — 编排失败轮重试
+### 10.2 `POST .../orchestrator/messages/stream` — 思考生命周期 SSE 流式消息
+
+- **请求体**：同 10.1 请求体 (`SendOrchestratorMessageRequest`)。
+- **响应格式**：`text/event-stream` (Server-Sent Events)
+- **事件生命周期**：
+  1. `event: thinking`
+     `data: {"status": "thinking", "stage": "current_stage", "message": "姜姜正在思考..."}`
+     （在模型调用或工具执行前立即发出，使客户端可见思考状态）
+  2. 若成功：
+     `event: completed`
+     `data: <OrchestratorMessageResponse JSON>`
+  3. 若失败：
+     `event: failed`
+     `data: <OrchestratorMessageResponse JSON (status="failed", error=...)>`
+- **错误码**：404（会话不存在或跨 owner）、422（入参非法）。
+
+### 10.3 `POST .../orchestrator/messages/retry-last` — 编排失败轮重试
 
 - **请求体**：空或 `{}`
 - **处理**：复用上一轮失败时的用户输入与已确认上下文，重新调用模型并按规则更新；上一轮非失败状态时返回 409。
 - **响应体**：同 10.1 响应。
 
-### 10.3 `GET .../orchestrator/state` — 状态机与子任务读取
+### 10.4 `GET .../orchestrator/state` — 状态机与子任务读取
 
 - **响应体**：
   ```json
@@ -175,7 +191,7 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   }
   ```
 
-### 10.4 `GET .../orchestrator/direction-cards` — 动态方向框读取
+### 10.5 `GET .../orchestrator/direction-cards` — 动态方向框读取
 
 - **处理**：根据已接收的 `learned_content` 与 `learning_progress` 动态生成 5 个方向卡片（禁止写死 CNN）。
 - **响应体**：
@@ -195,7 +211,7 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   }
   ```
 
-### 10.5 `GET/POST .../orchestrator/papers` & `.../papers/select` — 论文管理与用途标记
+### 10.6 `GET/POST .../orchestrator/papers` & `.../papers/select` — 论文管理与用途标记
 
 - `GET .../orchestrator/papers` 响应：
   ```json
@@ -231,7 +247,7 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   ```
 - **规则**：仅 `replace` 更新 `current_paper`；`compare` 与 `cite` 保留历史记录但不覆盖 `current_paper`。
 
-### 10.6 `GET/PUT .../orchestrator/learner-profiles` — 学习者画像版本化
+### 10.7 `GET/PUT .../orchestrator/learner-profiles` — 学习者画像版本化
 
 - `GET .../orchestrator/learner-profiles` 响应：
   ```json
@@ -262,7 +278,7 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   ```
 - `PUT .../orchestrator/learner-profiles` 请求：传入需要更新的画像字段，若有实际有效变更则新增 version。
 
-### 10.7 `GET/PUT .../orchestrator/learning-context` — 学习端输入接收与空态
+### 10.8 `GET/PUT .../orchestrator/learning-context` — 学习端输入接收与空态
 
 - `PUT .../orchestrator/learning-context` 请求：
   ```json

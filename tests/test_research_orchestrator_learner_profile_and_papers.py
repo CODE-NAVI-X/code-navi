@@ -24,7 +24,8 @@ from code_navi.research.models import (
 
 
 @pytest.fixture
-def db_session(tmp_path):
+def db_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
     database_url = f"sqlite:///{tmp_path / 'test_lp.db'}"
     engine = create_engine(database_url)
     Base.metadata.create_all(engine)
@@ -54,9 +55,9 @@ def test_dynamic_direction_cards_not_fixed_to_cnn() -> None:
         for card in nlp_cards
     )
 
-    # 3. Empty input
+    # 3. Empty input returns empty list (no hardcoded fake directions)
     empty_cards = generate_dynamic_direction_cards(None, None)
-    assert len(empty_cards) == 5
+    assert len(empty_cards) == 0
 
 
 def test_learner_profile_versioning(db_session) -> None:
@@ -186,20 +187,27 @@ def test_learning_context_persistence_and_empty_state(db_session) -> None:
 
 
 def test_failed_message_and_retry(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    from tests.test_research_orchestrator_llm import FakeOrchestratorLlmGenerator
+
+    fake_generator = FakeOrchestratorLlmGenerator(
+        responses=[
+            TimeoutError("Mock provider timeout error"),
+            "重试成功！(＾▽＾)",
+        ]
+    )
+    orchestrator = ResearchConversationOrchestrator(llm_generator=fake_generator)
     conv = ResearchConversationModel(id="conv-fail-1", profile_data={}, messages_data=[])
     db_session.add(conv)
     db_session.commit()
 
-    # Simulate a failed generation by forcing an error in generation hook or provider
+    # Turn 1: provider failure
     resp = orchestrator.process_message(
         "conv-fail-1",
         SendOrchestratorMessageRequest(message="帮我看看这个方案"),
         db_session,
-        force_failure="Mock provider timeout error",
     )
     assert resp.status == "failed"
-    assert resp.error == "Mock provider timeout error"
+    assert "Mock provider timeout error" in (resp.error or "")
     assert resp.state.last_status == "failed"
 
     # Retrying the failed message

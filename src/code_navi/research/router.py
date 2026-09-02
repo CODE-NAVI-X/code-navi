@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from code_navi.auth.dependencies import (
@@ -1348,6 +1349,33 @@ def send_orchestrator_message(
             db,
             owned_ids=owned_ids,
         )
+    except ConversationNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        ) from error
+
+
+@router.post(
+    "/conversations/{conversation_id}/orchestrator/messages/stream",
+    response_class=StreamingResponse,
+)
+def stream_orchestrator_message(
+    conversation_id: str,
+    request: SendOrchestratorMessageRequest,
+    principal: CurrentPrincipal = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> StreamingResponse:
+    """Stream orchestrator thinking lifecycle events (thinking -> completed/failed)."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    try:
+        generator = _conversation_orchestrator.stream_message(
+            conversation_id,
+            request,
+            db,
+            owned_ids=owned_ids,
+        )
+        return StreamingResponse(generator, media_type="text/event-stream")
     except ConversationNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
