@@ -1069,7 +1069,7 @@ class ResearchConversationOrchestrator:
         elif len(tool_intents) == 1:
             tool_name = tool_intents[0]
             tool_material, is_empty = self._fetch_passive_tool_material(
-                tool_name, conversation_id, db, owned_ids
+                tool_name, conversation_id, db, owned_ids, user_message=user_message
             )
             prompt_data = self._build_passive_tool_prompt(
                 tool_name, tool_material, is_empty, user_message
@@ -1348,6 +1348,7 @@ class ResearchConversationOrchestrator:
         conversation_id: str,
         db: Session,
         owned_ids: list[str] | None,
+        user_message: str = "",
     ) -> tuple[str, bool]:
         """Call existing §2 passive tool and return structured material and empty state flag."""
         if tool_name == "stage-briefing":
@@ -1381,10 +1382,11 @@ class ResearchConversationOrchestrator:
             return material, is_empty
 
         elif tool_name == "study-recommendations":
+            is_confirmed = detect_confirmation_intent(user_message)
             try:
                 rec_resp = self.guidance_service.study_recommendations(
                     conversation_id,
-                    StudyRecommendationRequest(user_confirmed=True),
+                    StudyRecommendationRequest(user_confirmed=is_confirmed),
                     db,
                     owned_ids=owned_ids,
                 )

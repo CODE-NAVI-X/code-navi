@@ -126,23 +126,55 @@ def test_tool_empty_state_does_not_hallucinate(db_session) -> None:
     )
 
 
-def test_study_recommendations_passive_tool_real_call(db_session) -> None:
+def test_study_recommendations_unconfirmed_requires_confirmation_and_does_not_forge_list(
+    db_session,
+) -> None:
     orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
     conv = ResearchConversationModel(
-        id="conv-pt-rec",
-        profile_data={"topic": "图卷积网络"},
+        id="conv-pt-rec-unconfirmed",
+        profile_data={"topic": "图卷积网络", "methods": ["GCN 节点分类"]},
         messages_data=[],
     )
     db_session.add(conv)
     db_session.commit()
 
+    # User asks without explicit confirmation keywords
     resp = orchestrator.process_message(
-        "conv-pt-rec",
-        SendOrchestratorMessageRequest(message="我应该先学什么知识，有什么学习建议？"),
+        "conv-pt-rec-unconfirmed",
+        SendOrchestratorMessageRequest(message="我该先学什么知识，有什么学习建议？"),
         db_session,
     )
     assert resp.reply_message.passive_tool_called == "study-recommendations"
-    assert "补学建议" in resp.reply_message.content or "学习建议" in resp.reply_message.content
+    # Must truthfully state confirmation required, not return forged list
+    assert (
+        "需要用户明确确认" in resp.reply_message.content
+        or "前置条件不足" in resp.reply_message.content
+    )
+
+
+def test_study_recommendations_confirmed_calls_service_with_confirmed_true(
+    db_session,
+) -> None:
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
+    conv = ResearchConversationModel(
+        id="conv-pt-rec-confirmed",
+        profile_data={"topic": "图卷积网络", "methods": ["GCN 节点分类"]},
+        messages_data=[],
+    )
+    db_session.add(conv)
+    db_session.commit()
+
+    # User explicitly confirms
+    resp = orchestrator.process_message(
+        "conv-pt-rec-confirmed",
+        SendOrchestratorMessageRequest(message="可以，我确认，推荐我该先学什么知识"),
+        db_session,
+    )
+    assert resp.reply_message.passive_tool_called == "study-recommendations"
+    assert (
+        "前置知识点清单" in resp.reply_message.content
+        or "掌握状态" in resp.reply_message.content
+    )
 
 
 def test_reproduction_evaluations_tool_empty_pipeline_state(db_session) -> None:
