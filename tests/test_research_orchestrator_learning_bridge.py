@@ -486,3 +486,157 @@ def test_learning_context_api_cross_owner_returns_404(tmp_path) -> None:
     app.dependency_overrides.clear()
     test_engine.dispose()
 
+
+def test_dynamic_direction_cards_reflect_distinct_inputs_and_progress_nuances() -> None:
+    """P1-1: Direction cards must be dynamically generated from real inputs, not fixed lists."""
+    # Input A: Medical Image Segmentation
+    cards_a = generate_dynamic_direction_cards(
+        learned_content="医学影像分割基础与U-Net架构",
+        learning_progress="刚完成第1周入门，练习简单U-Net脑部MRI分割",
+    )
+    assert len(cards_a) == 5
+    titles_a = [c.title for c in cards_a]
+    descs_a = [c.description for c in cards_a]
+    # Check that topic anchors appear in titles and descriptions
+    assert any("医学影像分割" in t or "分割" in t for t in titles_a)
+    assert any("医学影像分割" in d or "U-Net" in d or "分割" in d for d in descs_a)
+
+    # Input B: Remote Sensing Object Detection
+    cards_b = generate_dynamic_direction_cards(
+        learned_content="遥感目标检测与YOLO模型训练",
+        learning_progress="已完成进阶实验，正在进行多尺度轻量化剪枝",
+    )
+    assert len(cards_b) == 5
+    titles_b = [c.title for c in cards_b]
+    descs_b = [c.description for c in cards_b]
+    assert any("遥感目标检测" in t or "目标检测" in t for t in titles_b)
+    assert any("遥感目标检测" in d or "YOLO" in d or "目标检测" in d for d in descs_b)
+
+    # The two sets of cards MUST NOT be identical!
+    assert titles_a != titles_b
+    assert not any("医学影像分割" in t for t in titles_b)
+    assert not any("遥感目标检测" in t for t in titles_a)
+
+    # Empty state returns []
+    assert generate_dynamic_direction_cards(None, None) == []
+    assert generate_dynamic_direction_cards("", "   ") == []
+
+
+def test_learning_snapshot_not_consumed_by_history_direction_change_or_multi_tool_clarification(
+    db_session,
+) -> None:
+    """P1-2: Snapshot must NOT be updated by non-consuming turns (history, change, tool)."""
+    fake_gen = FakeBridgeLlmGenerator(
+        responses=[
+            "姜姜欢迎你开启科研 (＾▽＾)！",
+            "这是被动工具阶段总结解读 (•̀ᴗ•́)و ̑̑",
+            "姜姜收到并结合你的最新增量继续推进 (＾▽＾)！",
+        ]
+    )
+    orchestrator = ResearchConversationOrchestrator(llm_generator=fake_gen)
+
+    conv = ResearchConversationModel(id="conv-bridge-snap-guard", profile_data={}, messages_data=[])
+    db_session.add(conv)
+    db_session.commit()
+
+    # 1. Initial learning context
+    orchestrator.update_learning_context(
+        "conv-bridge-snap-guard",
+        LearningContextInput(
+            learned_content="学习了基础线性代数与图卷积概念",
+            learning_progress="已完成图卷积前置章节",
+        ),
+        db_session,
+    )
+
+    # 2. Turn 1: Opening greeting consumes initial learning input
+    r1 = orchestrator.process_message(
+        "conv-bridge-snap-guard",
+        SendOrchestratorMessageRequest(message="你好，开始科研"),
+        db_session,
+    )
+    assert r1.status == "completed"
+    assert len(fake_gen.calls) == 1
+    state = orchestrator.get_state_model("conv-bridge-snap-guard", db_session)
+    snap1 = state.learning_context.get("last_consumed_snapshot")
+    assert snap1 is not None
+    assert snap1["learned_content"] == "学习了基础线性代数与图卷积概念"
+
+    # 3. Producer updates learning input with increment
+    orchestrator.update_learning_context(
+        "conv-bridge-snap-guard",
+        LearningContextInput(
+            learned_content="学习了基础线性代数与图卷积概念，新增图注意力网络 GAT",
+            learning_progress="已完成 GAT 代码作业",
+        ),
+        db_session,
+    )
+
+    # 4a. History inquiry must NOT consume the learning increment snapshot
+    fake_gen.calls.clear()
+    r_hist = orchestrator.process_message(
+        "conv-bridge-snap-guard",
+        SendOrchestratorMessageRequest(message="查看历史记录"),
+        db_session,
+    )
+    assert r_hist.status == "completed"
+    assert len(fake_gen.calls) == 0  # Deterministic, no LLM call
+    state = orchestrator.get_state_model("conv-bridge-snap-guard", db_session)
+    snap_after_hist = state.learning_context.get("last_consumed_snapshot")
+    # Must STILL be the old snapshot!
+    assert snap_after_hist["learned_content"] == "学习了基础线性代数与图卷积概念"
+
+    # 4b. Direction change must NOT consume the learning increment snapshot
+    r_dir = orchestrator.process_message(
+        "conv-bridge-snap-guard",
+        SendOrchestratorMessageRequest(message="我想换个方向，做时空图预测"),
+        db_session,
+    )
+    assert r_dir.status == "completed"
+    assert len(fake_gen.calls) == 0
+    state = orchestrator.get_state_model("conv-bridge-snap-guard", db_session)
+    snap_after_dir = state.learning_context.get("last_consumed_snapshot")
+    assert snap_after_dir["learned_content"] == "学习了基础线性代数与图卷积概念"
+
+    # 4c. Multi-tool ambiguity clarification must NOT consume the snapshot
+    r_multi = orchestrator.process_message(
+        "conv-bridge-snap-guard",
+        SendOrchestratorMessageRequest(message="我想看阶段进展总结和论文大纲"),
+        db_session,
+    )
+    assert r_multi.status == "completed"
+    assert len(fake_gen.calls) == 0
+    state = orchestrator.get_state_model("conv-bridge-snap-guard", db_session)
+    snap_after_multi = state.learning_context.get("last_consumed_snapshot")
+    assert snap_after_multi["learned_content"] == "学习了基础线性代数与图卷积概念"
+
+    # 4d. Single passive tool call (e.g. stage-briefing) prompt doesn't include learning context,
+    # so it must NOT consume the snapshot either
+    r_tool = orchestrator.process_message(
+        "conv-bridge-snap-guard",
+        SendOrchestratorMessageRequest(message="请给我阶段进展总结"),
+        db_session,
+    )
+    assert r_tool.status == "completed"
+    assert len(fake_gen.calls) == 1
+    state = orchestrator.get_state_model("conv-bridge-snap-guard", db_session)
+    snap_after_tool = state.learning_context.get("last_consumed_snapshot")
+    assert snap_after_tool["learned_content"] == "学习了基础线性代数与图卷积概念"
+
+    # 5. Subsequent regular orchestrator message MUST receive the unconsumed increment!
+    fake_gen.calls.clear()
+    r_normal = orchestrator.process_message(
+        "conv-bridge-snap-guard",
+        SendOrchestratorMessageRequest(message="好的，我们针对新方向继续深入讨论核心问题"),
+        db_session,
+    )
+    assert r_normal.status == "completed"
+    assert len(fake_gen.calls) == 1
+    call_prompt = fake_gen.calls[0]["user_prompt"]
+    assert "学习端输入" in call_prompt
+    assert "新增图注意力网络 GAT" in call_prompt
+
+    # NOW snapshot is updated after successful consumption
+    state = orchestrator.get_state_model("conv-bridge-snap-guard", db_session)
+    snap_final = state.learning_context.get("last_consumed_snapshot")
+    assert "新增图注意力网络 GAT" in snap_final["learned_content"]

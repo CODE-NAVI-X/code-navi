@@ -227,6 +227,7 @@ _PASSIVE_TOOL_TRIGGERS: dict[str, list[str]] = {
         "总结一下",
         "到哪了",
         "阶段总结",
+        "阶段进展总结",
         "当前进度",
         "总结进度",
     ],
@@ -443,11 +444,39 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
     return True
 
 
+def _extract_learning_topic(content_raw: str, progress_raw: str) -> str:
+    """Extract a clean, concise topic anchor from learned content and progress."""
+    raw = content_raw.strip() or progress_raw.strip()
+    if not raw:
+        return "前置学习课题"
+
+    cleaned = raw
+    for prefix in [
+        "学习了", "学习过", "复习了", "了解了", "已完成", "正在学习", "正在探索",
+        "刚完成", "刚学完", "内容：", "课题：",
+    ]:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+
+    # Split on punctuation (comma, semicolon, period, slash)
+    tokens = [t.strip() for t in re.split(r"[，,、；;。/]+", cleaned) if t.strip()]
+    if not tokens:
+        return cleaned[:20]
+
+    first = tokens[0]
+    if len(first) <= 3 and len(tokens) > 1:
+        first = f"{tokens[0]} {tokens[1]}"
+    elif len(tokens) > 1 and len(first) + len(tokens[1]) <= 22:
+        first = f"{tokens[0]}与{tokens[1]}"
+
+    return first[:24]
+
+
 def generate_dynamic_direction_cards(
     learned_content: str | None,
     learning_progress: str | None,
 ) -> list[DirectionCard]:
-    """Dynamically generate direction cards only when learning input exists."""
+    """Dynamically generate 5 direction cards from real learned_content and learning_progress."""
     content_raw = (learned_content or "").strip()
     progress_raw = (learning_progress or "").strip()
     combined_raw = f"{content_raw} {progress_raw}".strip()
@@ -456,204 +485,84 @@ def generate_dynamic_direction_cards(
     if not combined_raw:
         return []
 
-    combined_lower = combined_raw.lower()
-    is_gnn = (
-        "图网络" in combined_raw
-        or "图神经" in combined_raw
-        or "图卷积" in combined_raw
-        or "图结构" in combined_raw
-        or "图注意力" in combined_raw
-        or "拓扑" in combined_raw
-        or "知识图谱" in combined_raw
-        or "异质图" in combined_raw
-        or "引文网络" in combined_raw
-        or "节点分类" in combined_raw
-        or "gcn" in combined_lower
-        or "gat" in combined_lower
-        or "gnn" in combined_lower
-        or "graph" in combined_lower
+    topic = _extract_learning_topic(content_raw, progress_raw)
+    detail_ctx = content_raw or progress_raw or topic
+
+    # Progress nuances
+    is_early = any(
+        k in progress_raw
+        for k in ["入门", "第1周", "第 1 周", "初学", "刚完成", "基础", "前置", "10%", "20%"]
     )
-    is_nlp = (
-        "transformer" in combined_lower
-        or "语言" in combined_raw
-        or "文本" in combined_raw
-        or "nlp" in combined_lower
-        or "bert" in combined_lower
-        or "大模型" in combined_raw
-        or "llm" in combined_lower
-        or "rag" in combined_lower
-        or "词向量" in combined_raw
-    )
-    is_cv = (
-        "视觉" in combined_raw
-        or "图像" in combined_raw
-        or "卷积" in combined_raw
-        or "目标检测" in combined_raw
-        or "检测" in combined_raw
-        or "分割" in combined_raw
-        or "特征金字塔" in combined_raw
-        or "cv" in combined_lower
-        or "cnn" in combined_lower
-        or "yolo" in combined_lower
-        or "resnet" in combined_lower
-        or "segmentation" in combined_lower
-        or "detection" in combined_lower
+    is_advanced = any(
+        k in progress_raw
+        for k in ["进阶", "深入", "优化", "剪枝", "部署", "完成80%", "完成 80%", "高阶"]
     )
 
-    if is_gnn:
-        return [
-            DirectionCard(
-                id="dir-gnn-1",
-                title="图神经网络在引文网络上的节点分类",
-                description="针对图拓扑结构复现基础图神经网络，分析节点分类表现。",
-                prerequisite_gap="需掌握邻接矩阵归一化与消息传递机制",
-                is_recommended=True,
-            ),
-            DirectionCard(
-                id="dir-gnn-2",
-                title="图注意力机制动态权重探究",
-                description="探索自注意力在图邻居聚合中的作用与异质图泛化性。",
-                prerequisite_gap="需熟悉多头注意力机制与 GPU 显存优化",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-gnn-3",
-                title="大规模图采样算法",
-                description="针对无法整图加载的大规模图结构，研究归纳式图表示学习。",
-                prerequisite_gap="需了解邻居采样与小批量图训练机制",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-gnn-4",
-                title="图对比学习与无监督表征",
-                description="研究图结构上的自监督预训练与下游性质预测。",
-                prerequisite_gap="需掌握数据增强与对比损失函数设计",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-gnn-5",
-                title="时空图卷积网络应用",
-                description="结合时序模型与空间图卷积实现复杂网络动态建模。",
-                prerequisite_gap="需熟悉时序循环网络与空间图卷积的串联结构",
-                is_recommended=False,
-            ),
-        ]
-    elif is_nlp:
-        return [
-            DirectionCard(
-                id="dir-nlp-1",
-                title="语言模型的参数高效微调",
-                description="在有限显存资源下对模型进行下游任务微调并评测表现。",
-                prerequisite_gap="需了解低秩矩阵分解与梯度反向传播原理",
-                is_recommended=True,
-            ),
-            DirectionCard(
-                id="dir-nlp-2",
-                title="检索增强生成 (RAG) 知识召回优化",
-                description="结合密集检索向量库与重排器提升问答准确率。",
-                prerequisite_gap="需了解向量数据库索引与分块策略",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-nlp-3",
-                title="提示工程与思维链推理探索",
-                description="分析不同提示策略对复杂逻辑推理能力的影响。",
-                prerequisite_gap="需掌握 Prompt 评估基准与测试集构建方法",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-nlp-4",
-                title="跨语言迁移与文本分类",
-                description="利用多语言预训练模型评估零样本跨语言迁移能力。",
-                prerequisite_gap="需了解跨语言 Tokenizer 与对齐微调方法",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-nlp-5",
-                title="轻量化语义匹配与知识蒸馏",
-                description="通过模型蒸馏将大模型知识转移到小型双塔网络。",
-                prerequisite_gap="需了解 KL 散度蒸馏损失与双塔向量架构",
-                is_recommended=False,
-            ),
-        ]
-    elif is_cv:
-        return [
-            DirectionCard(
-                id="dir-cv-1",
-                title="轻量级目标检测模型剪枝与量化",
-                description="针对边缘设备复现轻量检测算法并对比帧率与精度。",
-                prerequisite_gap="需熟悉模型剪枝与量化工具链",
-                is_recommended=True,
-            ),
-            DirectionCard(
-                id="dir-cv-2",
-                title="多模态图文检索与特征对齐",
-                description="微调轻量双塔视觉多模态模型并评测跨模态检索准确率。",
-                prerequisite_gap="需掌握对比学习与多模态数据对齐原理",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-cv-3",
-                title="小样本图像分类元学习方法",
-                description="研究在极少标注样本条件下的快速泛化分类算法。",
-                prerequisite_gap="需了解元学习与 Episode 训练机制",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-cv-4",
-                title="图像超分辨率重建算法探究",
-                description="复现轻量超分辨率算法并分析评价指标。",
-                prerequisite_gap="需掌握退化模型与残差特征提取架构",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-cv-5",
-                title="弱监督图像语义分割",
-                description="在仅有弱标注情况下实现精细目标分割。",
-                prerequisite_gap="需了解类激活图与伪标签生成技术",
-                is_recommended=False,
-            ),
-        ]
-    else:
-        # General adaptive directions based on user's text
-        base_title = content_raw[:15]
-        return [
-            DirectionCard(
-                id="dir-adp-1",
-                title=f"{base_title} 基础算法复现与评测",
-                description=f"围绕「{content_raw[:30]}」构建基础模型并完成标准评测。",
-                prerequisite_gap="需熟悉相关基础理论与 Python 深度学习框架",
-                is_recommended=True,
-            ),
-            DirectionCard(
-                id="dir-adp-2",
-                title=f"{base_title} 轻量化与效率优化",
-                description="在受限硬件条件下探究模型的计算与显存优化。",
-                prerequisite_gap="需掌握模型量化或剪枝技术",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-adp-3",
-                title=f"{base_title} 特征增强与鲁棒性分析",
-                description="探究数据扰动与特征提取对下游任务稳定性的影响。",
-                prerequisite_gap="需了解数据增强与鲁棒性评测基准",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-adp-4",
-                title=f"{base_title} 无监督与自监督表征探究",
-                description="研究在无大量人工标注条件下的特征学习能力。",
-                prerequisite_gap="需掌握对比学习与自监督损失设计",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-adp-5",
-                title=f"{base_title} 跨领域迁移与泛化性验证",
-                description="评估模型在不同分布测试集上的泛化表现。",
-                prerequisite_gap="需熟悉域适应与迁移学习策略",
-                is_recommended=False,
-            ),
-        ]
+    # Card 1: Baseline reproduction & benchmarks (Recommended)
+    card1_title = f"{topic}基准算法复现与评测"
+    card1_desc = (
+        f"结合「{detail_ctx}」完成基准模型代码复现，验证核心指标并夯实实验基础。"
+        if is_early else
+        f"围绕「{detail_ctx}」搭建标准基线流水线，在经典数据集上复现核心指标与评测过程。"
+    )
+
+    # Card 2: Lightweight & efficiency optimization
+    card2_title = f"{topic}受限资源轻量化与效率优化"
+    card2_desc = (
+        f"针对算力受限或显存瓶颈，探索「{detail_ctx}」的模型剪枝、量化与高效训练策略。"
+        if is_advanced else
+        f"分析「{detail_ctx}」在受限硬件上的显存占用与计算开销，设计轻量化执行方案。"
+    )
+
+    # Card 3: Feature enhancement & robustness
+    card3_title = f"{topic}特征增强与鲁棒性分析"
+    card3_desc = f"探究数据扰动、噪声与增强策略对「{detail_ctx}」模型泛化稳定性的影响。"
+
+    # Card 4: Weak/Self-supervised exploration
+    card4_title = f"{topic}少样本与弱监督表征探索"
+    card4_desc = f"研究在少样本标注或弱标签条件下提升「{detail_ctx}」表征能力的有效路径。"
+
+    # Card 5: Downstream adaptation & variants
+    card5_title = f"{topic}前沿变体与下游场景迁移"
+    card5_desc = f"结合最新网络架构与注意力机制，探索「{detail_ctx}」在特定下游领域的拓展应用。"
+
+    return [
+        DirectionCard(
+            id="dir-dyn-1",
+            title=card1_title,
+            description=card1_desc,
+            prerequisite_gap=f"需掌握{topic}的基础理论与评测指标",
+            is_recommended=True,
+        ),
+        DirectionCard(
+            id="dir-dyn-2",
+            title=card2_title,
+            description=card2_desc,
+            prerequisite_gap=f"需熟悉针对{topic}的轻量化架构或梯度优化技巧",
+            is_recommended=False,
+        ),
+        DirectionCard(
+            id="dir-dyn-3",
+            title=card3_title,
+            description=card3_desc,
+            prerequisite_gap=f"需了解{topic}对应的数据增强管道与鲁棒性基准",
+            is_recommended=False,
+        ),
+        DirectionCard(
+            id="dir-dyn-4",
+            title=card4_title,
+            description=card4_desc,
+            prerequisite_gap=f"需掌握针对{topic}的自监督对比学习或伪标签机制",
+            is_recommended=False,
+        ),
+        DirectionCard(
+            id="dir-dyn-5",
+            title=card5_title,
+            description=card5_desc,
+            prerequisite_gap=f"需熟悉针对{topic}的多任务结构或领域自适应方法",
+            is_recommended=False,
+        ),
+    ]
 
 
 class ResearchConversationOrchestrator:
@@ -1253,7 +1162,13 @@ class ResearchConversationOrchestrator:
                 state_model.subtasks = subtasks
 
         return self._finalize_reply(
-            conversation_id, state_model, user_message, reply_content, None, db
+            conversation_id,
+            state_model,
+            user_message,
+            reply_content,
+            None,
+            db,
+            consume_learning_context=True,
         )
 
     def retry_last_message(
@@ -1689,6 +1604,8 @@ class ResearchConversationOrchestrator:
         reply_content: str,
         triggered_tool: str | None,
         db: Session,
+        *,
+        consume_learning_context: bool = False,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -1717,13 +1634,14 @@ class ResearchConversationOrchestrator:
         })
         conv.messages_data = msgs
 
-        # Update last_consumed_snapshot in learning_context upon successful turn completion
-        raw_learning_ctx = dict(state_model.learning_context or {})
-        raw_learning_ctx["last_consumed_snapshot"] = {
-            "learned_content": raw_learning_ctx.get("learned_content"),
-            "learning_progress": raw_learning_ctx.get("learning_progress"),
-        }
-        state_model.learning_context = raw_learning_ctx
+        # ONLY update last_consumed_snapshot when the reply actually consumed the learning context
+        if consume_learning_context:
+            raw_learning_ctx = dict(state_model.learning_context or {})
+            raw_learning_ctx["last_consumed_snapshot"] = {
+                "learned_content": raw_learning_ctx.get("learned_content"),
+                "learning_progress": raw_learning_ctx.get("learning_progress"),
+            }
+            state_model.learning_context = raw_learning_ctx
 
         # Clear error state on success
         state_model.last_status = "completed"
