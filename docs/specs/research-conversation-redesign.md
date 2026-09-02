@@ -148,30 +148,12 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 - **错误码**：404（会话不存在或跨 owner）、422（入参非法）、503（Provider 不可用时返回 `failed` 状态结构或安全错误）。
 
 ### 10.2 `POST .../orchestrator/messages/stream` — 思考生命周期 SSE 流式消息
-
 - **请求体**：同 10.1 请求体 (`SendOrchestratorMessageRequest`)。
-- **响应格式**：`text/event-stream` (Server-Sent Events)
-- **事件生命周期**：
-  1. `event: thinking`
-     `data: {"status": "thinking", "stage": "current_stage", "message": "姜姜正在思考..."}`
-     （在模型调用或工具执行前立即发出，使客户端可见思考状态）
-  2. 若成功：
-     `event: completed`
-     `data: <OrchestratorMessageResponse JSON>`
-  3. 若失败：
-     `event: failed`
-     `data: <OrchestratorMessageResponse JSON (status="failed", error=...)>`
-- **错误码**：404（会话不存在或跨 owner）、422（入参非法）。
-
-### 10.3 `POST .../orchestrator/messages/retry-last` — 编排失败轮重试
-
-- **请求体**：空或 `{}`
 - **处理**：复用上一轮失败时的用户输入与已确认上下文，重新调用模型并按规则更新；上一轮非失败状态时返回 409。
 - **响应体**：同 10.1 响应。
 
 ### 10.4 `GET .../orchestrator/state` — 状态机与子任务读取
 
-- **响应体**：
   ```json
   {
     "conversation_id": "string",
@@ -194,7 +176,6 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 ### 10.5 `GET .../orchestrator/direction-cards` — 动态方向框读取
 
 - **处理**：根据已接收的 `learned_content` 与 `learning_progress` 动态生成 5 个方向卡片（禁止写死 CNN）。
-- **响应体**：
   ```json
   {
     "conversation_id": "string",
@@ -215,7 +196,6 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 
 - `GET .../orchestrator/papers` 响应：
   ```json
-  {
     "conversation_id": "string",
     "current_paper": {
       "id": "string",
@@ -252,7 +232,6 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 - `GET .../orchestrator/learner-profiles` 响应：
   ```json
   {
-    "conversation_id": "string",
     "current_profile": {
       "version": 1,
       "domain_familiarity": "string | null",
@@ -284,7 +263,6 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   ```json
   {
     "learned_content": "string | null",
-    "learning_progress": "string | null"
   }
   ```
 - `GET .../orchestrator/learning-context` 响应：返回当前保存的学习端输入或空态（无数据时返回 null 字段，HTTP 200）。

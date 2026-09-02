@@ -63,8 +63,17 @@ def test_intent_detection_direction_change() -> None:
     assert is_history_inquiry("我们刚才讨论了哪个方向？")
 
 
+class FakeOrchestratorLlmGenerator:
+    def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+        from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+        return OrchestratorLlmOutcome(
+            status="generated",
+            reply_text="姜姜收到你的消息并为你明确了阶段目标 (•̀ᴗ•́)و ̑̑",
+        )
+
+
 def test_state_machine_advancement_requires_subtasks_and_confirmation(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
     conv = ResearchConversationModel(id="conv-sm-1", profile_data={}, messages_data=[])
     db_session.add(conv)
     db_session.commit()

@@ -182,14 +182,20 @@ def build_profile_and_plan_prompt(
     }
 
 
+VALID_SEARCH_SOURCES: list[str] = ["OpenAlex", "Crossref", "arXiv"]
+
+
 def build_search_guidance_prompt(
     research_goal: str,
     candidate_queries: list[str],
-    sources: list[str],
+    sources: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Template 4: Search Guidance (检索引导)."""
+    """Template 4: Search Guidance (检索引导). Sources restricted to OpenAlex, Crossref, arXiv."""
+    valid_sources = [
+        s for s in (sources or VALID_SEARCH_SOURCES) if s in VALID_SEARCH_SOURCES
+    ] or list(VALID_SEARCH_SOURCES)
     queries_str = "\n".join(f"- `{q}`" for q in candidate_queries)
-    sources_str = ", ".join(sources)
+    sources_str = ", ".join(valid_sources)
     context = (
         f"【研究目标】\n{research_goal}\n\n"
         f"【建议检索词】\n{queries_str}\n\n"

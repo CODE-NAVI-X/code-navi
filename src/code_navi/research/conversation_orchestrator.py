@@ -44,6 +44,7 @@ from .conversation_orchestrator_schemas import (
     SendOrchestratorMessageRequest,
 )
 from .conversation_prompt_templates import (
+    JIANGJIANG_SYSTEM_PERSONA,
     build_experiment_design_prompt,
     build_need_clarification_prompt,
     build_paper_intro_prompt,
@@ -59,6 +60,7 @@ from .conversation_service import (
     ResearchConversationService,
 )
 from .llm import DEEPSEEK_DEFAULT_MODEL, DeepSeekGuidanceProvider
+from .metrics_catalog import STANDARD_METRICS, infer_task_type
 from .models import (
     ResearchConversationModel,
     ResearchLearnerProfileModel,
@@ -871,6 +873,11 @@ class ResearchConversationOrchestrator:
     ) -> Generator[str, None, None]:
         """Stream orchestrator thinking lifecycle events (thinking -> completed/failed)."""
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        # P1: Persist thinking state in DB before yielding event: thinking
+        state_model.last_status = "thinking"
+        db.commit()
+        db.refresh(state_model)
+
         thinking_payload = {
             "status": "thinking",
             "stage": state_model.current_stage,
@@ -905,14 +912,14 @@ class ResearchConversationOrchestrator:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         user_message = request.message.strip()
 
-        # Step 1: Detect history inquiry
+        # Step 1: Detect history inquiry (deterministic, no stage advancement)
         if is_history_inquiry(user_message):
             reply_content = self._handle_history_inquiry(conversation_id, state_model, db)
             return self._finalize_reply(
                 conversation_id, state_model, user_message, reply_content, None, db
             )
 
-        # Step 2: Detect direction change
+        # Step 2: Detect direction change (deterministic, resets active workflow)
         if detect_direction_change_intent(user_message):
             state_model.current_stage = "research_need"
             dir_history = list(state_model.direction_history or [])
@@ -962,9 +969,58 @@ class ResearchConversationOrchestrator:
 
         elif len(tool_intents) == 1:
             tool_name = tool_intents[0]
-            reply_content = self._execute_passive_tool(
+            tool_material, is_empty = self._fetch_passive_tool_material(
                 tool_name, conversation_id, db, owned_ids
             )
+            prompt_data = self._build_passive_tool_prompt(
+                tool_name, tool_material, is_empty, user_message
+            )
+            history_msgs = conv.messages_data or []
+            outcome = self.llm_generator.generate(
+                system_prompt=prompt_data["system_prompt"],
+                user_prompt=prompt_data["user_prompt"],
+                conversation_history=history_msgs,
+                conversation_id=conversation_id,
+            )
+            # P0: Treat unavailable / failed equally - must not succeed
+            if (
+                outcome.status != "generated"
+                or not outcome.reply_text
+                or not outcome.reply_text.strip()
+            ):
+                err_msg = (
+                    outcome.reason
+                    or f"Model provider unavailable or failed for tool {tool_name}"
+                )
+                state_model.last_status = "failed"
+                state_model.last_error = err_msg
+                state_model.last_failed_user_message = user_message
+                db.commit()
+                return OrchestratorMessageResponse(
+                    conversation_id=conversation_id,
+                    status="failed",
+                    reply_message=None,
+                    state=self._model_to_state_response(state_model),
+                    error=err_msg,
+                )
+
+            reply_content = outcome.reply_text.strip()
+            valid, val_reason = validate_jiangjiang_output(reply_content)
+            if not valid:
+                err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
+                state_model.last_status = "failed"
+                state_model.last_error = err_msg
+                state_model.last_failed_user_message = user_message
+                db.commit()
+                return OrchestratorMessageResponse(
+                    conversation_id=conversation_id,
+                    status="failed",
+                    reply_message=None,
+                    state=self._model_to_state_response(state_model),
+                    error=err_msg,
+                )
+
+            # Passive tool calls do NOT advance stage
             return self._finalize_reply(
                 conversation_id, state_model, user_message, reply_content, tool_name, db
             )
@@ -988,10 +1044,15 @@ class ResearchConversationOrchestrator:
             conversation_id=conversation_id,
         )
 
-        # Handle LLM failure: do not advance stage or subtasks!
-        if outcome.status == "failed":
+        # P0: Treat unavailable / failed equally - must not advance stage or subtasks!
+        if (
+            outcome.status != "generated"
+            or not outcome.reply_text
+            or not outcome.reply_text.strip()
+        ):
+            err_msg = outcome.reason or "Model provider unavailable or failed"
             state_model.last_status = "failed"
-            state_model.last_error = outcome.reason or "Model provider failure"
+            state_model.last_error = err_msg
             state_model.last_failed_user_message = user_message
             db.commit()
             return OrchestratorMessageResponse(
@@ -999,25 +1060,27 @@ class ResearchConversationOrchestrator:
                 status="failed",
                 reply_message=None,
                 state=self._model_to_state_response(state_model),
-                error=outcome.reason or "Model provider failure",
+                error=err_msg,
             )
 
-        # If LLM generated output, validate and use it
-        reply_content: str
-        if outcome.status == "generated" and outcome.reply_text:
-            reply_content = outcome.reply_text.strip()
-            # Persona validation: if contains emoji or forbidden phrases, strip/sanitize
-            valid, _ = validate_jiangjiang_output(reply_content)
-            if not valid:
-                for phrase in ["复现成功", "核心判断", "当前聚焦于", "完成百分比"]:
-                    reply_content = reply_content.replace(phrase, "")
-        else:
-            # Safe fallback text for offline mode when no provider configured
-            reply_content = self._generate_rule_reply_fallback(
-                current_stage, subtasks, is_confirmed, user_message, conv
+        reply_content = outcome.reply_text.strip()
+        # Persona validation: if contains emoji or forbidden phrases, reject!
+        valid, val_reason = validate_jiangjiang_output(reply_content)
+        if not valid:
+            err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
+            state_model.last_status = "failed"
+            state_model.last_error = err_msg
+            state_model.last_failed_user_message = user_message
+            db.commit()
+            return OrchestratorMessageResponse(
+                conversation_id=conversation_id,
+                status="failed",
+                reply_message=None,
+                state=self._model_to_state_response(state_model),
+                error=err_msg,
             )
 
-        # State machine advancement (deterministic rules)
+        # ONLY when model output is successfully generated & validated: advance state machine
         if current_stage == "research_need":
             has_need = _has_defined_need(user_message, conv, subtasks)
             if has_need:
@@ -1031,7 +1094,6 @@ class ResearchConversationOrchestrator:
                 state_model.completed_stages = completed_stages
 
         elif current_stage == "research_plan":
-            # Plan generated check: only true if artifacts or profile exists
             profile_ready = subtasks.get("profile_ready")
             plan_gen = subtasks.get("plan_generated")
             if is_confirmed and profile_ready and plan_gen:
@@ -1144,7 +1206,7 @@ class ResearchConversationOrchestrator:
                 tmpl = build_search_guidance_prompt(
                     research_goal=user_message,
                     candidate_queries=[user_message],
-                    sources=["arXiv", "Semantic Scholar", "DBLP"],
+                    sources=["OpenAlex", "Crossref", "arXiv"],
                 )
             elif papers_resp.current_paper is not None:
                 tmpl = build_paper_intro_prompt(
@@ -1154,10 +1216,19 @@ class ResearchConversationOrchestrator:
                 )
             else:
                 prof = profiles_resp.current_profile or LearnerProfileData(version=1)
+                task_type = infer_task_type(
+                    topic=user_message,
+                    research_questions=[user_message],
+                )
+                standard_metrics = [
+                    m.name for m in STANDARD_METRICS if task_type in m.applies_to_task_type
+                ]
+                if not standard_metrics:
+                    standard_metrics = ["待核验指标 (to_verify)"]
                 tmpl = build_experiment_design_prompt(
                     paper=papers_resp.current_paper,
                     profile=prof,
-                    standard_metrics=["Accuracy", "Macro-F1", "Loss"],
+                    standard_metrics=standard_metrics,
                 )
 
         else:  # research_analysis
@@ -1172,121 +1243,14 @@ class ResearchConversationOrchestrator:
         user_str = f"{tmpl['context']}\n\n【当前用户输入】\n{user_message}"
         return {"system_prompt": system_str, "user_prompt": user_str}
 
-    def _generate_rule_reply_fallback(
-        self,
-        current_stage: str,
-        subtasks: dict[str, Any],
-        is_confirmed: bool,
-        user_message: str,
-        conv: ResearchConversationModel,
-    ) -> str:
-        """Safe deterministic fallback wording when offline."""
-        if current_stage == "research_need":
-            has_need = _has_defined_need(user_message, conv, subtasks)
-            if is_confirmed and has_need:
-                return (
-                    "# 第一阶段「研究需求确定」已顺利完成 (＾▽＾)\n\n"
-                    "### 完成的具体工作\n"
-                    "- 明确了核心研究主题与研究问题。\n\n"
-                    "### 判定依据\n"
-                    "- 收到你的明确确认，需求范围已收敛。\n\n"
-                    "### 下一步引导\n"
-                    "- 接下来我们进入「研究计划生成」阶段。我们需要完善你的学习者画像"
-                    "（设备显存、可用时间与环境），并为你量身定制可落地的小目标与执行计划！"
-                )
-            elif is_confirmed and not has_need:
-                return (
-                    "(｡･ω･｡) 姜姜也想尽快带你进入下一阶段！"
-                    "不过我们还需要先明确具体的研究主题或研究问题哦。\n\n"
-                    "你最感兴趣的研究方向是什么呢？可以直接告诉我！"
-                )
-            else:
-                return (
-                    f"# 研究需求梳理 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"收到你的想法：「{user_message}」！\n\n"
-                    f"这个方向非常值得探索。针对这个目标，我们接下来可以收敛具体的实验场景和对比基线。"
-                    f"如果你觉得方向没问题，回复「可以」或「继续」，我们就可以进入画像与计划阶段啦！"
-                )
-
-        elif current_stage == "research_plan":
-            profile_ready = subtasks.get("profile_ready")
-            plan_gen = subtasks.get("plan_generated")
-            if is_confirmed and profile_ready and plan_gen:
-                return (
-                    "# 第二阶段「研究计划生成」已顺利完成 (＾▽＾)\n\n"
-                    "### 完成的具体工作\n"
-                    "- 建立了学习者画像，生成了务实可落地的小目标与执行计划。\n\n"
-                    "### 判定依据\n"
-                    "- 硬件与时间条件已就绪，收到你的继续确认。\n\n"
-                    "### 下一步引导\n"
-                    "- 接下来我们进入「研究开展」阶段！我们将进行针对性文献检索、"
-                    "论文精读介绍以及设计具体的实验方案！"
-                )
-            elif is_confirmed and not (profile_ready and plan_gen):
-                missing = []
-                if not profile_ready:
-                    missing.append("设备/显存与环境画像")
-                if not plan_gen:
-                    missing.append("总体研究计划")
-                return (
-                    f"(｡･ω･｡) 计划还在完善中哦，我们目前还缺少：{'、'.join(missing)}。\n\n"
-                    f"你可以告诉我你的 GPU 显存大小以及每周可用时间，姜姜马上为你生成适配计划！"
-                )
-            else:
-                return (
-                    f"# 计划与画像确认 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"姜姜已记录你的条件与想法：「{user_message}」。\n\n"
-                    f"建议我们分三步走：① 选取轻量基线论文精读；"
-                    f"② 搭建最小运行环境跑通 Baseline；③ 验证改进思路。"
-                    f"如果准备好了，回复「可以」或「继续」进入研究开展阶段！"
-                )
-
-        elif current_stage == "research_execution":
-            paper_ready = subtasks.get("paper_selected")
-            exp_ready = subtasks.get("experiment_designed")
-            if is_confirmed and (paper_ready or exp_ready):
-                return (
-                    "# 第三阶段「研究开展」已顺利完成 (＾▽＾)\n\n"
-                    "### 完成的具体工作\n"
-                    "- 选定了当前核心论文并完成了实验指标方案设计。\n\n"
-                    "### 判定依据\n"
-                    "- 实验设计方案与复现路径明确，收到你的推进确认。\n\n"
-                    "### 下一步引导\n"
-                    "- 接下来我们进入第四阶段「研究结果分析」！"
-                    "当你运行完实验后，把结果指标或遇到的现象告诉我，我们一起来归因分析！"
-                )
-            elif is_confirmed and not (paper_ready or exp_ready):
-                return (
-                    "(｡･ω･｡) 在进入结果分析前，"
-                    "我们还需要先选定一篇当前论文或生成实验设计方案哦！\n\n"
-                    "你可以告诉我你想复现哪篇论文，或者让我帮你想想检索词！"
-                )
-            else:
-                return (
-                    f"# 研究开展与方案推进 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"收到你的消息：「{user_message}」。\n\n"
-                    f"在这一阶段，你可以随时让我帮你「设计实验方案」或对已选论文做「精读介绍」。"
-                    f"如果你已经完成了实验准备，回复「继续」我们就可以进入结果分析啦！"
-                )
-
-        else:  # research_analysis
-            return (
-                f"# 实验结果客观分析与归因 (•̀ᴗ•́)و ̑̑\n\n"
-                f"已收到你提交的结果记录：「{user_message}」。\n\n"
-                f"### 结果分析要点\n"
-                f"- 我们将你的指标与论文 Baseline 进行客观比对；\n"
-                f"- 重点排查超参数、随机种子与训练轮次对稳定性的影响；\n"
-                f"- 如果缺少测试集细分指标，建议补充混淆矩阵进一步定位！"
-            )
-
-    def _execute_passive_tool(
+    def _fetch_passive_tool_material(
         self,
         tool_name: str,
         conversation_id: str,
         db: Session,
         owned_ids: list[str] | None,
-    ) -> str:
-        """Call existing §2 passive tool and format natural language reply from real return data."""
+    ) -> tuple[str, bool]:
+        """Call existing §2 passive tool and return structured material and empty state flag."""
         if tool_name == "stage-briefing":
             briefing = self.guidance_service.stage_briefing(
                 conversation_id,
@@ -1297,22 +1261,25 @@ class ResearchConversationOrchestrator:
             topic = briefing.stage_summary.topic if briefing.stage_summary else None
             digest = briefing.stage_summary.digest if briefing.stage_summary else None
             bundles_count = briefing.reproduction_entry.bundle_count
-            if not briefing.has_learning_context and not topic and bundles_count == 0:
-                return (
-                    "# 当前科研进展总结 (｡･ω･｡)\n\n"
-                    "我们目前处于刚起步的探索阶段，暂未关联前置学习快照，文献库中暂无保存的论文证据包。\n\n"
-                    "建议我们先明确一个核心研究问题，你可以直接告诉我你感兴趣的主题！"
+            is_empty = not briefing.has_learning_context and not topic and bundles_count == 0
+            if is_empty:
+                material = (
+                    "【阶段进展总结（工具真实输出）】\n"
+                    "- 学习快照状态：暂未关联前置学习快照\n"
+                    "- 课题背景：暂未明确预设主题\n"
+                    "- 文献库与证据包：已保存文献包 0 个\n"
+                    "- 复现路径状态：未开始\n"
+                    "- 核心提示：当前处于起步探索阶段，缺少前置输入事实，需先明确研究主题。"
                 )
-            return (
-                f"# 当前科研进展简报 (＾▽＾)\n\n"
-                f"### 学习与背景衔接\n"
-                f"- 课题/背景：{topic or '暂无预设主题'}\n"
-                f"- 学习摘要：{digest or '已确认基本学习概念'}\n\n"
-                f"### 文献与证据库\n"
-                f"- 已保存文献包：{bundles_count} 个\n"
-                f"- 复现路径状态：{briefing.reproduction_entry.pipeline_status or '未开始'}\n\n"
-                f"我们接下来可以继续深化实验方案设计或选定重点论文！"
-            )
+            else:
+                material = (
+                    "【阶段进展总结（工具真实输出）】\n"
+                    f"- 课题/背景：{topic or '暂无预设主题'}\n"
+                    f"- 学习摘要：{digest or '已确认基本学习概念'}\n"
+                    f"- 已保存文献包数量：{bundles_count} 个\n"
+                    f"- 复现路径状态：{briefing.reproduction_entry.pipeline_status or '未开始'}"
+                )
+            return material, is_empty
 
         elif tool_name == "study-recommendations":
             try:
@@ -1323,29 +1290,31 @@ class ResearchConversationOrchestrator:
                     owned_ids=owned_ids,
                 )
                 if not rec_resp.recommendations:
-                    return (
-                        "# 为科研而学 · 补学建议 (｡･ω･｡)\n\n"
-                        "根据你目前已确认的研究计划与画像，暂未发现明显的知识盲区。你可以随时自由探索！"
+                    material = (
+                        "【补学建议（工具真实输出）】\n"
+                        "- 知识点推荐：当前已确认画像与计划下暂无明显知识盲区推荐项。"
                     )
+                    return material, True
                 items_str = "\n".join(
                     f"- 【{r.knowledge_point}】（掌握状态：{r.mastery_status}）：{r.reason}"
                     for r in rec_resp.recommendations
                 )
-                return (
-                    f"# 为科研而学 · 知识补学建议 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"基于你已确认的研究方法与计划，为你整理了以下前置知识点：\n\n"
-                    f"{items_str}\n\n"
-                    f"你可以点击相应知识点进行针对性学习或练习！"
+                material = (
+                    "【补学建议（工具真实输出）】\n"
+                    f"前置知识点清单：\n{items_str}"
                 )
+                return material, False
             except StudyRecommendationsNotConfirmedError:
                 return (
-                    "# 补学建议 (｡･ω･｡)\n\n"
-                    "生成补学建议需要你的明确确认。请确认后重新请求！"
+                    "【补学建议（工具真实输出）】\n"
+                    "- 状态：前置条件不足（需要用户明确确认后才能生成补学建议）。",
+                    True,
                 )
             except Exception as err:
                 return (
-                    f"# 学习建议 (｡･ω･｡)\n\n"
-                    f"目前科研画像还在收集中（{err}），暂无法提取针对性方法知识点。建议先完善研究方法或画像！"
+                    f"【补学建议（工具真实输出）】\n"
+                    f"- 状态：画像未就绪（{err}），暂无法提取针对性方法知识点。",
+                    True,
                 )
 
         elif tool_name == "topic-difficulty-analysis":
@@ -1362,18 +1331,19 @@ class ResearchConversationOrchestrator:
                     f"### {area}\n" + "\n".join(lines)
                     for area, lines in items_by_area.items()
                 )
-                return (
-                    f"# 课题难点分析 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"**总体判断**：{analysis.core_judgment}\n\n"
-                    f"{sections_text}\n\n"
-                    f"**下一步建议**：{analysis.next_action}\n\n"
-                    f"> {analysis.provenance_note}"
+                material = (
+                    "【课题难点分析（工具真实输出）】\n"
+                    f"- 核心判断：{analysis.core_judgment}\n"
+                    f"- 难点细分：\n{sections_text}\n"
+                    f"- 下一步建议：{analysis.next_action}\n"
+                    f"- 出处说明：{analysis.provenance_note}"
                 )
+                return material, False
             except Exception as err:
                 return (
-                    "# 课题难点分析 (｡･ω･｡)\n\n"
-                    f"目前无法生成课题难点分析：{err}。\n"
-                    "建议我们先明确研究主题与画像！"
+                    f"【课题难点分析（工具真实输出）】\n"
+                    f"- 状态：暂无法生成难点分析（原因：{err}）。需先明确研究主题与画像。",
+                    True,
                 )
 
         elif tool_name == "experiment-design":
@@ -1383,8 +1353,9 @@ class ResearchConversationOrchestrator:
                 )
                 if design is None:
                     return (
-                        "# 实验方案设计 (｡･ω･｡)\n\n"
-                        "目前尚未达到实验方案生成条件，请先完善研究画像与计划！"
+                        "【实验方案设计（工具真实输出）】\n"
+                        "- 状态：前置条件不足，尚未达到实验方案生成条件，需先完善研究画像与计划。",
+                        True,
                     )
                 baselines_text = (
                     "\n".join(f"- {b.content}" for b in design.baselines)
@@ -1402,19 +1373,20 @@ class ResearchConversationOrchestrator:
                     "\n".join(f"- {r.content}" for r in design.resources)
                     or "- 暂无资源要求"
                 )
-                return (
-                    f"# 实验方案与指标设计 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"### 核心假设\n- {design.hypothesis.content}\n\n"
-                    f"### 对比基线 (Baselines)\n{baselines_text}\n\n"
-                    f"### 评测指标 (Metrics)\n{metrics_text}\n\n"
-                    f"### 实验步骤\n{steps_text}\n\n"
-                    f"### 计算资源需求\n{resources_text}"
+                material = (
+                    "【实验方案设计（工具真实输出）】\n"
+                    f"- 核心假设：{design.hypothesis.content}\n"
+                    f"- 对比基线：\n{baselines_text}\n"
+                    f"- 评测指标：\n{metrics_text}\n"
+                    f"- 实验步骤：\n{steps_text}\n"
+                    f"- 计算资源需求：\n{resources_text}"
                 )
+                return material, False
             except Exception as err:
                 return (
-                    "# 实验方案设计 (｡･ω･｡)\n\n"
-                    f"目前无法生成实验方案：{err}。\n"
-                    "建议我们先明确研究计划与选定核心论文！"
+                    f"【实验方案设计（工具真实输出）】\n"
+                    f"- 状态：暂无法生成实验方案（原因：{err}）。需先明确研究计划与选定核心论文。",
+                    True,
                 )
 
         elif tool_name == "paper-blueprint":
@@ -1427,17 +1399,18 @@ class ResearchConversationOrchestrator:
                     f"- 关联证据引用：{len(sec.evidence_references)} 条"
                     for sec in blueprint.sections
                 )
-                return (
-                    f"# 论文大纲蓝图 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"**论文标题构想**：{blueprint.title}\n\n"
-                    f"{sections_text}\n\n"
-                    f"> {blueprint.provenance_note}"
+                material = (
+                    "【论文大纲蓝图（工具真实输出）】\n"
+                    f"- 论文标题构想：{blueprint.title}\n"
+                    f"- 五段结构大纲：\n{sections_text}\n"
+                    f"- 出处说明：{blueprint.provenance_note}"
                 )
+                return material, False
             except Exception as err:
                 return (
-                    "# 论文大纲蓝图 (｡･ω･｡)\n\n"
-                    f"目前无法生成论文大纲：{err}。\n"
-                    "建议先完善研究计划或保存文献证据！"
+                    f"【论文大纲蓝图（工具真实输出）】\n"
+                    f"- 状态：暂无法生成论文大纲（原因：{err}）。需先完善研究计划或保存文献证据。",
+                    True,
                 )
 
         elif tool_name == "reproduction-evaluations":
@@ -1445,10 +1418,11 @@ class ResearchConversationOrchestrator:
                 eval_detail = self.evaluation_service.create(conversation_id, db)
                 if eval_detail.pipeline_contract_status != "available":
                     return (
-                        "# 复现准备度评估 (｡･ω･｡)\n\n"
-                        "目前尚未建立复现 Pipeline 或生成实验设计方案，"
-                        "复现准备度评估暂缺少实验基线与数据条件。\n\n"
-                        "建议我们先选定核心论文或完成实验方案设计！"
+                        "【复现准备度六维度评估（工具真实输出）】\n"
+                        "- 状态：尚未建立前置复现 Pipeline 或生成实验设计方案。\n"
+                        "- 说明：缺少实验基线与数据条件，当前暂无法得出准备度良好结论，"
+                        "需先选定论文或完成实验设计。",
+                        True,
                     )
                 dims_text = "\n".join(
                     f"- **{dim.dimension}**：{dim.status} (得分: {dim.score})"
@@ -1458,19 +1432,55 @@ class ResearchConversationOrchestrator:
                     f"{i+1}. [{t.priority}] {t.title}：{t.description}"
                     for i, t in enumerate(eval_detail.tasks[:3])
                 )
-                return (
-                    f"# 复现准备度六维度评估 (•̀ᴗ•́)و ̑̑\n\n"
-                    f"### 六维度评估结果\n{dims_text}\n\n"
-                    f"### 待改进任务 (Top 3)\n{tasks_text or '- 暂无待改进任务'}"
+                material = (
+                    "【复现准备度六维度评估（工具真实输出）】\n"
+                    f"- 六维度评估结果：\n{dims_text}\n"
+                    f"- 待改进任务 (Top 3)：\n{tasks_text or '- 暂无待改进任务'}"
                 )
+                return material, False
             except Exception as err:
                 return (
-                    "# 复现准备度评估 (｡･ω･｡)\n\n"
-                    f"目前无法生成复现评估：{err}。\n"
-                    "建议我们先选定核心论文或完成实验方案设计！"
+                    "【复现准备度六维度评估（工具真实输出）】\n"
+                    f"- 状态：暂无法生成复现评估（原因：{err}）。"
+                    "需先选定核心论文或完成实验方案设计。",
+                    True,
                 )
 
-        return f"姜姜收到你的工具请求：「{tool_name}」，已为你整理好相关材料 (＾▽＾)。"
+        return f"【工具输出】已整理工具 {tool_name} 的相关信息。", False
+
+    def _build_passive_tool_prompt(
+        self,
+        tool_name: str,
+        tool_material: str,
+        is_empty_state: bool,
+        user_message: str,
+    ) -> dict[str, str]:
+        """Build strict prompt for Jiang Jiang to paraphrase real passive tool return data."""
+        tool_display_name = {
+            "stage-briefing": "阶段进展总结",
+            "study-recommendations": "补学建议",
+            "topic-difficulty-analysis": "难点分析",
+            "experiment-design": "实验方案设计",
+            "paper-blueprint": "论文大纲蓝图",
+            "reproduction-evaluations": "复现准备度评估",
+        }.get(tool_name, tool_name)
+
+        system_prompt = (
+            f"{JIANGJIANG_SYSTEM_PERSONA}\n\n"
+            f"【被动工具复述任务与边界规则】\n"
+            f"1. 你正在向同学解读【{tool_display_name}】工具的真实执行结果；\n"
+            f"2. 必须严格以给定的【工具真实输出】为客观依据进行自然语言复述，"
+            f"严禁捏造未经工具核实的指标、硬件配置或结论；\n"
+            f"3. 若工具输出为前置条件不足或空态（is_empty_state={is_empty_state}），"
+            f"必须诚实向同学说明当前缺少哪些前置事实或条件，严禁声称“准备度良好”或假造实验进展；\n"
+            f"4. 严禁使用 Emoji 表情（必须使用颜文字如 (＾▽＾)、(•̀ᴗ•́)و ̑̑ 等）；"
+            f"严禁假造百分比成功率。\n"
+        )
+        user_prompt = (
+            f"{tool_material}\n\n"
+            f"【用户消息】\n{user_message}"
+        )
+        return {"system_prompt": system_prompt, "user_prompt": user_prompt}
 
     def _handle_history_inquiry(
         self,

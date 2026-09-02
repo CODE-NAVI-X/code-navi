@@ -17,6 +17,15 @@ from code_navi.research.models import ResearchConversationModel
 from code_navi.server import app
 
 
+class FakeApiLlmGenerator:
+    def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+        from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+        return OrchestratorLlmOutcome(
+            status="generated",
+            reply_text=f"姜姜已为你处理消息 (•̀ᴗ•́)و ̑̑：{user_prompt}",
+        )
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "mock")
@@ -29,6 +38,13 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, N
     Base.metadata.create_all(bind=test_engine)
     TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
+    from code_navi.research import router as research_router
+    from code_navi.research.conversation_orchestrator import ResearchConversationOrchestrator
+    orig_orch = research_router._conversation_orchestrator
+    research_router._conversation_orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeApiLlmGenerator()
+    )
+
     def override_get_db():
         db = TestingSession()
         try:
@@ -37,12 +53,15 @@ def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, N
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        test_client.db_session_factory = TestingSession
-        yield test_client
-    app.dependency_overrides.clear()
-    test_engine.dispose()
-    get_rate_limiter().reset()
+    try:
+        with TestClient(app) as test_client:
+            test_client.db_session_factory = TestingSession
+            yield test_client
+    finally:
+        research_router._conversation_orchestrator = orig_orch
+        app.dependency_overrides.pop(get_db, None)
+        test_engine.dispose()
+        get_rate_limiter().reset()
 
 
 def _create_conversation(client: TestClient, **overrides: object) -> ResearchConversationModel:

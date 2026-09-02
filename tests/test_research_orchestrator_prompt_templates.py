@@ -83,10 +83,15 @@ def test_build_search_guidance_prompt() -> None:
             "Graph Convolutional Networks node classification",
             "Semi-supervised GCN Cora",
         ],
-        sources=["OpenAlex", "Crossref", "arXiv"],
+        sources=["OpenAlex", "Crossref", "arXiv", "Semantic Scholar", "DBLP"],
     )
     assert "Graph Convolutional Networks" in prompt["context"]
+    assert "OpenAlex" in prompt["context"]
+    assert "Crossref" in prompt["context"]
     assert "arXiv" in prompt["context"]
+    # P1: Semantic Scholar and DBLP must be filtered out!
+    assert "Semantic Scholar" not in prompt["context"]
+    assert "DBLP" not in prompt["context"]
     assert "确认" in prompt["task"]
 
 

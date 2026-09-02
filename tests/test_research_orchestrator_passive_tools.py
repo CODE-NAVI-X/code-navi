@@ -34,6 +34,15 @@ def db_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
         engine.dispose()
 
 
+class FakePassiveToolLlmGenerator:
+    def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+        from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+        return OrchestratorLlmOutcome(
+            status="generated",
+            reply_text=f"姜姜为你解读工具输出 (＾▽＾)：\n\n{user_prompt}",
+        )
+
+
 def test_detect_single_passive_tool_intents() -> None:
     assert detect_passive_tool_intent("我现在进展如何，帮我总结一下") == ["stage-briefing"]
     assert detect_passive_tool_intent("我该先学什么知识，有什么学习建议？") == [
@@ -57,7 +66,7 @@ def test_detect_multiple_tool_intents() -> None:
 
 
 def test_multiple_intents_triggers_clarification_without_calling_tools(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
     conv = ResearchConversationModel(id="conv-pt-1", profile_data={}, messages_data=[])
     db_session.add(conv)
     db_session.commit()
@@ -77,7 +86,7 @@ def test_multiple_intents_triggers_clarification_without_calling_tools(db_sessio
 
 
 def test_single_intent_stage_briefing_triggers_tool(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
     conv = ResearchConversationModel(
         id="conv-pt-2",
         profile_data={"topic": "图卷积网络节点分类"},
@@ -97,7 +106,7 @@ def test_single_intent_stage_briefing_triggers_tool(db_session) -> None:
 
 
 def test_tool_empty_state_does_not_hallucinate(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
     # Completely empty conversation without learning context or evidence
     conv = ResearchConversationModel(id="conv-pt-3", profile_data={}, messages_data=[])
     db_session.add(conv)
@@ -118,7 +127,7 @@ def test_tool_empty_state_does_not_hallucinate(db_session) -> None:
 
 
 def test_study_recommendations_passive_tool_real_call(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
     conv = ResearchConversationModel(
         id="conv-pt-rec",
         profile_data={"topic": "图卷积网络"},
@@ -137,7 +146,7 @@ def test_study_recommendations_passive_tool_real_call(db_session) -> None:
 
 
 def test_reproduction_evaluations_tool_empty_pipeline_state(db_session) -> None:
-    orchestrator = ResearchConversationOrchestrator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakePassiveToolLlmGenerator())
     conv = ResearchConversationModel(
         id="conv-pt-eval-empty",
         profile_data={"topic": "Transformer 文本分类"},
