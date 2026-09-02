@@ -420,6 +420,13 @@ CodeFillSpec {
 
 传递边界：跳转前用户可查看、修改、清除（scope.md 跨模块规则）；URL 仅带轻量指针，正文经 `POST /api/v1/practice/sets/generate` 的 `context` 字段提交；浏览器侧仍保留一份可清除的刷新回退缓存（现 flow-store 机制不变，内容升级为本结构）。
 
+#### 实现注记（2026-09，实现即冻结的规则裁定）
+
+- **mastery 取值规则**：`mastery` 只能来自学习画像（`/api/v1/profile` 聚合）中该知识点的真实 `mastery` 值（样本 sufficient 才非空）；画像取不到该点、样本不足或查询失败时一律写 `null`，前端不编造数值。前端构造统一收口在 `frontend/lib/practice-context.ts`（`buildPracticeContextV1`），超限字段截断、空知识点过滤、1..8 限量。
+- **三态交互落点**：跳转前确认走 `PracticeContextDialog`（查看结构、编辑 objective/notes_summary、勾选知识点、清除后自由练习）；三个学习入口共用 `learning-context.ts` 的 `navigateToPractice`，不允许旁路拼装结构。
+- **FlowPayload 升级兼容策略**：`FlowPayload` 新增可选 `practiceContext` 字段，旧缓存（无该键）照常读取；缓存中该键损坏时仅丢弃该键、不废弃整份 payload（`isPracticeContextV1` 运行时守卫）。练习页对无上下文的跳转行为与升级前一致（自由主题，不白屏不报错）；带上下文生成时正文经 §1.2 网关提交，网关不可用或无可练题目时回退原通用生成路径。
+- **缓存边界**：URL 查询参数（`LEARNING_CONTEXT_QUERY_KEYS`）仅作即时交接与刷新回退指针，正文唯一提交点是 `POST /api/v1/practice/sets/generate` 的 `context` 字段。
+
 ### 3.2 `learning_mastery_snapshot` — 确认上下文可选项
 
 `POST /api/v1/context-transfers/{id}/confirm` 请求体新增可选字段：
@@ -437,6 +444,13 @@ CodeFillSpec {
 ```
 
 快照内容按来源 `profile_id` 的真实画像**规则生成**（不接受客户端自填数值），供 §2.1/§2.2/§2.3 读取。一般知识内容不会自动变成研究问题/方法/数据/结论——快照只作为能力边界提示。开关关闭或画像样本不足时快照缺省，读取方按空态处理。
+
+#### 实现注记（2026-09，实现即冻结的规则裁定）
+
+- **快照生成口径**：strong/weak 各取学习画像（`learning_profile` `ProfileService.get_profile`）规则聚合的 `strengths[:5]` / `weaknesses[:5]`，阈值与排序同画像聚合（strength ≥0.75、weak <0.6，按掌握度降序），与 portraits `_aggregate_learning` 一致，不建第二套事实表。
+- **profile_id 取数路径**：transfer 记录的 `source_scope_id` 即学习 `session_id`；取该 session 写入 `quiz_attempts` 中最早的非空 `profile_id`（跨会话画像键）作为画像键。查不到任何画像键、画像查询失败或画像中无 sufficient 样本（insufficient_sample）时，快照缺省为 `None`：`context-provenance.v1` 序列化时整体省略 `learning_mastery_snapshot` 键（而非写 `null`），读取方按空态处理，不报错、不编造。
+- **快照写入权威**：客户端只传 `include_mastery_snapshot` 布尔开关；请求模型 `extra="forbid"` 拒绝任何客户端自填的快照数值，strong/weak 仅由服务端规则生成并写入 provenance。
+- **additive 兼容**：`include_mastery_snapshot` 缺省 `false`；开关关闭或缺省时 provenance 序列化与升级前逐字段一致。旧快照（无该键）照常通过 `ConfirmedContextProvenance` 校验、照常恢复。
 
 ### 3.3 笔记 → 科研引导入口
 
