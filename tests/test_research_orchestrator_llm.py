@@ -465,7 +465,9 @@ def test_all_eight_prompt_templates_dispatched_to_provider_via_process_message(
         SendOrchestratorMessageRequest(message="你好，开始科研"),
         db_session,
     )
-    assert resp_1.status_code == 200 if hasattr(resp_1, "status_code") else True
+    assert resp_1.status == "completed"
+    assert resp_1.state.current_stage == "research_need"
+    assert resp_1.state.subtasks.need_defined is False
     assert len(fake_gen_1.calls) == 1
     call_1 = fake_gen_1.calls[0]
     assert (
@@ -686,3 +688,48 @@ def test_all_eight_prompt_templates_dispatched_to_provider_via_process_message(
     assert len(fake_gen_8.calls) == 1
     call_8 = fake_gen_8.calls[0]
     assert "阶段切换" in call_8["system_prompt"] or "【阶段跃迁】" in call_8["user_prompt"]
+
+
+def test_opening_greeting_vs_concrete_topic_in_research_need_stage(db_session) -> None:
+    """Regression test for opening greeting intent vs concrete topic in research_need stage."""
+    fake_gen = FakeOrchestratorLlmGenerator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=fake_gen)
+
+    # 1. Pure opening greeting ("你好，开始科研") -> welcome template, need_defined=False
+    conv_1 = ResearchConversationModel(id="conv-open-1", profile_data={}, messages_data=[])
+    db_session.add(conv_1)
+    db_session.commit()
+
+    resp_1 = orchestrator.process_message(
+        "conv-open-1",
+        SendOrchestratorMessageRequest(message="你好，开始科研"),
+        db_session,
+    )
+    assert resp_1.status == "completed"
+    assert resp_1.state.current_stage == "research_need"
+    assert resp_1.state.subtasks.need_defined is False
+    assert len(fake_gen.calls) == 1
+    call_1 = fake_gen.calls[0]
+    assert (
+        "欢迎同学并介绍研究方向" in call_1["system_prompt"]
+        or "推荐研究方向" in call_1["user_prompt"]
+    )
+
+    # 2. Greeting with concrete topic ("你好，我想研究图卷积网络节点分类") -> need_clarification
+    fake_gen.calls.clear()
+    conv_2 = ResearchConversationModel(id="conv-open-2", profile_data={}, messages_data=[])
+    db_session.add(conv_2)
+    db_session.commit()
+
+    resp_2 = orchestrator.process_message(
+        "conv-open-2",
+        SendOrchestratorMessageRequest(message="你好，我想研究图卷积网络节点分类"),
+        db_session,
+    )
+    assert resp_2.status == "completed"
+    assert resp_2.state.current_stage == "research_need"
+    assert len(fake_gen.calls) == 1
+    call_2 = fake_gen.calls[0]
+    assert "需求澄清" in call_2["system_prompt"]
+    assert "欢迎同学并介绍研究方向" not in call_2["system_prompt"]
+    assert "【基于学习内容动态生成的推荐研究方向】" not in call_2["user_prompt"]
