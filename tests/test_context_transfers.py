@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 os.environ["CODE_NAVI_DATABASE_URL"] = "sqlite:///:memory:"
 
-from code_navi.db import Base, engine  # noqa: E402
+from code_navi.db import Base, SessionLocal, engine  # noqa: E402
 from code_navi.research.conversation_agent import ConversationDecisionOutcome  # noqa: E402
 from code_navi.research.router import _conversation_service  # noqa: E402
 from code_navi.server import app  # noqa: E402
@@ -411,3 +411,181 @@ def test_research_uses_and_restores_confirmed_learning_context(
     assert restored_body["profile"] == conversation["profile"]
     assert restored_body["research_plan"] is None
     assert restored_body["messages"] == conversation["messages"]
+
+
+# ---------------------------------------------------------------------------
+# §3.2 include_mastery_snapshot — server-side rule-generated mastery snapshot
+# ---------------------------------------------------------------------------
+
+
+def _seed_portrait(
+    session_id: str,
+    profile_id: str,
+    strong_point: str,
+    weak_point: str,
+) -> None:
+    """Persist real quiz attempts so the rule portrait has sufficient samples."""
+    import uuid
+
+    from code_navi.learning_profile.models import QuizAttemptModel
+
+    with SessionLocal() as db:
+        rows = [
+            QuizAttemptModel(
+                attempt_id=str(uuid.uuid4()),
+                quiz_id="quiz-seed",
+                session_id=session_id,
+                knowledge_point=strong_point,
+                profile_id=profile_id,
+                user_id="poc-user",
+                question_id=f"q-strong-{index}",
+                question_type="single",
+                points=10,
+                score=10,
+                max_score=10,
+                correct=True,
+                graded=True,
+                graded_by="rules",
+                is_mock=True,
+            )
+            for index in range(3)
+        ]
+        rows += [
+            QuizAttemptModel(
+                attempt_id=str(uuid.uuid4()),
+                quiz_id="quiz-seed",
+                session_id=session_id,
+                knowledge_point=weak_point,
+                profile_id=profile_id,
+                user_id="poc-user",
+                question_id=f"q-weak-{index}",
+                question_type="single",
+                points=10,
+                score=2,
+                max_score=10,
+                correct=False,
+                graded=True,
+                graded_by="rules",
+                is_mock=True,
+            )
+            for index in range(3)
+        ]
+        db.add_all(rows)
+        db.commit()
+
+
+def _create_transfer(client: TestClient, session_id: str = "sess-transfer") -> dict:
+    record = _create_learning_record(client, session_id)
+    created = client.post(
+        "/api/v1/context-transfers",
+        json={
+            "source_module": "learning",
+            "source_object": {"type": "notebook_item", "id": record["id"]},
+            "source_scope_id": session_id,
+            "target_module": "research",
+            "selected_parts": ["summary"],
+        },
+    )
+    assert created.status_code in (200, 201)
+    return created.json()
+
+
+def _confirm(
+    client: TestClient,
+    transfer: dict,
+    session_id: str,
+    extra: dict | None = None,
+):
+    return client.post(
+        f"/api/v1/context-transfers/{transfer['id']}/confirm",
+        params={"source_scope_id": session_id},
+        json={
+            "topic": "RAG 证据覆盖研究",
+            "summary": "比较不同检索策略对证据覆盖率的影响。",
+            "selected_content": [],
+            **(extra or {}),
+        },
+    )
+
+
+def test_snapshot_switch_off_keeps_provenance_unchanged(client: TestClient) -> None:
+    transfer = _create_transfer(client)
+    confirmed = _confirm(client, transfer, "sess-transfer")
+
+    assert confirmed.status_code == 200
+    assert "learning_mastery_snapshot" not in confirmed.json()["context_provenance"]
+
+
+def test_snapshot_generated_from_real_portrait_when_switched_on(
+    client: TestClient,
+) -> None:
+    _seed_portrait(
+        "sess-transfer",
+        "0d3f7b3e-1111-4aaa-8bbb-2c2d3e4f5a6b",
+        "检索增强生成",
+        "循环不变式",
+    )
+    transfer = _create_transfer(client)
+    confirmed = _confirm(
+        client, transfer, "sess-transfer", {"include_mastery_snapshot": True}
+    )
+
+    assert confirmed.status_code == 200
+    snapshot = confirmed.json()["context_provenance"]["learning_mastery_snapshot"]
+    assert snapshot == {"strong": ["检索增强生成"], "weak": ["循环不变式"]}
+
+    restored = client.get(
+        f"/api/v1/research/conversations/{confirmed.json()['conversation_id']}"
+    )
+    assert restored.status_code == 200
+    assert restored.json()["context_provenance"]["learning_mastery_snapshot"] == snapshot
+
+
+def test_snapshot_defaults_to_empty_state_without_portrait(client: TestClient) -> None:
+    transfer = _create_transfer(client)
+    confirmed = _confirm(
+        client, transfer, "sess-transfer", {"include_mastery_snapshot": True}
+    )
+
+    assert confirmed.status_code == 200
+    assert "learning_mastery_snapshot" not in confirmed.json()["context_provenance"]
+
+
+def test_client_cannot_supply_snapshot_values(client: TestClient) -> None:
+    transfer = _create_transfer(client)
+    response = _confirm(
+        client,
+        transfer,
+        "sess-transfer",
+        {
+            "include_mastery_snapshot": True,
+            "learning_mastery_snapshot": {"strong": ["伪造知识点"], "weak": []},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_stage_briefing_reads_the_written_snapshot(client: TestClient) -> None:
+    _seed_portrait(
+        "sess-transfer",
+        "0d3f7b3e-2222-4aaa-8bbb-2c2d3e4f5a6b",
+        "检索增强生成",
+        "循环不变式",
+    )
+    transfer = _create_transfer(client)
+    confirmed = _confirm(
+        client, transfer, "sess-transfer", {"include_mastery_snapshot": True}
+    ).json()
+
+    briefing = client.get(
+        f"/api/v1/research/conversations/{confirmed['conversation_id']}/stage-briefing"
+    )
+
+    assert briefing.status_code == 200
+    names = [
+        point["name"]
+        for point in briefing.json()["stage_summary"]["knowledge_points"] or []
+    ]
+    assert "检索增强生成" in names
+    assert "循环不变式" in names
