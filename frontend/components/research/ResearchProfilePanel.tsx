@@ -79,12 +79,15 @@ export function ResearchProfilePanel({
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <SummaryItem icon={<BookOpen className="h-4 w-4" />} label="学习知识背景" value={learningBackground || "尚未从 Learning 上下文确认背景"} />
         <SummaryItem icon={<Target className="h-4 w-4" />} label="研究主题" value={profile.topic || "尚未确认"} />
-        <SummaryItem icon={<Target className="h-4 w-4" />} label="研究目标" value={profile.expected_output || "尚未确认"} />
         <SummaryItem icon={<Lightbulb className="h-4 w-4" />} label="研究动机" value={profile.motivation || "尚未确认"} />
-        <SummaryItem icon={<FlaskConical className="h-4 w-4" />} label="方法或数据偏好" value={[displayValues(profile.methods), profile.data_requirements].filter((item) => item !== "尚未确认").join("；") || "尚未确认"} />
+        <SummaryItem icon={<FlaskConical className="h-4 w-4" />} label="方法路径" value={displayValues(profile.methods)} />
+        <SummaryItem icon={<Database className="h-4 w-4" />} label="数据需求" value={profile.data_requirements || "尚未确认"} />
+        <SummaryItem icon={<Target className="h-4 w-4" />} label="预期产出" value={profile.expected_output || "尚未确认"} />
         <SummaryItem icon={<Clock3 className="h-4 w-4" />} label="时间和设备限制" value={[profile.time_scope, displayValues(profile.constraints)].filter((item) => item && item !== "尚未确认").join("；") || "尚未确认"} />
-        <SummaryItem icon={<Database className="h-4 w-4" />} label="当前选择论文" value={selectedPaperTitle || "尚未选择论文"} />
         <SummaryItem icon={<Search className="h-4 w-4" />} label="感兴趣的研究方向" value={displayValues(profile.candidate_questions)} />
+        {selectedPaperTitle && (
+          <SummaryItem icon={<Database className="h-4 w-4" />} label="当前选择论文" value={selectedPaperTitle} />
+        )}
       </div>
 
       <div className="mt-5 px-1">

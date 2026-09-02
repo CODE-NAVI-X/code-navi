@@ -90,7 +90,8 @@ export interface ProfileResponse {
 export type KnowledgeGapSourceType =
   | "quiz_attempt"
   | "confusion_mark"
-  | "practice_outcome";
+  | "practice_outcome"
+  | "code_fill_attempt";
 
 export interface KnowledgeGapItem {
   sourceType: KnowledgeGapSourceType;
@@ -108,6 +109,67 @@ export interface KnowledgeGapResponse {
   profileId: string;
   generatedAt: string;
   items: KnowledgeGapItem[];
+}
+
+export interface LearningMasteryOverview {
+  graded_attempts: number;
+  strong_points: string[];
+  weak_points: string[];
+  insufficient_sample: boolean;
+}
+
+export interface LearningReviewQueueOverview {
+  active_confusion_marks: number;
+  top_surfaces: string[];
+}
+
+export interface LearningKnowledgeGapOverview {
+  knowledge_point: string;
+  source_type: string;
+  summary: string;
+}
+
+export interface LearningPortraitOverview {
+  mastery: LearningMasteryOverview;
+  review_queue: LearningReviewQueueOverview;
+  knowledge_gaps: LearningKnowledgeGapOverview[];
+}
+
+export interface ResearchConversationOverview {
+  conversation_id: string;
+  topic: string | null;
+  updated_at: string;
+  readiness: string | null;
+  evidence_bundle_count: number;
+  reproduction_pipeline_status: string | null;
+}
+
+export interface ResearchPortraitOverview {
+  conversations: ResearchConversationOverview[];
+}
+
+export interface LearningToResearchBridge {
+  latest_transfer_id: string | null;
+  confirmed: boolean;
+  has_mastery_snapshot: boolean;
+}
+
+export interface ResearchToLearningBridge {
+  pending_study_recommendations: number;
+}
+
+export interface BridgesPortraitOverview {
+  learning_to_research: LearningToResearchBridge;
+  research_to_learning: ResearchToLearningBridge;
+}
+
+export interface PortraitsOverviewResponse {
+  profile_id: string;
+  learning: LearningPortraitOverview;
+  research: ResearchPortraitOverview;
+  bridges: BridgesPortraitOverview;
+  generated_by: "rules";
+  generated_at: string;
 }
 
 /**
@@ -266,6 +328,46 @@ export async function fetchKnowledgeGaps(
   return validateKnowledgeGapResponse(body);
 }
 
+export async function fetchPortraitsOverview(
+  profileId: string,
+  options?: { localProfileId?: string | null; conversationLimit?: number },
+): Promise<PortraitsOverviewResponse> {
+  const params = new URLSearchParams({
+    profile_id: profileId,
+  });
+  if (options?.localProfileId) {
+    params.set("local_profile_id", options.localProfileId);
+  }
+  if (options?.conversationLimit) {
+    params.set("conversation_limit", String(options.conversationLimit));
+  }
+  const url = `${API_BASE}/api/v1/portraits/overview?${params.toString()}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+  } catch (networkError) {
+    throw new ProfileApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new ProfileApiError(
+      response.status,
+      detail ?? `Request failed with status ${response.status}`,
+    );
+  }
+
+  const body: unknown = await response.json();
+  return validatePortraitsOverviewResponse(body);
+}
+
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
 async function extractErrorDetail(response: Response): Promise<string | null> {
@@ -417,7 +519,105 @@ function validateKnowledgeGapResponse(raw: unknown): KnowledgeGapResponse {
   };
 }
 
+function validatePortraitsOverviewResponse(raw: unknown): PortraitsOverviewResponse {
+  if (!raw || typeof raw !== "object") {
+    throw new ProfileApiError(502, "Server returned a non-object response.");
+  }
+  const obj = raw as Record<string, unknown>;
+  const learningObj = (obj.learning || {}) as Record<string, unknown>;
+  const masteryObj = (learningObj.mastery || {}) as Record<string, unknown>;
+  const reviewQueueObj = (learningObj.review_queue || {}) as Record<string, unknown>;
+  const researchObj = (obj.research || {}) as Record<string, unknown>;
+  const bridgesObj = (obj.bridges || {}) as Record<string, unknown>;
+  const l2rObj = (bridgesObj.learning_to_research || {}) as Record<string, unknown>;
+  const r2lObj = (bridgesObj.research_to_learning || {}) as Record<string, unknown>;
+
+  const strList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+
+  const gaps: LearningKnowledgeGapOverview[] = [];
+  if (Array.isArray(learningObj.knowledge_gaps)) {
+    for (const g of learningObj.knowledge_gaps) {
+      if (g && typeof g === "object") {
+        const gap = g as Record<string, unknown>;
+        gaps.push({
+          knowledge_point: typeof gap.knowledge_point === "string" ? gap.knowledge_point : "",
+          source_type: typeof gap.source_type === "string" ? gap.source_type : "",
+          summary: typeof gap.summary === "string" ? gap.summary : "",
+        });
+      }
+    }
+  }
+
+  const convs: ResearchConversationOverview[] = [];
+  if (Array.isArray(researchObj.conversations)) {
+    for (const c of researchObj.conversations) {
+      if (c && typeof c === "object") {
+        const conv = c as Record<string, unknown>;
+        convs.push({
+          conversation_id: typeof conv.conversation_id === "string" ? conv.conversation_id : "",
+          topic: typeof conv.topic === "string" ? conv.topic : null,
+          updated_at: typeof conv.updated_at === "string" ? conv.updated_at : "",
+          readiness: typeof conv.readiness === "string" ? conv.readiness : null,
+          evidence_bundle_count:
+            typeof conv.evidence_bundle_count === "number" ? conv.evidence_bundle_count : 0,
+          reproduction_pipeline_status:
+            typeof conv.reproduction_pipeline_status === "string"
+              ? conv.reproduction_pipeline_status
+              : null,
+        });
+      }
+    }
+  }
+
+  return {
+    profile_id: typeof obj.profile_id === "string" ? obj.profile_id : "",
+    learning: {
+      mastery: {
+        graded_attempts:
+          typeof masteryObj.graded_attempts === "number" ? masteryObj.graded_attempts : 0,
+        strong_points: strList(masteryObj.strong_points),
+        weak_points: strList(masteryObj.weak_points),
+        insufficient_sample: Boolean(masteryObj.insufficient_sample),
+      },
+      review_queue: {
+        active_confusion_marks:
+          typeof reviewQueueObj.active_confusion_marks === "number"
+            ? reviewQueueObj.active_confusion_marks
+            : 0,
+        top_surfaces: strList(reviewQueueObj.top_surfaces),
+      },
+      knowledge_gaps: gaps,
+    },
+    research: {
+      conversations: convs,
+    },
+    bridges: {
+      learning_to_research: {
+        latest_transfer_id:
+          typeof l2rObj.latest_transfer_id === "string" ? l2rObj.latest_transfer_id : null,
+        confirmed: Boolean(l2rObj.confirmed),
+        has_mastery_snapshot: Boolean(l2rObj.has_mastery_snapshot),
+      },
+      research_to_learning: {
+        pending_study_recommendations:
+          typeof r2lObj.pending_study_recommendations === "number"
+            ? r2lObj.pending_study_recommendations
+            : 0,
+      },
+    },
+    generated_by: "rules",
+    generated_at: typeof obj.generated_at === "string" ? obj.generated_at : "",
+  };
+}
+
 function parseGapSourceType(value: unknown): KnowledgeGapSourceType {
-  if (value === "quiz_attempt" || value === "confusion_mark") return value;
+  if (
+    value === "quiz_attempt" ||
+    value === "confusion_mark" ||
+    value === "code_fill_attempt"
+  ) {
+    return value;
+  }
   return "practice_outcome";
 }
