@@ -248,3 +248,148 @@ def test_orchestrator_cross_owner_404_isolation(client: TestClient) -> None:
         assert resp_msg.status_code == 404
     finally:
         app.dependency_overrides.pop(get_optional_principal, None)
+
+
+def test_send_orchestrator_message_rejects_extra_fields(client: TestClient) -> None:
+    """Extra un-audited fields (e.g. provider_override, runtime_input) are rejected with 422."""
+    conv = _create_conversation(client, id="conv-api-extra-fields")
+
+    # 1. Reject provider_override
+    resp1 = client.post(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/messages",
+        json={
+            "message": "我想研究图神经网络",
+            "provider_override": "custom-deepseek",
+        },
+    )
+    assert resp1.status_code == 422
+
+    # 2. Reject runtime_input
+    resp2 = client.post(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/messages",
+        json={
+            "message": "我想研究图神经网络",
+            "runtime_input": "injected prompt text",
+        },
+    )
+    assert resp2.status_code == 422
+
+    # 3. Reject any arbitrary unknown field
+    resp3 = client.post(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/messages",
+        json={
+            "message": "我想研究图神经网络",
+            "unknown_injected_param": "foo",
+        },
+    )
+    assert resp3.status_code == 422
+
+    # 4. Valid message without extra fields succeeds with 200
+    resp4 = client.post(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/messages",
+        json={"message": "我想研究图神经网络"},
+    )
+    assert resp4.status_code == 200
+    assert resp4.json()["status"] == "completed"
+
+
+def test_orchestrator_stream_sse_endpoint_lifecycle_events(client: TestClient) -> None:
+    """Verify stream SSE endpoint event names and ordering for completed and failed outcomes."""
+    from code_navi.research import router as research_router
+    from code_navi.research.conversation_orchestrator import (
+        OrchestratorLlmOutcome,
+        ResearchConversationOrchestrator,
+    )
+
+    conv_success = _create_conversation(client, id="conv-stream-success")
+    conv_fail = _create_conversation(client, id="conv-stream-failure")
+
+    # 1. Success lifecycle: thinking -> completed
+    resp_success = client.post(
+        f"/api/v1/research/conversations/{conv_success.id}/orchestrator/messages/stream",
+        json={"message": "我想明确研究方向"},
+    )
+    assert resp_success.status_code == 200
+    assert "text/event-stream" in resp_success.headers["content-type"]
+    text_success = resp_success.text
+    assert "event: thinking" in text_success
+    assert "event: completed" in text_success
+    assert "event: failed" not in text_success
+    pos_thinking = text_success.find("event: thinking")
+    pos_completed = text_success.find("event: completed")
+    assert 0 <= pos_thinking < pos_completed
+
+    # 2. Failure lifecycle: thinking -> failed
+    class FailingGenerator:
+        def generate(self, **kwargs):
+            return OrchestratorLlmOutcome(
+                status="failed",
+                reason="DeepSeek remote service timeout",
+            )
+
+    orig_orch = research_router._conversation_orchestrator
+    research_router._conversation_orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FailingGenerator()
+    )
+    try:
+        resp_fail = client.post(
+            f"/api/v1/research/conversations/{conv_fail.id}/orchestrator/messages/stream",
+            json={"message": "我想明确研究方向"},
+        )
+        assert resp_fail.status_code == 200
+        assert "text/event-stream" in resp_fail.headers["content-type"]
+        text_fail = resp_fail.text
+        assert "event: thinking" in text_fail
+        assert "event: failed" in text_fail
+        assert "event: completed" not in text_fail
+        pos_thinking_fail = text_fail.find("event: thinking")
+        pos_failed = text_fail.find("event: failed")
+        assert 0 <= pos_thinking_fail < pos_failed
+    finally:
+        research_router._conversation_orchestrator = orig_orch
+
+
+def test_retry_last_requires_failed_state_or_returns_409(client: TestClient) -> None:
+    """POST retry-last requires previous turn to be failed, otherwise returns 409."""
+    from code_navi.research import router as research_router
+    from code_navi.research.conversation_orchestrator import (
+        OrchestratorLlmOutcome,
+        ResearchConversationOrchestrator,
+    )
+
+    conv = _create_conversation(client, id="conv-retry-lifecycle")
+    retry_url = f"/api/v1/research/conversations/{conv.id}/orchestrator/messages/retry-last"
+
+    # 1. Brand new state (no failed turns) -> 409
+    resp1 = client.post(retry_url)
+    assert resp1.status_code == 409
+
+    # 2. Make a failed turn
+    class FailingGenerator:
+        def generate(self, **kwargs):
+            return OrchestratorLlmOutcome(status="unavailable", reason="Provider down")
+
+    orig_orch = research_router._conversation_orchestrator
+    research_router._conversation_orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FailingGenerator()
+    )
+    try:
+        fail_msg_resp = client.post(
+            f"/api/v1/research/conversations/{conv.id}/orchestrator/messages",
+            json={"message": "尝试确认这个需求，我们继续！"},
+        )
+        assert fail_msg_resp.status_code == 200
+        assert fail_msg_resp.json()["status"] == "failed"
+    finally:
+        research_router._conversation_orchestrator = orig_orch
+
+    # 3. Now previous turn is failed -> retry-last succeeds and returns 200 completed
+    resp2 = client.post(retry_url)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["status"] == "completed"
+    assert data2["reply_message"] is not None
+
+    # 4. Now state is completed -> next retry-last returns 409 again
+    resp3 = client.post(retry_url)
+    assert resp3.status_code == 409

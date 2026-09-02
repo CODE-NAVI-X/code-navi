@@ -186,11 +186,9 @@ class OrchestratorStateResponse(BaseModel):
 
 
 class SendOrchestratorMessageRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=8000)
-    provider_override: str | None = None
-    runtime_input: str | None = None
 
 
 class OrchestratorMessageReply(BaseModel):

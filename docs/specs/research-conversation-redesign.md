@@ -108,15 +108,14 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 
 ### 10.1 `POST .../orchestrator/messages` — 会话编排消息交互
 
-- **请求体**：
+- **请求体** (`SendOrchestratorMessageRequest`)：
   ```json
   {
-    "message": "string (1..8000 字符)",
-    "provider_override": "string | null",
-    "runtime_input": "string | null"
+    "message": "string (1..8000 字符)"
   }
   ```
-- **响应体**：
+  *(注：schema 配置 `extra="forbid"`，禁止传递未审计字段)*
+- **响应体** (`OrchestratorMessageResponse`)：
   ```json
   {
     "conversation_id": "string",
@@ -127,7 +126,7 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
       "content": "string",
       "created_at": "iso8601",
       "passive_tool_called": "string | null"
-    },
+    } | null,
     "state": {
       "current_stage": "research_need | research_plan | research_execution | research_analysis",
       "completed_stages": ["string"],
@@ -139,21 +138,53 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
         "experiment_designed": false,
         "results_analyzed": false
       },
-      "direction_history": [{"direction": "string", "timestamp": "iso8601"}]
+      "direction_history": [{"direction": "string", "timestamp": "iso8601"}],
+      "last_status": "thinking | completed | failed",
+      "last_error": "string | null"
     },
     "error": "string | null"
   }
   ```
 - **编排顺序**：用户消息 → 确定性意图/确认词/换方向识别 → 至多一个 §2 被动工具 → 选择 Prompt 模板并组装已确认上下文 → DeepSeek 调用 → 校验、持久化回复 → 仅由规则决定的阶段与子任务更新。
-- **错误码**：404（会话不存在或跨 owner）、422（入参非法）、503（Provider 不可用时返回 `failed` 状态结构或安全错误）。
+- **错误码**：404（会话不存在或跨 owner）、422（入参非法或携带未定义字段）、503（Provider 不可用时返回 `failed` 状态结构或安全错误）。
 
 ### 10.2 `POST .../orchestrator/messages/stream` — 思考生命周期 SSE 流式消息
+
+- **请求头**：`Accept: text/event-stream`
+- **响应头**：`Content-Type: text/event-stream`
 - **请求体**：同 10.1 请求体 (`SendOrchestratorMessageRequest`)。
-- **处理**：复用上一轮失败时的用户输入与已确认上下文，重新调用模型并按规则更新；上一轮非失败状态时返回 409。
-- **响应体**：同 10.1 响应。
+- **流式生命周期事件顺序**：
+  1. `event: thinking`：在调用模型生成前发出，并在数据库中持久化 `last_status="thinking"`：
+     ```
+     event: thinking
+     data: {"status": "thinking", "stage": "research_need", "message": "姜姜正在思考..."}
+     ```
+  2. 终态事件（二选一）：
+     - 成功完成时发出 `event: completed`：
+       ```
+       event: completed
+       data: <OrchestratorMessageResponse JSON>
+       ```
+     - 失败/不可用/校验异常时发出 `event: failed`：
+       ```
+       event: failed
+       data: <OrchestratorMessageResponse JSON (status="failed")>
+       ```
+
+### 10.3 `POST .../orchestrator/messages/retry-last` — 失败轮次重试
+
+- **请求体**：无（无需请求体）。
+- **前置条件与规则**：
+  - 仅当会话上一轮处于 `last_status == "failed"` 且存在 `last_failed_user_message` 时允许重试；
+  - 若上一轮非失败状态（如 `completed` 或正在 `thinking`），返回 `HTTP 409 Conflict`；
+  - 复用失败轮次保存的原始用户输入与已确认上下文重新调用编排流程；
+  - 重试成功前严禁推进阶段、更新子任务、修改计划或升级画像版本；
+  - 重试成功后仅发生一次合法的状态更新。
+- **响应体**：同 10.1 `OrchestratorMessageResponse`。
 
 ### 10.4 `GET .../orchestrator/state` — 状态机与子任务读取
 
+- **响应体** (`OrchestratorStateResponse`)：
   ```json
   {
     "conversation_id": "string",
@@ -173,13 +204,14 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
   }
   ```
 
-### 10.5 `GET .../orchestrator/direction-cards` — 动态方向框读取
+### 10.5 `GET .../orchestrator/direction-cards` — 动态方向卡片读取
 
-- **处理**：根据已接收的 `learned_content` 与 `learning_progress` 动态生成 5 个方向卡片（禁止写死 CNN）。
+- **处理**：根据已接收的 `learned_content` 与 `learning_progress` 动态生成 5 个方向卡片；无输入时诚实返回空数组 `[]`（禁止写死推荐）。
   ```json
   {
     "conversation_id": "string",
     "learned_content": "string | null",
+    "learning_progress": "string | null",
     "cards": [
       {
         "id": "string",
@@ -194,8 +226,9 @@ _状态：R0 契约骨架，作为科研端重建（#73–#77）的实现基线�
 
 ### 10.6 `GET/POST .../orchestrator/papers` & `.../papers/select` — 论文管理与用途标记
 
-- `GET .../orchestrator/papers` 响应：
+- `GET .../orchestrator/papers` 响应 (`OrchestratorPapersResponse`)：
   ```json
+  {
     "conversation_id": "string",
     "current_paper": {
       "id": "string",
