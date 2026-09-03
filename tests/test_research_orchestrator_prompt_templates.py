@@ -342,3 +342,29 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert is_valid, f"Final R4 safe text was falsely rejected: {text} (reason: {reason})"
         assert reason is None
+
+    # Evidence boundary violation cases -> MUST FAIL
+    evidence_boundary_violation_cases = [
+        "复现实验验证完成。",
+        "指标达到 81%，说明复现结果与论文一致。",
+        "复现验证已经完成，可以进入下一阶段。",
+        "实验验证完成，说明已成功复现。",
+        "指标达到 81%，因此复现结果与论文一致。",
+    ]
+    for text in evidence_boundary_violation_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Evidence boundary violation text was falsely accepted: {text}"
+        assert reason is not None
+
+    # Evidence boundary safe cases (conditions, verifications, calculation definitions) -> MUST PASS
+    evidence_boundary_safe_cases = [
+        "若实验完成率达到80%，也不能判为复现成功。",
+        "实验完成率的计算口径仍待确认。",
+        "需核验复现实验完成率的计算方式。",
+    ]
+    for text in evidence_boundary_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, (
+            f"Evidence boundary safe text was falsely rejected: {text} (reason: {reason})"
+        )
+        assert reason is None

@@ -973,3 +973,41 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_v6.state.last_status == "failed"
     assert resp_v6.state.current_stage == "research_need"
     assert resp_v6.state.subtasks.need_defined is False
+
+    # 13. Evidence boundary violation "指标达到 81%，说明复现结果与论文一致。" -> failed
+    fake_gen_v7 = FakeOrchestratorLlmGenerator(
+        responses=["指标达到 81%，说明复现结果与论文一致 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v7 = ResearchConversationOrchestrator(llm_generator=fake_gen_v7)
+    conv_v7 = ResearchConversationModel(id="conv-repro-v7", profile_data={}, messages_data=[])
+    db_session.add(conv_v7)
+    db_session.commit()
+
+    resp_v7 = orchestrator_v7.process_message(
+        "conv-repro-v7",
+        SendOrchestratorMessageRequest(message="对比指标"),
+        db_session,
+    )
+    assert resp_v7.status == "failed"
+    assert resp_v7.reply_message is None
+    assert resp_v7.state.last_status == "failed"
+    assert resp_v7.state.current_stage == "research_need"
+    assert resp_v7.state.subtasks.need_defined is False
+
+    # 14. Evidence boundary safe case "实验完成率的计算口径仍待确认。" -> completed
+    fake_gen_safe3 = FakeOrchestratorLlmGenerator(
+        responses=["实验完成率的计算口径仍待确认 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe3 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe3)
+    conv_safe3 = ResearchConversationModel(id="conv-repro-safe3", profile_data={}, messages_data=[])
+    db_session.add(conv_safe3)
+    db_session.commit()
+
+    resp_safe3 = orchestrator_safe3.process_message(
+        "conv-repro-safe3",
+        SendOrchestratorMessageRequest(message="口径确认"),
+        db_session,
+    )
+    assert resp_safe3.status == "completed"
+    assert resp_safe3.reply_message is not None
+    assert "实验完成率的计算口径仍待确认" in resp_safe3.reply_message.content
