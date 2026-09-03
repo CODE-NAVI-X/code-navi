@@ -733,3 +733,69 @@ def test_opening_greeting_vs_concrete_topic_in_research_need_stage(db_session) -
     assert "需求澄清" in call_2["system_prompt"]
     assert "欢迎同学并介绍研究方向" not in call_2["system_prompt"]
     assert "【基于学习内容动态生成的推荐研究方向】" not in call_2["user_prompt"]
+
+
+def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirmative_claim(
+    db_session,
+) -> None:
+    """C. Orchestrator: allow compliant negations, reject ungrounded reproduction claims."""
+    # 1. Compliant negation from Provider -> status completed
+    fake_gen_ok = FakeOrchestratorLlmGenerator(
+        responses=[
+            "目前还不能下“复现成功”的结论，仍需核验数据划分、训练动态与论文基线 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orchestrator_ok = ResearchConversationOrchestrator(llm_generator=fake_gen_ok)
+    conv_ok = ResearchConversationModel(id="conv-repro-ok", profile_data={}, messages_data=[])
+    db_session.add(conv_ok)
+    db_session.commit()
+
+    resp_ok = orchestrator_ok.process_message(
+        "conv-repro-ok",
+        SendOrchestratorMessageRequest(message="在 Cora 上测得 Accuracy 80.8%"),
+        db_session,
+    )
+    assert resp_ok.status == "completed"
+    assert resp_ok.reply_message is not None
+    assert "目前还不能下“复现成功”的结论" in resp_ok.reply_message.content
+
+    # 2. Affirmative claim "视为复现成功" from Provider -> status failed
+    fake_gen_bad1 = FakeOrchestratorLlmGenerator(
+        responses=[
+            "若 Accuracy 落在 80.0% - 82.5%，即可视为复现成功 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orchestrator_bad1 = ResearchConversationOrchestrator(llm_generator=fake_gen_bad1)
+    conv_bad1 = ResearchConversationModel(id="conv-repro-bad1", profile_data={}, messages_data=[])
+    db_session.add(conv_bad1)
+    db_session.commit()
+
+    resp_bad1 = orchestrator_bad1.process_message(
+        "conv-repro-bad1",
+        SendOrchestratorMessageRequest(message="我们来设计实验评估标准"),
+        db_session,
+    )
+    assert resp_bad1.status == "failed"
+    assert resp_bad1.reply_message is None
+    assert resp_bad1.state.last_status == "failed"
+    assert "validation failure" in resp_bad1.error
+
+    # 3. Affirmative claim "本次实验已复现成功" -> status failed
+    fake_gen_bad2 = FakeOrchestratorLlmGenerator(
+        responses=[
+            "本次实验已复现成功 (•̀ᴗ•́)و ̑̑！"
+        ]
+    )
+    orchestrator_bad2 = ResearchConversationOrchestrator(llm_generator=fake_gen_bad2)
+    conv_bad2 = ResearchConversationModel(id="conv-repro-bad2", profile_data={}, messages_data=[])
+    db_session.add(conv_bad2)
+    db_session.commit()
+
+    resp_bad2 = orchestrator_bad2.process_message(
+        "conv-repro-bad2",
+        SendOrchestratorMessageRequest(message="结果出来了"),
+        db_session,
+    )
+    assert resp_bad2.status == "failed"
+    assert resp_bad2.reply_message is None
+    assert resp_bad2.state.last_status == "failed"

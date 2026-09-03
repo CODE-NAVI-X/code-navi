@@ -43,23 +43,60 @@ _EMOJI_PATTERN = re.compile(
 )
 
 _FORBIDDEN_PHRASES = [
-    "复现成功",
     "核心判断",
     "当前聚焦于",
     "完成百分比",
     "完成度 100%",
     "完成度100%",
-    "复现成功率",
 ]
+
+_NEGATION_PREFIX_PATTERN = re.compile(
+    r"(?:尚未|未曾|未能|并未|未|不能|不可|无法|并非|不是|不代表|不等于|不等同于|不构成|不视为|"
+    r"不能说明|无法判定|严禁|不得|禁止|避免|切勿|不要|难言|尚未确认|难下|未有|不|≠|!=)"
+    r"[“\"'「『\s\w]{0,12}$"
+)
+
+
+def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
+    """Check if text contains ungrounded affirmative reproduction success claims.
+
+    Allows explicit negation, boundary reminders, and negative conclusions (e.g.,
+    '尚未确认复现成功', '目前还不能下复现成功的结论', 'evidence_linked 不等于复现成功').
+    Rejects positive assertions (e.g., '已复现成功', '即可视为复现成功', '复现成功率达到 98%').
+    """
+    if "复现成功" not in text:
+        return False
+
+    matches = list(re.finditer(r"复现成功(?:率)?", text))
+    for m in matches:
+        start_pos = m.start()
+        # Preceding context window (up to 30 chars)
+        window_start = max(0, start_pos - 30)
+        prefix_window = text[window_start:start_pos]
+
+        is_negated = bool(_NEGATION_PREFIX_PATTERN.search(prefix_window))
+        if not is_negated:
+            # Check following window for immediate boundary qualification
+            following_window = text[m.end(): min(len(text), m.end() + 20)]
+            if re.match(
+                r"[”\"'」』\s]*(?:尚待|未确认|存在疑问|难以确认|不成立|的结论尚不能下)",
+                following_window,
+            ):
+                continue
+            return True
+
+    return False
 
 
 def validate_jiangjiang_output(text: str) -> tuple[bool, str | None]:
-    """Validate model output against persona rules (no emoji, no forbidden phrases)."""
+    """Validate model output against persona rules (no emoji/forbidden phrase/false claims)."""
     if _EMOJI_PATTERN.search(text):
         return False, "Output contains forbidden emoji characters."
     for phrase in _FORBIDDEN_PHRASES:
         if phrase in text:
             return False, f"Output contains forbidden phrase or unproven claim: {phrase}"
+    if _contains_ungrounded_reproduction_success_claim(text):
+        return False, "Output contains ungrounded affirmative reproduction success claim: 复现成功"
     return True, None
 
 
@@ -274,7 +311,14 @@ def build_experiment_design_prompt(
         "1. 为同学设计清晰的实验步骤、基线对比与评估指标方案；\n"
         "2. 指标优先从标准指标目录选取；若有非标准指标需明确标注待核验 (to_verify)；\n"
         "3. 方案必须考虑同学实际显存大小与计算资源，给出合适的 Batch Size 与训练轮次建议；\n"
-        "4. 严禁断言百分之百复现或伪造实验准确率；严禁使用 Emoji。\n"
+        "4. 严禁以 Accuracy、F1、Loss、论文基线值或任何数值区间定义、暗示或设定\n"
+        "   “复现成功 / 通过 / 达标”的指标阈值、区间或判定标准；\n"
+        "   论文报告值或预期指标只能表述为“论文报告的参考值”“基线参考区间”或\n"
+        "   “待核验的一致性对比”，不构成复现结论；\n"
+        "   即使后续实验数值接近论文基线，也不得输出“视为复现成功”或“判定复现成功”；\n"
+        "   必须明确写清：evidence_linked、指标接近、计划完成或记录完整均不代表复现成功；\n"
+        "   缺少可追溯结果时继续标记 to_verify 并追问；\n"
+        "5. 严禁断言百分之百复现或伪造实验准确率；严禁使用 Emoji。\n"
     )
     return {
         "template_name": "experiment_design",
@@ -304,7 +348,9 @@ def build_result_analysis_prompt(
     rules = (
         "1. 客观分析用户实验指标与基线的差距，从超参数、数据划分等角度给出归因；\n"
         "2. 若用户提供的信息不完整（如缺少 loss 曲线、缺少测试集划分），明确追问缺失项；\n"
-        "3. 严禁伪造实验成功或声称复现已闭环；严禁使用 Emoji。\n"
+        "3. 严禁伪造实验成功或声称复现已闭环，优先使用“尚未形成可确认的复现结论”或\n"
+        "   “复现闭环尚待验证”等严谨客观表述；\n"
+        "   明确写清：evidence_linked 与指标接近不代表复现成功；严禁使用 Emoji。\n"
     )
     return {
         "template_name": "result_analysis",

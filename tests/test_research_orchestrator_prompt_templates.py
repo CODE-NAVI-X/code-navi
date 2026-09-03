@@ -166,3 +166,69 @@ def test_validate_jiangjiang_output_detects_emojis_and_forbidden_patterns() -> N
     is_valid, reason = validate_jiangjiang_output(percentage_fake_text)
     assert not is_valid
     assert "复现成功" in reason or "百分比" in reason
+
+
+def test_build_experiment_design_prompt_rules_reproduction_boundaries() -> None:
+    """A. T6 Prompt rules: strictly forbid defining reproduction success thresholds."""
+    paper = CurrentPaperCard(
+        id="p-gcn",
+        paper_url="https://arxiv.org/abs/1609.02907",
+        title="Semi-Supervised Classification with Graph Convolutional Networks",
+        purpose="replace",
+        selected_at="2026-09-02T10:00:00Z",
+    )
+    profile = LearnerProfileData(hardware="8GB 显存")
+    prompt = build_experiment_design_prompt(
+        paper=paper,
+        profile=profile,
+        standard_metrics=["ACC", "F1"],
+    )
+    rules = prompt["rules"]
+
+    # 1. Must forbid defining reproduction success / passing / standard thresholds
+    assert any(k in rules for k in ["严禁", "不得", "禁止"])
+    assert any(k in rules for k in ["阈值", "判定标准", "定义", "区间"])
+    assert "复现成功" in rules or "通过" in rules or "达标" in rules
+
+    # 2. Metric values can only be baseline reference / to_verify comparison
+    assert "参考" in rules or "待核验" in rules or "对照" in rules
+
+    # 3. Must forbid "视为复现成功" / "判定复现成功" even if metrics are close
+    assert "视为复现成功" in rules or "判定复现成功" in rules or "说明复现成功" in rules
+
+    # 4. Must state evidence_linked != reproduction success
+    assert "evidence_linked" in rules and ("不代表复现成功" in rules or "不等于复现成功" in rules)
+
+
+def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() -> None:
+    """B. Output validator: allows compliant negations, rejects affirmative claims."""
+    # Compliant statements with explicit negation / boundary limitation -> MUST PASS
+    compliant_cases = [
+        "目前还不能下“复现成功”的结论，仍需核验数据划分、训练动态与论文描述。",
+        "尚未确认复现成功；当前指标只能作为与论文基线的待核验对照。",
+        "evidence_linked 不等于复现成功，仍需要人工核验。",
+        "指标接近论文并不代表复现成功，仍需核验随机种子与实验环境。",
+        "严禁声称复现成功，当前仅完成了第一轮基线记录。",
+        "实验结果与论文基线存在差异，未能复现成功，需要进一步排查。",
+        "避免轻易下复现成功结论，需补充完整消融实验。",
+    ]
+    for text in compliant_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"Compliant text was falsely rejected: {text} (reason: {reason})"
+        assert reason is None
+
+    # Affirmative / ungrounded reproduction success claims -> MUST FAIL
+    violation_cases = [
+        "若 Accuracy 落在 80.0% - 82.5%，即可视为复现成功。",
+        "本次实验已复现成功。",
+        "指标接近论文，因此可以判定复现成功。",
+        "复现成功率达到 98%。",
+        "GCN 模型在 Cora 上复现成功了。",
+        "实验结果充分说明复现成功。",
+        "复现成功率 100%",
+        "本方案证明复现成功。",
+    ]
+    for text in violation_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Violation text was falsely accepted: {text}"
+        assert reason is not None
