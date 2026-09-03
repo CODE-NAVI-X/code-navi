@@ -93,29 +93,40 @@ _REPRODUCTION_CLAIM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_CONSISTENCY_CLAIM_PATTERN = re.compile(
-    r"(?:"
-    r"(?:实验结果|复现结果|复现指标|指标|结果)(?:和|与|跟)(?:原论文|论文|论文基线|原论文基线|基线|论文结论|论文结果|论文指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
-    r"(?:与|和|跟)(?:原论文|论文|论文基线|原论文基线|基线)(?:中的)?(?:实验)?(?:结果|结论|指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
-    r"(?:指标|结果)(?:已|已经)?达到(?:论文)?基线|"
-    r"(?:指标|结果)超过(?:论文)?基线"
-    r")",
-    re.IGNORECASE,
-)
-
-_USER_REPORTED_CONSISTENCY_PATTERN = re.compile(
+# Category 1: Result/Metric consistency with paper
+_CLAIM_RESULT_CONSISTENCY_PATTERN = re.compile(
     r"(?:"
     r"(?:实验结果|复现结果|复现指标|指标|结果)(?:和|与|跟)"
     r"(?:原论文|论文|论文基线|原论文基线|基线|论文结论|论文结果|论文指标)"
     r"(?:完全|基本|大致)?(?:一致|吻合|相同)|"
     r"(?:与|和|跟)(?:原论文|论文|论文基线|原论文基线|基线)(?:中的)?(?:实验)?"
     r"(?:结果|结论|指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
-    r"(?:指标|结果)(?:已|已经)?达到(?:论文)?基线|"
-    r"(?:指标|结果)超过(?:论文)?基线|"
     r"(?:结果|指标)(?:和|与|跟)?(?:论文)?(?:完全|基本|大致)?(?:一致|吻合|相同)"
     r")",
     re.IGNORECASE,
 )
+
+# Category 2: Metric reaches or exceeds baseline
+_CLAIM_METRIC_BASELINE_PATTERN = re.compile(
+    r"(?:"
+    r"(?:复现)?(?:指标|结果)(?:已|已经)?达到(?:原论文|论文)?(?:基线|指标)|"
+    r"(?:复现)?(?:指标|结果)超过(?:原论文|论文)?(?:基线|指标)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+_LOCAL_PREFIX_DELIMITER_PATTERN = re.compile(
+    r"[\n\r；;。\.！？!\?，,、/]|(?:\s*和\s*|\s*及\s*|\s*且\s*|\s*但\s*)"
+)
+
+_ADJACENT_POST_TO_VERIFY_PATTERN = re.compile(
+    r"^[；;\s，,\n]*"
+    r"(?:to_verify|待核验|需核验|尚待核验|有待核验|需确认|待确认|仍需核验|还需核验)"
+    r"[:：]?",
+    re.IGNORECASE,
+)
+
 
 _USER_SOURCE_PREFIX_PATTERN = re.compile(
     r"(?:fact|事实)?[:：]?\s*"
@@ -218,17 +229,17 @@ def _contains_ungrounded_reproduction_success_claim(
     1. Splits text into isolated local semantic clauses.
     2. Evaluates claims against clause or local negation/condition/suffix boundaries.
     3. Prevents cross-clause negation leaks.
-    4. Enforces verifiable user-source provenance for user-attributed consistency facts.
+    4. Enforces verifiable, locally bound user-source provenance and adjacent post to_verify.
     """
-    has_text_to_verify = bool(_TO_VERIFY_PATTERN.search(text))
     evidence_text = _extract_evidence_text(evidence_context)
-    has_user_evidence = bool(_USER_REPORTED_CONSISTENCY_PATTERN.search(evidence_text))
+    has_user_evidence_cat1 = bool(_CLAIM_RESULT_CONSISTENCY_PATTERN.search(evidence_text))
+    has_user_evidence_cat2 = bool(_CLAIM_METRIC_BASELINE_PATTERN.search(evidence_text))
 
     clauses = _split_into_clauses(text)
     if not clauses:
         clauses = [(0, len(text), text)]
 
-    for _, _, clause_str in clauses:
+    for clause_start, _, clause_str in clauses:
         matches = list(_REPRODUCTION_CLAIM_PATTERN.finditer(clause_str))
         if not matches:
             continue
@@ -259,20 +270,39 @@ def _contains_ungrounded_reproduction_success_claim(
             if suffix_boundary:
                 continue
 
-            # Allow user-attributed consistency comparisons ONLY when supported by
-            # traceable user evidence and to_verify is explicitly retained
-            matched_text = m.group()
-            is_consistency_claim = bool(_CONSISTENCY_CLAIM_PATTERN.search(matched_text))
-            has_user_source_tag = bool(
-                _USER_SOURCE_PREFIX_PATTERN.search(local_prefix)
-                or _USER_SOURCE_PREFIX_PATTERN.search(clause_prefix)
+            # Check for compliant, locally bound fact block with post-positioned to_verify:
+            global_start = clause_start + m.start()
+            global_end = clause_start + m.end()
+
+            # 1. Immediate local segment before this match must be a user source tag
+            preceding_text = text[:global_start]
+            last_delim = None
+            for dm in _LOCAL_PREFIX_DELIMITER_PATTERN.finditer(preceding_text):
+                last_delim = dm
+            if last_delim is not None:
+                local_segment = preceding_text[last_delim.end():].strip()
+            else:
+                local_segment = preceding_text.strip()
+            has_local_user_source = bool(_USER_SOURCE_PREFIX_PATTERN.search(local_segment))
+
+            # 2. to_verify must be adjacent and post-positioned to this fact claim
+            following_text = text[global_end:]
+            has_adjacent_to_verify = bool(
+                _ADJACENT_POST_TO_VERIFY_PATTERN.search(following_text)
             )
-            if (
-                is_consistency_claim
-                and has_user_source_tag
-                and has_text_to_verify
-                and has_user_evidence
-            ):
+
+            # 3. Claim category must be supported by matching user evidence
+            matched_claim = m.group()
+            is_cat1 = bool(_CLAIM_RESULT_CONSISTENCY_PATTERN.search(matched_claim))
+            is_cat2 = bool(_CLAIM_METRIC_BASELINE_PATTERN.search(matched_claim))
+
+            category_supported = False
+            if is_cat1 and has_user_evidence_cat1:
+                category_supported = True
+            elif is_cat2 and has_user_evidence_cat2:
+                category_supported = True
+
+            if has_local_user_source and has_adjacent_to_verify and category_supported:
                 continue
 
             has_unbounded_claim = True

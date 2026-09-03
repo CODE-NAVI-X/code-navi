@@ -495,3 +495,41 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         )
         assert not is_valid, f"P1-C violation text was falsely accepted: {text}"
         assert reason is not None
+
+    # P1-Local-A: to_verify in prior sentence must not allow ungrounded fact in subsequent sentence
+    is_valid_inv, reason_inv = validate_jiangjiang_output(
+        "to_verify：仍需核验。用户报告实验结果与论文一致。",
+        evidence_context="我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+    )
+    assert not is_valid_inv, "Preceding to_verify falsely allowed subsequent statement"
+    assert reason_inv is not None
+
+    # P1-Local-B: User source tag must not leak across coordinators to Jiang Jiang confirmation
+    jj_leak_cases = [
+        "用户报告实验结果与论文一致、姜姜确认实验结果与论文一致；to_verify：仍需核验。",
+        "用户报告实验结果与论文一致/姜姜确认实验结果与论文一致；to_verify：仍需核验。",
+        "用户报告实验结果与论文一致和姜姜确认实验结果与论文一致；to_verify：仍需核验。",
+    ]
+    for text in jj_leak_cases:
+        is_valid_jj, reason_jj = validate_jiangjiang_output(
+            text,
+            evidence_context="我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+        )
+        assert not is_valid_jj, f"User source tag leaked to Jiang Jiang confirmation: {text}"
+        assert reason_jj is not None
+
+    # P1-Local-C: Category mismatch (result consistency cannot support baseline metric claim)
+    is_valid_cat_mismatch, reason_cat_mismatch = validate_jiangjiang_output(
+        "fact：用户报告指标达到论文基线；to_verify：仍需核验。",
+        evidence_context="我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+    )
+    assert not is_valid_cat_mismatch, "Evidence category mismatch was falsely accepted"
+    assert reason_cat_mismatch is not None
+
+    # Matching category 2 evidence allows category 2 claim
+    is_valid_cat2, reason_cat2 = validate_jiangjiang_output(
+        "fact：用户报告指标达到论文基线；to_verify：仍需核验。",
+        evidence_context="我观察到本次复现指标已达到原论文基线，但尚未全面核验。",
+    )
+    assert is_valid_cat2, f"Matching category 2 evidence was falsely rejected: {reason_cat2}"
+    assert reason_cat2 is None

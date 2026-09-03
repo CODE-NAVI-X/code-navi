@@ -1258,3 +1258,70 @@ def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
     assert resp_ok2.status == "completed"
     assert resp_ok2.reply_message is not None
     assert "即使实验结果与论文一致，也不能据此认定复现成功" in resp_ok2.reply_message.content
+
+    # 8. Category mismatch between user evidence and model claim -> status failed
+    fake_gen_mismatch = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告指标达到论文基线；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_mismatch = ResearchConversationOrchestrator(llm_generator=fake_gen_mismatch)
+    conv_mismatch = ResearchConversationModel(
+        id="conv-p1-mismatch", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_mismatch)
+    db_session.commit()
+
+    resp_mismatch = orch_mismatch.process_message(
+        "conv-p1-mismatch",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_mismatch.status == "failed"
+    assert resp_mismatch.reply_message is None
+
+    # 9. Source tag leakage to Jiang Jiang confirmation -> status failed
+    fake_gen_leak = FakeOrchestratorLlmGenerator(
+        responses=[
+            "用户报告实验结果与论文一致、姜姜确认实验结果与论文一致；"
+            "to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orch_leak = ResearchConversationOrchestrator(llm_generator=fake_gen_leak)
+    conv_leak = ResearchConversationModel(
+        id="conv-p1-leak", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_leak)
+    db_session.commit()
+
+    resp_leak = orch_leak.process_message(
+        "conv-p1-leak",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_leak.status == "failed"
+    assert resp_leak.reply_message is None
+
+    # 10. Matching category 2 user evidence -> status completed
+    fake_gen_cat2 = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告指标达到论文基线；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_cat2 = ResearchConversationOrchestrator(llm_generator=fake_gen_cat2)
+    conv_cat2 = ResearchConversationModel(
+        id="conv-p1-cat2", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_cat2)
+    db_session.commit()
+
+    resp_cat2 = orch_cat2.process_message(
+        "conv-p1-cat2",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验指标达到论文基线，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_cat2.status == "completed"
+    assert resp_cat2.reply_message is not None
+    assert "fact：用户报告指标达到论文基线" in resp_cat2.reply_message.content
