@@ -271,3 +271,28 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert not is_valid, f"Semantic violation text was falsely accepted: {text}"
         assert reason is not None
+
+    # Additional safe boundary cases -> MUST PASS
+    additional_safe_cases = [
+        "无需声称复现成功，当前结果仍待核验。",
+        "不应声称复现成功，当前结果仍待核验。",
+        "尚不足以断言复现成功，仍需补充数据划分与随机种子。",
+        "实验不稳定，尚未确认复现成功。",
+    ]
+    for text in additional_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"Additional safe text was falsely rejected: {text} (reason: {reason})"
+        assert reason is None
+
+    # Remaining violation cases (unrelated negation or new reproduction terms) -> MUST FAIL
+    remaining_violation_cases = [
+        "实验不稳定且已复现成功。",
+        "数据不完整且本轮复现成功。",
+        "模型已稳定重现论文结果。",
+        "本实验已成功复刻论文结果。",
+        "复现实验已经完成，可以进入下一阶段。",
+    ]
+    for text in remaining_violation_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Remaining violation text was falsely accepted: {text}"
+        assert reason is not None

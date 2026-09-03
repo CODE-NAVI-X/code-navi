@@ -875,3 +875,43 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_safe.status == "completed"
     assert resp_safe.reply_message is not None
     assert "复现成功不代表论文结论正确" in resp_safe.reply_message.content
+
+    # 8. Unrelated negation in first half + positive claim in second half -> failed
+    fake_gen_v3 = FakeOrchestratorLlmGenerator(
+        responses=["实验不稳定且已复现成功 (•̀ᴗ•́)و ̑̑！"]
+    )
+    orchestrator_v3 = ResearchConversationOrchestrator(llm_generator=fake_gen_v3)
+    conv_v3 = ResearchConversationModel(id="conv-repro-v3", profile_data={}, messages_data=[])
+    db_session.add(conv_v3)
+    db_session.commit()
+
+    resp_v3 = orchestrator_v3.process_message(
+        "conv-repro-v3",
+        SendOrchestratorMessageRequest(message="评估实验状态"),
+        db_session,
+    )
+    assert resp_v3.status == "failed"
+    assert resp_v3.reply_message is None
+    assert resp_v3.state.last_status == "failed"
+    assert resp_v3.state.current_stage == "research_need"
+    assert resp_v3.state.subtasks.need_defined is False
+
+    # 9. Extended reproduction term "模型已稳定重现论文结果。" -> failed
+    fake_gen_v4 = FakeOrchestratorLlmGenerator(
+        responses=["模型已稳定重现论文结果 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v4 = ResearchConversationOrchestrator(llm_generator=fake_gen_v4)
+    conv_v4 = ResearchConversationModel(id="conv-repro-v4", profile_data={}, messages_data=[])
+    db_session.add(conv_v4)
+    db_session.commit()
+
+    resp_v4 = orchestrator_v4.process_message(
+        "conv-repro-v4",
+        SendOrchestratorMessageRequest(message="看一下重现情况"),
+        db_session,
+    )
+    assert resp_v4.status == "failed"
+    assert resp_v4.reply_message is None
+    assert resp_v4.state.last_status == "failed"
+    assert resp_v4.state.current_stage == "research_need"
+    assert resp_v4.state.subtasks.need_defined is False

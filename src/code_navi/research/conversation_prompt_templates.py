@@ -54,21 +54,31 @@ _FORBIDDEN_PHRASES = [
 ]
 
 _PUNCTUATION_DELIMITERS = set("。！？!?；;，,\n\r\t|｜")
-_TRANSITION_WORDS = ["但是", "然而", "不过", "反而", "但", "却", "而"]
+_TRANSITION_WORDS = ["但是", "然而", "不过", "反而", "并且", "但", "却", "而", "且"]
 
 _REPRODUCTION_CLAIM_PATTERN = re.compile(
-    r"(?:复现成功|成功复现|已复现|复现通过|复现达标|复现完成|复现闭环)"
+    r"(?:"
+    r"复现实验已经完成|复现实验已完成|"
+    r"已稳定重现|成功重现|稳定重现|"
+    r"已成功复刻|成功复刻|"
+    r"复现成功|成功复现|已复现|复现通过|复现达标|复现完成|复现闭环"
+    r")"
 )
 
-_NEGATION_OR_CONDITION_PREFIX_PATTERN = re.compile(
+_NEGATION_PREFIX_PATTERN = re.compile(
     r"(?:"
-    r"尚未确认|尚未能|未曾|未能|并未|未有|尚未|未|"
-    r"不能下|难以判定|难下|无法下|不能认为|不要说|不可认为|无法确认|不算作|不算|"
-    r"不能|不可|无法|并非|不是|不代表|不等于|不等同于|不构成|不视为|"
-    r"不能说明|无法判定|切勿判定|严禁声称|不得声称|严禁|不得|禁止|避免|切勿|不要|难言|不|≠|!="
-    r"|即使|即便|如果未来|如果|哪怕|假使|假设|若"
+    r"尚不足以|难以|无法|切勿|切忌|不可|未曾|并未|未有|尚未|未能|未形成|"
+    r"不能|不应|无需|严禁|不得|禁止|避免|不要|难言|难下|"
+    r"不代表|不等于|不等同于|不构成|并非|不是|不视为|不算作|不算|≠|!="
     r")"
-    r"[“\"'「『（(【\[\s\w]{0,10}$"
+    r"(?:[“\"'「『（(【\[\s]|(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认为|得出|下达|形成|确认|视作|视为|说明|定义)){0,4}"
+    r"[“\"'「『（(【\[\s]{0,2}$"
+)
+
+_CONDITION_PREFIX_PATTERN = re.compile(
+    r"(?:即使|即便|哪怕|假使|假设|如果未来|如果|若)"
+    r"(?:[“\"'「『（(【\[\s]|(?:未来|后续|最终)?(?:形成|达成|达到|实现|得出|出现|能够)?){0,4}"
+    r"[“\"'「『（(【\[\s]{0,2}$"
 )
 
 _SUFFIX_BOUNDARY_PATTERN = re.compile(
@@ -137,7 +147,10 @@ def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
         clause_start = _find_clause_start(text, start_pos, last_end_pos)
         local_prefix = text[clause_start:start_pos]
 
-        prefix_has_boundary = bool(_NEGATION_OR_CONDITION_PREFIX_PATTERN.search(local_prefix))
+        prefix_has_boundary = bool(
+            _NEGATION_PREFIX_PATTERN.search(local_prefix)
+            or _CONDITION_PREFIX_PATTERN.search(local_prefix)
+        )
         if prefix_has_boundary:
             last_end_pos = end_pos
             continue
