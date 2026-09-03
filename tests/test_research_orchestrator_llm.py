@@ -915,3 +915,41 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_v4.state.last_status == "failed"
     assert resp_v4.state.current_stage == "research_need"
     assert resp_v4.state.subtasks.need_defined is False
+
+    # 10. Positive reproduction synonym: "模型已经复现论文结果。" -> failed
+    fake_gen_v5 = FakeOrchestratorLlmGenerator(
+        responses=["模型已经复现论文结果 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v5 = ResearchConversationOrchestrator(llm_generator=fake_gen_v5)
+    conv_v5 = ResearchConversationModel(id="conv-repro-v5", profile_data={}, messages_data=[])
+    db_session.add(conv_v5)
+    db_session.commit()
+
+    resp_v5 = orchestrator_v5.process_message(
+        "conv-repro-v5",
+        SendOrchestratorMessageRequest(message="检查论文复现状态"),
+        db_session,
+    )
+    assert resp_v5.status == "failed"
+    assert resp_v5.reply_message is None
+    assert resp_v5.state.last_status == "failed"
+    assert resp_v5.state.current_stage == "research_need"
+    assert resp_v5.state.subtasks.need_defined is False
+
+    # 11. Contextual risk reminder: "严禁声称复现成功率，当前结果仍待核验。" -> completed
+    fake_gen_safe2 = FakeOrchestratorLlmGenerator(
+        responses=["严禁声称复现成功率，当前结果仍待核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe2 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe2)
+    conv_safe2 = ResearchConversationModel(id="conv-repro-safe2", profile_data={}, messages_data=[])
+    db_session.add(conv_safe2)
+    db_session.commit()
+
+    resp_safe2 = orchestrator_safe2.process_message(
+        "conv-repro-safe2",
+        SendOrchestratorMessageRequest(message="成功率如何评估"),
+        db_session,
+    )
+    assert resp_safe2.status == "completed"
+    assert resp_safe2.reply_message is not None
+    assert "严禁声称复现成功率" in resp_safe2.reply_message.content

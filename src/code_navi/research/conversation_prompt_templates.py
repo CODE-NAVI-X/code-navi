@@ -48,9 +48,6 @@ _FORBIDDEN_PHRASES = [
     "完成百分比",
     "完成度 100%",
     "完成度100%",
-    "复现成功率",
-    "实验完成率",
-    "复现完成率",
 ]
 
 _PUNCTUATION_DELIMITERS = set("。！？!?；;，,\n\r\t|｜")
@@ -58,11 +55,25 @@ _TRANSITION_WORDS = ["但是", "然而", "不过", "反而", "并且", "但", "�
 
 _REPRODUCTION_CLAIM_PATTERN = re.compile(
     r"(?:"
-    r"复现实验已经完成|复现实验已完成|"
-    r"已稳定重现|成功重现|稳定重现|"
-    r"已成功复刻|成功复刻|"
-    r"复现成功|成功复现|已复现|复现通过|复现达标|复现完成|复现闭环"
-    r")"
+    # Rate and percentage claims (now evaluated under contextual clause checking)
+    r"reproduction\s+success\s+rate|"
+    r"(?:复现|重现)(?:的)?成功率|"
+    r"(?:实验|复现|重现)(?:的)?完成率|"
+    # Completion phrases
+    r"完成(?:了|已经|已)?(?:复现|重现|复刻)|"
+    r"(?:复现|重现|复刻)(?:实验)?(?:已经完成|已完成|完成了|完成)|"
+    # Adverb + verb: 已/已经 + 成功/稳定 + 地? + 复现/重现/复刻
+    r"(?:已(?:经)?)?(?:成功|稳定)(?:地)?(?:复现|重现|复刻)|"
+    # 已经/已 + 复现/重现/复刻
+    r"(?:已经|已)(?:复现|重现|复刻)|"
+    # 复现了/重现了/复刻了
+    r"(?:复现|重现|复刻)了|"
+    # 复现成功/重现成功/复刻成功/复现通过/复现达标/复现闭环
+    r"(?:复现|重现|复刻)(?:成功|通过|达标|闭环)|"
+    # 重现/复刻/复现 + 论文(中的)?(实验)?结果
+    r"(?:复现|重现|复刻)论文(?:中的)?(?:实验)?结果"
+    r")",
+    re.IGNORECASE,
 )
 
 _NEGATION_PREFIX_PATTERN = re.compile(
@@ -71,7 +82,7 @@ _NEGATION_PREFIX_PATTERN = re.compile(
     r"不能|不应|无需|严禁|不得|禁止|避免|不要|难言|难下|"
     r"不代表|不等于|不等同于|不构成|并非|不是|不视为|不算作|不算|≠|!="
     r")"
-    r"(?:[“\"'「『（(【\[\s]|(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认为|得出|下达|形成|确认|视作|视为|说明|定义)){0,4}"
+    r"(?:[“\"'「『（(【\[\s]|把|将|(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认为|得出|下达|形成|确认|视作|视为|说明|定义)){0,4}"
     r"[“\"'「『（(【\[\s]{0,2}$"
 )
 
@@ -84,7 +95,8 @@ _CONDITION_PREFIX_PATTERN = re.compile(
 _SUFFIX_BOUNDARY_PATTERN = re.compile(
     r"^[”\"'」』）)】\]\s]*(?:"
     r"不代表|不等于|不等同于|不构成|并不|并非|不是|不意味着|"
-    r"尚待|未确认|未形成|存在疑问|难以确认|不成立|的结论尚不能下|的结论仍不能下"
+    r"尚待|未确认|未形成|存在疑问|难以确认|不成立|的结论尚不能下|的结论仍不能下|"
+    r"当作结论|作为结论|等当作|等作为"
     r")"
 )
 
@@ -121,20 +133,11 @@ def _find_clause_start(text: str, start_pos: int, last_end_pos: int) -> int:
 def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
     """Check if text contains ungrounded affirmative reproduction success claims.
 
-    1. Success rates and completion percentages are unconditionally rejected.
-    2. Each reproduction claim term is checked within its isolated local clause.
-    3. Allows explicit prefix negation/condition or suffix boundary qualification.
-    4. Rejects ungrounded affirmative assertions.
+    1. Each reproduction/recreation claim or success rate/completion percentage term
+       is checked within its isolated local clause.
+    2. Allows explicit prefix negation/condition or suffix boundary qualification.
+    3. Rejects ungrounded affirmative assertions.
     """
-    if re.search(r"reproduction\s+success\s+rate", text, re.IGNORECASE):
-        return True
-    if re.search(r"复现(?:的)?成功率", text):
-        return True
-    if re.search(r"实验完成率", text):
-        return True
-    if re.search(r"复现完成率", text):
-        return True
-
     matches = list(_REPRODUCTION_CLAIM_PATTERN.finditer(text))
     if not matches:
         return False

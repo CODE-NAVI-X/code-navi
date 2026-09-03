@@ -296,3 +296,27 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert not is_valid, f"Remaining violation text was falsely accepted: {text}"
         assert reason is not None
+
+    # P1-A: Positive reproduction/recreation completion synonyms -> MUST FAIL
+    p1_a_violation_cases = [
+        "模型已经复现论文结果。",
+        "模型复现了论文结果。",
+        "我们完成了复现。",
+        "复现实验完成了，可以进入下一阶段。",
+        "已重现论文中的实验结果。",
+        "模型成功地重现了论文结果。",
+    ]
+    for text in p1_a_violation_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"P1-A violation text was falsely accepted: {text}"
+        assert reason is not None
+
+    # P1-B: Context-sensitive success rate / completion rate risk reminders -> MUST PASS
+    p1_b_safe_cases = [
+        "严禁声称复现成功率，当前结果仍待核验。",
+        "不要把实验完成率当作结论。",
+    ]
+    for text in p1_b_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"P1-B safe text was falsely rejected: {text} (reason: {reason})"
+        assert reason is None
