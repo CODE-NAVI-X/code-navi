@@ -22,7 +22,10 @@ import {
   updateContextTransfer,
 } from "@/lib/api/context-transfers";
 import { getLearningSessionId } from "@/lib/api/learning";
-import { RESEARCH_CONVERSATION_STORAGE_KEY } from "@/lib/api/research";
+import {
+  RESEARCH_CONVERSATION_STORAGE_KEY,
+  updateOrchestratorLearningContext,
+} from "@/lib/api/research";
 
 function messageFor(error: unknown): string {
   if (error instanceof ContextTransferApiError) {
@@ -50,9 +53,14 @@ export default function ResearchContextConfirmationPage() {
     let active = true;
     const sessionId = getLearningSessionId();
     void getContextTransfer(params.contextId, sessionId)
-      .then((restored) => {
+      .then(async (restored) => {
         if (!active) return;
         if (restored.status === "confirmed" && restored.confirmed_conversation_id) {
+          await updateOrchestratorLearningContext(restored.confirmed_conversation_id, {
+            learned_content: restored.summary,
+            learning_progress: null,
+          });
+          if (!active) return;
           window.localStorage.setItem(
             RESEARCH_CONVERSATION_STORAGE_KEY,
             restored.confirmed_conversation_id,
@@ -139,6 +147,10 @@ export default function ResearchContextConfirmationPage() {
           })),
         },
       );
+      await updateOrchestratorLearningContext(conversation.conversation_id, {
+        learned_content: summary.trim(),
+        learning_progress: null,
+      });
       window.localStorage.setItem(
         RESEARCH_CONVERSATION_STORAGE_KEY,
         conversation.conversation_id,

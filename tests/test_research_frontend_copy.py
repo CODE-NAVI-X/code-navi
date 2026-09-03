@@ -638,3 +638,31 @@ def test_reading_reports_stay_user_sourced_and_ppt_stays_a_draft() -> None:
 
     assert "PPT 汇报（设计草案，不阻塞主流程）" in paper_source
     assert "不生成 PPT 文件" in paper_source
+
+
+def test_learning_context_put_wired_into_confirm_flow() -> None:
+    confirm_page = Path("frontend/app/(student)/research/confirm/[contextId]/page.tsx")
+    source = confirm_page.read_text(encoding="utf-8")
+
+    assert "updateOrchestratorLearningContext" in source
+
+    # confirmDraft: confirm -> PUT summary -> setItem -> push
+    confirm_part = source.split("async function confirmDraft()")[1].split("if (loading)")[0]
+    confirm_call_pos = confirm_part.index("confirmContextTransfer(")
+    put_call_pos = confirm_part.index("updateOrchestratorLearningContext(")
+    set_item_pos = confirm_part.index("window.localStorage.setItem(")
+    router_push_pos = confirm_part.index("router.push(")
+    assert confirm_call_pos < put_call_pos < set_item_pos < router_push_pos
+    assert "learned_content: summary.trim()" in confirm_part
+    assert "learning_progress: null" in confirm_part
+
+    # Restoration: status confirmed -> PUT restored.summary -> setItem -> replace
+    restore_sub = source.split('restored.status === "confirmed"')[1]
+    restore_part = restore_sub.split("setContext(restored)")[0]
+    restore_put_pos = restore_part.index("updateOrchestratorLearningContext(")
+    restore_set_item_pos = restore_part.index("window.localStorage.setItem(")
+    restore_replace_pos = restore_part.index("router.replace(")
+    assert restore_put_pos < restore_set_item_pos < restore_replace_pos
+    assert "learned_content: restored.summary" in restore_part
+    assert "learning_progress: null" in restore_part
+
