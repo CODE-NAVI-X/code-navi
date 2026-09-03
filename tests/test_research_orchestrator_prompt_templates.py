@@ -232,3 +232,17 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert not is_valid, f"Violation text was falsely accepted: {text}"
         assert reason is not None
+
+    # Mixed clause violations (negation in first clause followed by positive claim) -> MUST FAIL
+    mixed_clause_violations = [
+        "尚未确认复现成功但已复现成功。",
+        "不能认为复现成功但已复现成功。",
+        "不要说复现成功但已复现成功。",
+        "未复现成功但已复现成功。",
+        "不算复现成功但算复现成功。",
+        "不代表复现成功但本次已复现成功。",
+    ]
+    for text in mixed_clause_violations:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Mixed clause violation was falsely accepted: {text}"
+        assert reason is not None

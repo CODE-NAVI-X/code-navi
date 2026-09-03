@@ -799,3 +799,23 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_bad2.status == "failed"
     assert resp_bad2.reply_message is None
     assert resp_bad2.state.last_status == "failed"
+
+    # 4. Mixed clause: negation in first half + positive claim in second half -> failed
+    fake_gen_mixed = FakeOrchestratorLlmGenerator(
+        responses=[
+            "尚未确认复现成功，但本次实验已复现成功 (•̀ᴗ•́)و ̑̑！"
+        ]
+    )
+    orchestrator_mixed = ResearchConversationOrchestrator(llm_generator=fake_gen_mixed)
+    conv_mixed = ResearchConversationModel(id="conv-repro-mixed", profile_data={}, messages_data=[])
+    db_session.add(conv_mixed)
+    db_session.commit()
+
+    resp_mixed = orchestrator_mixed.process_message(
+        "conv-repro-mixed",
+        SendOrchestratorMessageRequest(message="看一下整体状态"),
+        db_session,
+    )
+    assert resp_mixed.status == "failed"
+    assert resp_mixed.reply_message is None
+    assert resp_mixed.state.last_status == "failed"

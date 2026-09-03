@@ -48,42 +48,83 @@ _FORBIDDEN_PHRASES = [
     "完成百分比",
     "完成度 100%",
     "完成度100%",
+    "复现成功率",
 ]
 
 _NEGATION_PREFIX_PATTERN = re.compile(
-    r"(?:尚未|未曾|未能|并未|未|不能|不可|无法|并非|不是|不代表|不等于|不等同于|不构成|不视为|"
-    r"不能说明|无法判定|严禁|不得|禁止|避免|切勿|不要|难言|尚未确认|难下|未有|不|≠|!=)"
-    r"[“\"'「『\s\w]{0,12}$"
+    r"(?:尚未确认|尚未能|未曾|未能|并未|未有|尚未|未|"
+    r"不能下|难以判定|难下|无法下|不能认为|不要说|不可认为|无法确认|不算作|不算|"
+    r"不能|不可|无法|并非|不是|不代表|不等于|不等同于|不构成|不视为|"
+    r"不能说明|无法判定|切勿判定|严禁声称|不得声称|严禁|不得|禁止|避免|切勿|不要|难言|不|≠|!=)"
+    r"[“\"'「『（(【\[\s\w]{0,10}$"
 )
+
+
+def _find_clause_start(text: str, start_pos: int, last_end_pos: int) -> int:
+    """Find the start index of the local clause preceding start_pos."""
+    earliest = last_end_pos
+
+    # Search backwards from start_pos to earliest for punctuation delimiters
+    delimiter_pos = -1
+    for idx in range(start_pos - 1, earliest - 1, -1):
+        if text[idx] in "。！？!?；;，,\n\r\t|｜":
+            delimiter_pos = idx + 1
+            break
+
+    clause_start = max(earliest, delimiter_pos if delimiter_pos != -1 else earliest)
+
+    # Check for transition conjunctions within the clause
+    prefix_so_far = text[clause_start:start_pos]
+    for conj in ["但是", "然而", "不过", "反而", "但", "却", "而"]:
+        conj_idx = prefix_so_far.rfind(conj)
+        if conj_idx != -1:
+            clause_start = clause_start + conj_idx + len(conj)
+            break
+
+    return clause_start
 
 
 def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
     """Check if text contains ungrounded affirmative reproduction success claims.
 
-    Allows explicit negation, boundary reminders, and negative conclusions (e.g.,
-    '尚未确认复现成功', '目前还不能下复现成功的结论', 'evidence_linked 不等于复现成功').
-    Rejects positive assertions (e.g., '已复现成功', '即可视为复现成功', '复现成功率达到 98%').
+    1. '复现成功率' is unconditionally rejected.
+    2. Each '复现成功' is checked within its isolated local clause.
+    3. Allows tight explicit negation/boundary qualification; rejects affirmative claims.
     """
+    if "复现成功率" in text:
+        return True
+
     if "复现成功" not in text:
         return False
 
-    matches = list(re.finditer(r"复现成功(?:率)?", text))
+    matches = list(re.finditer(r"复现成功", text))
+    last_end_pos = 0
+
     for m in matches:
         start_pos = m.start()
-        # Preceding context window (up to 30 chars)
-        window_start = max(0, start_pos - 30)
-        prefix_window = text[window_start:start_pos]
+        clause_start = _find_clause_start(text, start_pos, last_end_pos)
+        local_prefix = text[clause_start:start_pos]
 
-        is_negated = bool(_NEGATION_PREFIX_PATTERN.search(prefix_window))
+        is_negated = bool(_NEGATION_PREFIX_PATTERN.search(local_prefix))
         if not is_negated:
-            # Check following window for immediate boundary qualification
+            # Check following window within the same clause for boundary qualification
             following_window = text[m.end(): min(len(text), m.end() + 20)]
-            if re.match(
-                r"[”\"'」』\s]*(?:尚待|未确认|存在疑问|难以确认|不成立|的结论尚不能下)",
+            first_delim = re.search(
+                r"[。！？!?；;，,\n\r\t|｜但但是然而却不过反而]",
                 following_window,
+            )
+            valid_follow_text = (
+                following_window[:first_delim.start()] if first_delim else following_window
+            )
+            if re.match(
+                r"[”\"'」』）)】\]\s]*(?:尚待|未确认|存在疑问|难以确认|不成立|的结论尚不能下)",
+                valid_follow_text,
             ):
+                last_end_pos = m.end()
                 continue
             return True
+
+        last_end_pos = m.end()
 
     return False
 
