@@ -444,10 +444,8 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         assert not is_valid, f"P1-A violation text was falsely accepted: {text}"
         assert reason is not None
 
-    # P1-B: Allow compliant fact / inference / to_verify, conditional,
-    # and risk boundary statements
+    # P1-B: Conditional, negation, and risk boundary statements are safe without evidence
     p1_b_safe_cases = [
-        "fact：用户报告实验结果与论文一致；to_verify：仍需核验。",
         "若用户报告实验结果与论文一致，仍需核验。",
         "即使实验结果与论文一致，也不能据此认定复现成功。",
         "实验完成率作为实验过程指标，而非复现结论。",
@@ -458,12 +456,42 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         assert is_valid, f"P1-B safe text was falsely rejected: {text} (reason: {reason})"
         assert reason is None
 
-    # P1-C: Reject cross-clause affirmative reproduction conclusions
+    # P1-Provenance: Without traceable user evidence, claims of '用户报告' must be rejected
+    unproven_user_reports = [
+        "fact：用户报告实验结果与论文一致；to_verify：仍需核验。",
+        "fact：用户报告实验结果与论文一致；to_verify：确认显存容量。",
+    ]
+    for text in unproven_user_reports:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Unproven user report was falsely accepted without evidence: {text}"
+        assert reason is not None
+
+    # Irrelevant evidence does not substantiate consistency claim
+    is_valid_irrelevant, reason_irrelevant = validate_jiangjiang_output(
+        "fact：用户报告实验结果与论文一致；to_verify：确认显存容量。",
+        evidence_context="我想研究图卷积网络并设计实验",
+    )
+    assert not is_valid_irrelevant, "Irrelevant evidence falsely substantiated consistency fact"
+    assert reason_irrelevant is not None
+
+    # With authentic user evidence, user-attributed fact + to_verify is accepted
+    is_valid_proven, reason_proven = validate_jiangjiang_output(
+        "fact：用户报告实验结果与论文一致；\nto_verify：仍需核验数据划分、随机种子和指标计算口径。",
+        evidence_context="我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+    )
+    assert is_valid_proven, f"Proven fact was falsely rejected: {reason_proven}"
+    assert reason_proven is None
+
+    # P1-C: Cross-clause affirmative reproduction conclusions must be rejected
+    # even with user evidence
     p1_c_violations = [
         "fact：用户报告实验结果与论文一致；但姜姜确认已经复现成功。",
         "不应根据实验完成率声称复现成功，但本轮已成功复现论文结果。",
     ]
     for text in p1_c_violations:
-        is_valid, reason = validate_jiangjiang_output(text)
+        is_valid, reason = validate_jiangjiang_output(
+            text,
+            evidence_context="我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+        )
         assert not is_valid, f"P1-C violation text was falsely accepted: {text}"
         assert reason is not None

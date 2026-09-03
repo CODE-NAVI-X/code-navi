@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from .conversation_orchestrator_schemas import (
@@ -102,6 +103,20 @@ _CONSISTENCY_CLAIM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_USER_REPORTED_CONSISTENCY_PATTERN = re.compile(
+    r"(?:"
+    r"(?:实验结果|复现结果|复现指标|指标|结果)(?:和|与|跟)"
+    r"(?:原论文|论文|论文基线|原论文基线|基线|论文结论|论文结果|论文指标)"
+    r"(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:与|和|跟)(?:原论文|论文|论文基线|原论文基线|基线)(?:中的)?(?:实验)?"
+    r"(?:结果|结论|指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:指标|结果)(?:已|已经)?达到(?:论文)?基线|"
+    r"(?:指标|结果)超过(?:论文)?基线|"
+    r"(?:结果|指标)(?:和|与|跟)?(?:论文)?(?:完全|基本|大致)?(?:一致|吻合|相同)"
+    r")",
+    re.IGNORECASE,
+)
+
 _USER_SOURCE_PREFIX_PATTERN = re.compile(
     r"(?:fact|事实)?[:：]?\s*"
     r"(?:由|据|根据|依据|基于)?"
@@ -185,14 +200,29 @@ def _split_into_clauses(text: str) -> list[tuple[int, int, str]]:
     return clauses
 
 
-def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
+def _extract_evidence_text(evidence_context: Sequence[str] | str | None) -> str:
+    if evidence_context is None:
+        return ""
+    if isinstance(evidence_context, str):
+        return evidence_context
+    return " \n ".join(str(item) for item in evidence_context if item)
+
+
+def _contains_ungrounded_reproduction_success_claim(
+    text: str,
+    *,
+    evidence_context: Sequence[str] | str | None = None,
+) -> bool:
     """Check if text contains ungrounded affirmative reproduction success claims.
 
     1. Splits text into isolated local semantic clauses.
     2. Evaluates claims against clause or local negation/condition/suffix boundaries.
     3. Prevents cross-clause negation leaks.
+    4. Enforces verifiable user-source provenance for user-attributed consistency facts.
     """
     has_text_to_verify = bool(_TO_VERIFY_PATTERN.search(text))
+    evidence_text = _extract_evidence_text(evidence_context)
+    has_user_evidence = bool(_USER_REPORTED_CONSISTENCY_PATTERN.search(evidence_text))
 
     clauses = _split_into_clauses(text)
     if not clauses:
@@ -229,14 +259,20 @@ def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
             if suffix_boundary:
                 continue
 
-            # Allow user-attributed consistency comparisons when to_verify is explicitly retained
+            # Allow user-attributed consistency comparisons ONLY when supported by
+            # traceable user evidence and to_verify is explicitly retained
             matched_text = m.group()
             is_consistency_claim = bool(_CONSISTENCY_CLAIM_PATTERN.search(matched_text))
-            has_user_source = bool(
+            has_user_source_tag = bool(
                 _USER_SOURCE_PREFIX_PATTERN.search(local_prefix)
                 or _USER_SOURCE_PREFIX_PATTERN.search(clause_prefix)
             )
-            if is_consistency_claim and has_user_source and has_text_to_verify:
+            if (
+                is_consistency_claim
+                and has_user_source_tag
+                and has_text_to_verify
+                and has_user_evidence
+            ):
                 continue
 
             has_unbounded_claim = True
@@ -248,14 +284,18 @@ def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
     return False
 
 
-def validate_jiangjiang_output(text: str) -> tuple[bool, str | None]:
+def validate_jiangjiang_output(
+    text: str,
+    *,
+    evidence_context: Sequence[str] | str | None = None,
+) -> tuple[bool, str | None]:
     """Validate model output against persona rules (no emoji/forbidden phrase/false claims)."""
     if _EMOJI_PATTERN.search(text):
         return False, "Output contains forbidden emoji characters."
     for phrase in _FORBIDDEN_PHRASES:
         if phrase in text:
             return False, f"Output contains forbidden phrase or unproven claim: {phrase}"
-    if _contains_ungrounded_reproduction_success_claim(text):
+    if _contains_ungrounded_reproduction_success_claim(text, evidence_context=evidence_context):
         return False, "Output contains ungrounded affirmative reproduction success claim: 复现成功"
     return True, None
 

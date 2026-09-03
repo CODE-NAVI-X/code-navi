@@ -648,6 +648,20 @@ class ResearchConversationOrchestrator:
         self.evaluation_service = evaluation_service or ReproductionEvaluationService()
         self.llm_generator = llm_generator or RuntimeOrchestratorLlmGenerator()
 
+    @staticmethod
+    def _collect_traceable_evidence_context(
+        user_message: str,
+        conv: ResearchConversationModel,
+    ) -> list[str]:
+        evidence = [user_message]
+        for msg in (conv.messages_data or []):
+            sender = msg.get("sender") or msg.get("role")
+            if sender in ("user", "human"):
+                content = msg.get("content")
+                if content and isinstance(content, str):
+                    evidence.append(content)
+        return evidence
+
     def get_or_create_state(
         self,
         conversation_id: str,
@@ -1119,7 +1133,10 @@ class ResearchConversationOrchestrator:
                 )
 
             reply_content = outcome.reply_text.strip()
-            valid, val_reason = validate_jiangjiang_output(reply_content)
+            evidence_ctx = self._collect_traceable_evidence_context(user_message, conv)
+            valid, val_reason = validate_jiangjiang_output(
+                reply_content, evidence_context=evidence_ctx
+            )
             if not valid:
                 err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
                 state_model.last_status = "failed"
@@ -1179,7 +1196,10 @@ class ResearchConversationOrchestrator:
 
         reply_content = outcome.reply_text.strip()
         # Persona validation: if contains emoji or forbidden phrases, reject!
-        valid, val_reason = validate_jiangjiang_output(reply_content)
+        evidence_ctx = self._collect_traceable_evidence_context(user_message, conv)
+        valid, val_reason = validate_jiangjiang_output(
+            reply_content, evidence_context=evidence_ctx
+        )
         if not valid:
             err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
             state_model.last_status = "failed"
