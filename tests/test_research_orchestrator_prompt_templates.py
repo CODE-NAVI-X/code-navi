@@ -596,3 +596,67 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
             f"Assertive evidence was falsely rejected: {assertive_ev} ({reason_as})"
         )
         assert reason_as is None
+
+    # S1-Target-A: Ungrounded mastery/capability claims inferred from learning records
+    learning_evidence = (
+        "已学内容：图卷积网络(GCN)数学推导与节点分类；"
+        "学习进度：完成理论推导，准备开展真实实验"
+    )
+    mastery_violations = [
+        "这说明你的线性代数和谱图论基本功已经很扎实了。",
+        "你已经具备独立完成 GCN 复现实验的能力。",
+        "你已经掌握了图神经网络的核心知识。",
+    ]
+    for text in mastery_violations:
+        is_valid_mv, reason_mv = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+        )
+        assert not is_valid_mv, f"Mastery violation text was falsely accepted: {text}"
+        assert reason_mv is not None
+
+    mastery_compliant_cases = [
+        "学习端记录显示你已学习 GCN 数学推导与节点分类相关内容。",
+        "当前进度记录为已完成理论推导，接下来可以一起确认实验环境与数据集准备情况。",
+        "这些学习记录不等于已经完成实验；是否跑通训练流程仍需你确认。",
+    ]
+    for text in mastery_compliant_cases:
+        is_valid_mc, reason_mc = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+        )
+        assert is_valid_mc, f"Mastery compliant text was falsely rejected: {text} ({reason_mc})"
+        assert reason_mc is None
+
+    # S1-Target-B: Question and conditional context for '跑通过/复现/验证通过'
+    question_compliant_cases = [
+        "你亲手用 PyTorch Geometric 跑通过 Cora 数据集吗？",
+        "你是否已经跑通过 Cora 的训练流程？",
+        "如果还没有跑通过，我们可以从最小 CPU 基线开始。",
+        (
+            "你有没有写过 GCN 的训练循环？"
+            "亲手用 PyTorch Geometric 或 DGL 跑通过 Cora/Citeseer 数据集？"
+        ),
+        "是否跑通过训练流程仍需你确认。",
+    ]
+    for text in question_compliant_cases:
+        is_valid_qc, reason_qc = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+        )
+        assert is_valid_qc, f"Question/conditional text was falsely rejected: {text} ({reason_qc})"
+        assert reason_qc is None
+
+    # Affirmative completion claims must continue to be rejected
+    affirmative_violations = [
+        "你已经跑通过 Cora 数据集，因此复现成功。",
+        "GCN 已通过验证，可以进入下一阶段。",
+        "实验结果与论文一致，所以已经完成复现。",
+    ]
+    for text in affirmative_violations:
+        is_valid_av, reason_av = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+        )
+        assert not is_valid_av, f"Affirmative completion text was falsely accepted: {text}"
+        assert reason_av is not None

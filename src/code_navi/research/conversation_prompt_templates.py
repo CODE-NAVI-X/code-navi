@@ -21,7 +21,8 @@ JIANGJIANG_SYSTEM_PERSONA = """你是由 CODE-NAVI 打造的科研 Agent「姜�
 【语气与人设】
 1. 活泼、亲切、专业、鼓励式引导；
 2. 可以少量使用可爱/亲切的颜文字（如 (＾▽＾)、(｡･ω･｡)、(•̀ᴗ•́)و ̑̑ 等）；
-3. 严格禁止使用 Emoji 图标（如 😊、🚀、🔥、💡 等一律禁用）；
+3. 严格禁止使用任何 Emoji 图标（如 😊、🚀、🔥、💡、✍️、🎯、🎉、✨、📌、📚、🔬 等全部禁用）；
+   只能使用纯文本或 ASCII/Unicode 颜文字（如 (＾▽＾)、(｡･ω･｡)、(•̀ᴗ•́)و ̑̑ 等）；
 4. 开场、阶段切换或完成总结使用大字号清晰区块；
    长回复结构化使用小标题、短段落、任务列表、时间安排，避免密密麻麻大段文字；
 5. 禁用「核心判断」「当前聚焦于」「AI 分析表明」等空泛学术装饰标签。
@@ -240,27 +241,69 @@ _NEGATION_PREFIX_PATTERN = re.compile(
     # Negations with optional leading adverbs (e.g. 也不能, 并不能, 还不能)
     r"(?:也|并|仍|还|暂|暂时|目前|均|都)?"
     r"(?:"
-    r"尚不足以|难以|无法|切勿|切忌|不可|未曾|并未|未有|尚未|未能|未形成|"
+    r"尚不足以|难以|无法|切勿|切忌|不可|未曾|并未|未有|尚未|未能|未形成|不足以|不足|"
+    r"还没|还没有|没有|未|"
     r"不能|不应|无需|严禁|不得|禁止|避免|不要|难言|难下|"
     r"不代表|不等于|不等同于|不构成|并非|不是|不视为|不算作|不算|≠|!="
     r")"
     r")"
-    r"(?:[“\"'「『（(【\[\s]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|据此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|"
-    r"(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认定|认为|得出|下达|形成|确认|视作|视为|说明|定义|宣称|断定|判为)){0,25}"
-    r"[“\"'「『（(【\[\s]{0,2}$"
+    r"(?:[“\"'「『（(【\[\s*~_:]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|据此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|已确认的|已确认|已有的|所谓的|某种|一个|这项|这些|所谓|"
+    r"(?:急于|急着|轻易|直接|盲目|贸然|过早|过急|立刻|马上)?(?:追求|谈及|提及|轻信|盖章为|盖章|定性为|定论为|定论|定义为|断言为|视作|视为|说明|定义|宣称|断定|判为|判定|认定|认为|得出|下达|形成|确认|宣布|言说|轻言|妄下|妄言|给出|下|声称|断言|说)){0,30}"
+    r"[“\"'「『（(【\[\s*~_]{0,4}$"
 )
 
 _CONDITION_PREFIX_PATTERN = re.compile(
-    r"(?:即使|即便|哪怕|假使|假设|如果未来|如果|若)"
-    r"(?:[“\"'「『（(【\[\s]|(?:用户|学生)?(?:报告|提供|反馈|表示|声称|称|输入)?|(?:未来|后续|最终)?(?:形成|达成|达到|实现|得出|出现|能够)?){0,15}"
+    r"(?:即使|即便|哪怕|假使|假设|如果未来|如果|若|要是|若是|如若|假如)"
+    r"(?:[“\"'「『（(【\[\s]|你|还|尚未|还没|没有|暂未|并不|不能|并非|(?:用户|学生)?(?:报告|提供|反馈|表示|声称|称|输入)?|(?:未来|后续|最终)?(?:形成|达成|达到|实现|得出|出现|能够)?){0,20}"
     r"[“\"'「『（(【\[\s]{0,2}$"
 )
 
+_QUESTION_PREFIX_PATTERN = re.compile(
+    r"(?:"
+    r"为什么|为何|怎会|怎可|凭何|何以|怎能|"
+    r"你有没有|有没有|你是否|是否|能否|可否|请问|是不是|"
+    r"你亲手|亲手|有写过|写过|跑过|尝试过"
+    r")",
+    re.IGNORECASE,
+)
+
+_QUESTION_SUFFIX_PATTERN = re.compile(
+    r"^[^\n\r。！？!?]*(?:[?？]|吗[，。；\s\n\r?？]|吗$)",
+    re.IGNORECASE,
+)
+
+_SUGGESTION_PREFIX_PATTERN = re.compile(
+    r"(?:"
+    r"建议|推荐|不妨|可以尝试|尝试|先尝试|动手|亲自|亲手去|去|来|"
+    r"建议你|建议您|可以|希望你|希望您|计划|准备|"
+    r"在|本地|云端|环境|服务器|平台|"
+    r"第[0-9一二三四五六七八九十]+[步阶段期]|阶段|步骤|任务|目标|"
+    r"demo|Demo|baseline|Baseline|示例|样例"
+    r")",
+    re.IGNORECASE,
+)
+
+_UNGROUNDED_MASTERY_CLAIM_PATTERN = re.compile(
+    r"(?:"
+    r"(?:这)?(?:说明|证明|表明|代表|意味着)[^，。；\n]*(?:基本功|基础|功底|能力|水平)[^，。；\n]*(?:扎实|过硬|很强|过人)|"
+    r"(?:你的|你)?[^，。；\n]*(?:基本功|基础|功底)[^，。；\n]*(?:扎实|过硬)|"
+    r"(?:你)?(?:已经|已)?(?:完全)?掌握了?[^，。；\n]*知识|"
+    r"(?:你)?(?:已经|已)?具备(?:了)?[^，。；\n]*(?:能力|水平|基础)"
+    r")",
+    re.IGNORECASE,
+)
+
 _SUFFIX_BOUNDARY_PATTERN = re.compile(
-    r"^[”\"'」』）)】\]\s]*(?:"
+    r"^[”\"'」』）)】\]\s*~_：:|｜]*(?:"
     r"不代表|不等于|不等同于|不构成|并不|并非|不是|不意味着|"
-    r"尚待|未确认|未形成|存在疑问|难以确认|不成立|的结论尚不能下|的结论仍不能下|"
-    r"当作结论|作为结论|等当作|等作为|"
+    r"尚未|仍未|还未|未形成|尚未形成|尚未构成|未构成|尚不能|仍不能|未有|"
+    r"这个结论尚未|这结论尚未|结论尚未|尚未被|尚待|未确认|未形成|存在疑问|难以确认|不成立|的结论尚不能下|的结论仍不能下|"
+    r"当作结论|作为结论|等当作|等作为|的结论|的判定|的判定结论|"
+    r"是两回事|两回事|不同概念|不是一回事|不能混为一谈|不能等同|"
+    r"(?:通常|往往|一般|首先)?(?:至少)?(?:需要|须|需|应当|必须)(?:满足|符合|具备|达成|对照)?|"
+    r"的前提|的条件|的标准|的定义|的判定标准|的确认标准|的核验标准|"
+    r"还需要|仍需|尚需|还需要更多|仍需要|有待|"
+    r"否[，,\s]|否认|未完成|未通过|不成立|未达成|待定|暂无|尚未|待核验|不足|"
     r"作为(?:实验)?过程(?:指标|参数|数据)|"
     r"(?:的)?(?:计算口径|计算方式|计算方法|口径|定义|统计方式)(?:[，,\s]*(?:仍待|尚待|待确认|待核验|需确认|需核验|存在疑问|未确认))?"
     r")"
@@ -359,9 +402,30 @@ def _contains_ungrounded_reproduction_success_claim(
             if suffix_boundary:
                 continue
 
-            # Check for compliant, locally bound fact block with post-positioned to_verify:
             global_start = clause_start + m.start()
             global_end = clause_start + m.end()
+            following_text = text[global_end:]
+
+            # If the claim is inside a question clause or question sentence, allow it as an inquiry
+            is_question = bool(
+                _QUESTION_PREFIX_PATTERN.search(local_prefix)
+                or _QUESTION_PREFIX_PATTERN.search(clause_prefix)
+                or _QUESTION_SUFFIX_PATTERN.search(following_text)
+                or _QUESTION_SUFFIX_PATTERN.search(local_suffix)
+            )
+            if is_question:
+                continue
+
+            # If the claim is inside a suggestion / preparation recommendation, allow it as advice
+            is_suggestion = bool(
+                _SUGGESTION_PREFIX_PATTERN.search(local_prefix)
+                or _SUGGESTION_PREFIX_PATTERN.search(clause_prefix)
+            )
+            if is_suggestion and not any(
+                w in m.group()
+                for w in ("成功", "成立", "闭环", "达标", "通过了", "已通过", "确认", "判定")
+            ):
+                continue
 
             # 1. Immediate local segment before this match must be a user source tag
             preceding_text = text[:global_start]
@@ -375,7 +439,6 @@ def _contains_ungrounded_reproduction_success_claim(
             has_local_user_source = bool(_USER_SOURCE_PREFIX_PATTERN.search(local_segment))
 
             # 2. to_verify must be adjacent and post-positioned to this fact claim
-            following_text = text[global_end:]
             has_adjacent_to_verify = bool(
                 _ADJACENT_POST_TO_VERIFY_PATTERN.search(following_text)
             )
@@ -397,6 +460,50 @@ def _contains_ungrounded_reproduction_success_claim(
     return False
 
 
+def _contains_ungrounded_mastery_claim(
+    text: str,
+    *,
+    evidence_context: Sequence[str] | str | None = None,
+) -> bool:
+    """Check if text contains ungrounded mastery/capability claims."""
+    clauses = _split_into_clauses(text)
+    if not clauses:
+        clauses = [(0, len(text), text)]
+
+    for _, _, clause_str in clauses:
+        matches = list(_UNGROUNDED_MASTERY_CLAIM_PATTERN.finditer(clause_str))
+        if not matches:
+            continue
+
+        first_match = matches[0]
+        clause_prefix = clause_str[:first_match.start()]
+        if bool(
+            _NEGATION_PREFIX_PATTERN.search(clause_prefix)
+            or _CONDITION_PREFIX_PATTERN.search(clause_prefix)
+        ):
+            continue
+
+        for m in matches:
+            local_prefix = clause_str[:m.start()]
+            if bool(
+                _NEGATION_PREFIX_PATTERN.search(local_prefix)
+                or _CONDITION_PREFIX_PATTERN.search(local_prefix)
+            ):
+                continue
+            local_suffix = clause_str[m.end():]
+            if bool(_SUFFIX_BOUNDARY_PATTERN.search(local_suffix)):
+                continue
+
+            # If user explicitly asserted their own mastery/capability in evidence_context, allow it
+            evidence_text = _extract_evidence_text(evidence_context)
+            if evidence_text and bool(_UNGROUNDED_MASTERY_CLAIM_PATTERN.search(evidence_text)):
+                continue
+
+            return True
+
+    return False
+
+
 def validate_jiangjiang_output(
     text: str,
     *,
@@ -408,6 +515,11 @@ def validate_jiangjiang_output(
     for phrase in _FORBIDDEN_PHRASES:
         if phrase in text:
             return False, f"Output contains forbidden phrase or unproven claim: {phrase}"
+    if _contains_ungrounded_mastery_claim(text, evidence_context=evidence_context):
+        return (
+            False,
+            "Output contains ungrounded mastery or capability claim inferred from learning records",
+        )
     if _contains_ungrounded_reproduction_success_claim(text, evidence_context=evidence_context):
         return False, "Output contains ungrounded affirmative reproduction success claim: 复现成功"
     return True, None
@@ -448,7 +560,15 @@ def build_welcome_prompt(
         "2. 结合同学之前在学习端学到的知识（若有），自然桥接到科研方向探索；\n"
         "3. 向同学清晰展示上方 5 个方向卡片，并鼓励同学选择一个感兴趣的方向，"
         "或者自由输入自己想做的其他方向；\n"
-        "4. 禁止把学习信息夸大为研究结论；严禁使用 Emoji。\n"
+        "4. 事实边界红线与约束（绝对遵守）：\n"
+        "   - 学习端输入只能表述为‘学习端记录显示 / 你已学习 / 当前进度记录为’；\n"
+        "   - 禁止把学习信息夸大为研究结论、掌握度断言或已跑通实验断言；\n"
+        "   - 严禁由已学内容或学习进度推断用户的掌握度、动手能力、基本功或实验完成度"
+        "（严禁声称用户‘已掌握’、‘已具备能力’、‘说明基础扎实’或‘已跑通流程’）；\n"
+        "   - 严禁自行猜测用户已掌握或未掌握的技能列表；"
+        "必须用提问向用户确认其实际实验和代码经验；\n"
+        "   - 严禁在当前阶段下任何‘复现成功’、‘已完成复现’或‘跑通’的断言结论；\n"
+        "   - 严禁使用任何 Emoji 图标（例如 😊、🚀、🔥、💡 等，只允许使用颜文字如 (｡･ω･｡)）。\n"
     )
     return {
         "template_name": "welcome_and_bridge",

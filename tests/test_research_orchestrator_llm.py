@@ -1379,3 +1379,40 @@ def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
     assert len(state_in_db_q.plan_history or []) == 0
     profiles_q = orch_q.get_learner_profiles("conv-p1-q", db_session)
     assert len(profiles_q.history) == 0
+
+    # 13. Question containing '跑通过' in orchestrator -> status completed
+    fake_gen_q_run = FakeOrchestratorLlmGenerator(
+        responses=["你亲手用 PyTorch Geometric 跑通过 Cora 数据集吗？(｡･ω･｡)"]
+    )
+    orch_q_run = ResearchConversationOrchestrator(llm_generator=fake_gen_q_run)
+    conv_q_run = ResearchConversationModel(id="conv-p1-qrun", profile_data={}, messages_data=[])
+    db_session.add(conv_q_run)
+    db_session.commit()
+
+    resp_q_run = orch_q_run.process_message(
+        "conv-p1-qrun",
+        SendOrchestratorMessageRequest(message="你好姜姜，我想开始科研"),
+        db_session,
+    )
+    assert resp_q_run.status == "completed"
+    assert resp_q_run.reply_message is not None
+
+    # 14. Mastery assertion from learning context -> status failed, no advancement
+    fake_gen_mast = FakeOrchestratorLlmGenerator(
+        responses=["这说明你的线性代数和谱图论基本功已经很扎实了 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_mast = ResearchConversationOrchestrator(llm_generator=fake_gen_mast)
+    conv_mast = ResearchConversationModel(id="conv-p1-mast", profile_data={}, messages_data=[])
+    db_session.add(conv_mast)
+    db_session.commit()
+
+    resp_mast = orch_mast.process_message(
+        "conv-p1-mast",
+        SendOrchestratorMessageRequest(message="你好姜姜，我想开始科研"),
+        db_session,
+    )
+    assert resp_mast.status == "failed"
+    assert resp_mast.reply_message is None
+    assert resp_mast.state.last_status == "failed"
+    assert resp_mast.state.current_stage == "research_need"
+    assert resp_mast.state.subtasks.need_defined is False
