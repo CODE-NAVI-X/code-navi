@@ -819,3 +819,59 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_mixed.status == "failed"
     assert resp_mixed.reply_message is None
     assert resp_mixed.state.last_status == "failed"
+
+    # 5. Semantic violation: "本次已成功复现 GCN。" -> failed, no state advance
+    fake_gen_v1 = FakeOrchestratorLlmGenerator(
+        responses=["本次已成功复现 GCN (•̀ᴗ•́)و ̑̑！"]
+    )
+    orchestrator_v1 = ResearchConversationOrchestrator(llm_generator=fake_gen_v1)
+    conv_v1 = ResearchConversationModel(id="conv-repro-v1", profile_data={}, messages_data=[])
+    db_session.add(conv_v1)
+    db_session.commit()
+
+    resp_v1 = orchestrator_v1.process_message(
+        "conv-repro-v1",
+        SendOrchestratorMessageRequest(message="看一下结果"),
+        db_session,
+    )
+    assert resp_v1.status == "failed"
+    assert resp_v1.reply_message is None
+    assert resp_v1.state.last_status == "failed"
+    assert resp_v1.state.current_stage == "research_need"
+    assert resp_v1.state.subtasks.need_defined is False
+
+    # 6. Semantic violation: "Accuracy 超过 81% 即算复现通过。" -> failed
+    fake_gen_v2 = FakeOrchestratorLlmGenerator(
+        responses=["Accuracy 超过 81% 即算复现通过 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v2 = ResearchConversationOrchestrator(llm_generator=fake_gen_v2)
+    conv_v2 = ResearchConversationModel(id="conv-repro-v2", profile_data={}, messages_data=[])
+    db_session.add(conv_v2)
+    db_session.commit()
+
+    resp_v2 = orchestrator_v2.process_message(
+        "conv-repro-v2",
+        SendOrchestratorMessageRequest(message="设计评估指标"),
+        db_session,
+    )
+    assert resp_v2.status == "failed"
+    assert resp_v2.reply_message is None
+    assert resp_v2.state.last_status == "failed"
+
+    # 7. Safe boundary case: "复现成功不代表论文结论正确，仍需人工核验。" -> completed
+    fake_gen_safe = FakeOrchestratorLlmGenerator(
+        responses=["复现成功不代表论文结论正确，仍需人工核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe = ResearchConversationOrchestrator(llm_generator=fake_gen_safe)
+    conv_safe = ResearchConversationModel(id="conv-repro-safe", profile_data={}, messages_data=[])
+    db_session.add(conv_safe)
+    db_session.commit()
+
+    resp_safe = orchestrator_safe.process_message(
+        "conv-repro-safe",
+        SendOrchestratorMessageRequest(message="指标核验进展"),
+        db_session,
+    )
+    assert resp_safe.status == "completed"
+    assert resp_safe.reply_message is not None
+    assert "复现成功不代表论文结论正确" in resp_safe.reply_message.content

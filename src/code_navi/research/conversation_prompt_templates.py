@@ -49,14 +49,33 @@ _FORBIDDEN_PHRASES = [
     "完成度 100%",
     "完成度100%",
     "复现成功率",
+    "实验完成率",
+    "复现完成率",
 ]
 
-_NEGATION_PREFIX_PATTERN = re.compile(
-    r"(?:尚未确认|尚未能|未曾|未能|并未|未有|尚未|未|"
+_PUNCTUATION_DELIMITERS = set("。！？!?；;，,\n\r\t|｜")
+_TRANSITION_WORDS = ["但是", "然而", "不过", "反而", "但", "却", "而"]
+
+_REPRODUCTION_CLAIM_PATTERN = re.compile(
+    r"(?:复现成功|成功复现|已复现|复现通过|复现达标|复现完成|复现闭环)"
+)
+
+_NEGATION_OR_CONDITION_PREFIX_PATTERN = re.compile(
+    r"(?:"
+    r"尚未确认|尚未能|未曾|未能|并未|未有|尚未|未|"
     r"不能下|难以判定|难下|无法下|不能认为|不要说|不可认为|无法确认|不算作|不算|"
     r"不能|不可|无法|并非|不是|不代表|不等于|不等同于|不构成|不视为|"
-    r"不能说明|无法判定|切勿判定|严禁声称|不得声称|严禁|不得|禁止|避免|切勿|不要|难言|不|≠|!=)"
+    r"不能说明|无法判定|切勿判定|严禁声称|不得声称|严禁|不得|禁止|避免|切勿|不要|难言|不|≠|!="
+    r"|即使|即便|如果未来|如果|哪怕|假使|假设|若"
+    r")"
     r"[“\"'「『（(【\[\s\w]{0,10}$"
+)
+
+_SUFFIX_BOUNDARY_PATTERN = re.compile(
+    r"^[”\"'」』）)】\]\s]*(?:"
+    r"不代表|不等于|不等同于|不构成|并不|并非|不是|不意味着|"
+    r"尚待|未确认|未形成|存在疑问|难以确认|不成立|的结论尚不能下|的结论仍不能下"
+    r")"
 )
 
 
@@ -64,22 +83,27 @@ def _find_clause_start(text: str, start_pos: int, last_end_pos: int) -> int:
     """Find the start index of the local clause preceding start_pos."""
     earliest = last_end_pos
 
-    # Search backwards from start_pos to earliest for punctuation delimiters
-    delimiter_pos = -1
+    # Search backwards from start_pos to earliest for punctuation delimiter
+    punct_pos = -1
     for idx in range(start_pos - 1, earliest - 1, -1):
-        if text[idx] in "。！？!?；;，,\n\r\t|｜":
-            delimiter_pos = idx + 1
+        if text[idx] in _PUNCTUATION_DELIMITERS:
+            punct_pos = idx + 1
             break
 
-    clause_start = max(earliest, delimiter_pos if delimiter_pos != -1 else earliest)
+    clause_start = max(earliest, punct_pos if punct_pos != -1 else earliest)
 
-    # Check for transition conjunctions within the clause
+    # Search for transition words within the clause (take closest to start_pos)
     prefix_so_far = text[clause_start:start_pos]
-    for conj in ["但是", "然而", "不过", "反而", "但", "却", "而"]:
-        conj_idx = prefix_so_far.rfind(conj)
-        if conj_idx != -1:
-            clause_start = clause_start + conj_idx + len(conj)
-            break
+    closest_transition_end = -1
+    for word in _TRANSITION_WORDS:
+        w_idx = prefix_so_far.rfind(word)
+        if w_idx != -1:
+            t_end = clause_start + w_idx + len(word)
+            if t_end > closest_transition_end:
+                closest_transition_end = t_end
+
+    if closest_transition_end > clause_start:
+        clause_start = closest_transition_end
 
     return clause_start
 
@@ -87,44 +111,45 @@ def _find_clause_start(text: str, start_pos: int, last_end_pos: int) -> int:
 def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
     """Check if text contains ungrounded affirmative reproduction success claims.
 
-    1. '复现成功率' is unconditionally rejected.
-    2. Each '复现成功' is checked within its isolated local clause.
-    3. Allows tight explicit negation/boundary qualification; rejects affirmative claims.
+    1. Success rates and completion percentages are unconditionally rejected.
+    2. Each reproduction claim term is checked within its isolated local clause.
+    3. Allows explicit prefix negation/condition or suffix boundary qualification.
+    4. Rejects ungrounded affirmative assertions.
     """
-    if "复现成功率" in text:
+    if re.search(r"reproduction\s+success\s+rate", text, re.IGNORECASE):
+        return True
+    if re.search(r"复现(?:的)?成功率", text):
+        return True
+    if re.search(r"实验完成率", text):
+        return True
+    if re.search(r"复现完成率", text):
         return True
 
-    if "复现成功" not in text:
+    matches = list(_REPRODUCTION_CLAIM_PATTERN.finditer(text))
+    if not matches:
         return False
 
-    matches = list(re.finditer(r"复现成功", text))
     last_end_pos = 0
 
     for m in matches:
         start_pos = m.start()
+        end_pos = m.end()
         clause_start = _find_clause_start(text, start_pos, last_end_pos)
         local_prefix = text[clause_start:start_pos]
 
-        is_negated = bool(_NEGATION_PREFIX_PATTERN.search(local_prefix))
-        if not is_negated:
-            # Check following window within the same clause for boundary qualification
-            following_window = text[m.end(): min(len(text), m.end() + 20)]
-            first_delim = re.search(
-                r"[。！？!?；;，,\n\r\t|｜但但是然而却不过反而]",
-                following_window,
-            )
-            valid_follow_text = (
-                following_window[:first_delim.start()] if first_delim else following_window
-            )
-            if re.match(
-                r"[”\"'」』）)】\]\s]*(?:尚待|未确认|存在疑问|难以确认|不成立|的结论尚不能下)",
-                valid_follow_text,
-            ):
-                last_end_pos = m.end()
-                continue
-            return True
+        prefix_has_boundary = bool(_NEGATION_OR_CONDITION_PREFIX_PATTERN.search(local_prefix))
+        if prefix_has_boundary:
+            last_end_pos = end_pos
+            continue
 
-        last_end_pos = m.end()
+        # Check suffix within the same clause
+        following_window = text[end_pos: min(len(text), end_pos + 25)]
+        suffix_has_boundary = bool(_SUFFIX_BOUNDARY_PATTERN.search(following_window))
+        if suffix_has_boundary:
+            last_end_pos = end_pos
+            continue
+
+        return True
 
     return False
 

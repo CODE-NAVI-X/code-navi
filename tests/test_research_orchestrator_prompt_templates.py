@@ -246,3 +246,28 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert not is_valid, f"Mixed clause violation was falsely accepted: {text}"
         assert reason is not None
+
+    # Safe boundary and conditional statements -> MUST PASS
+    safe_boundary_cases = [
+        "复现成功不代表论文结论正确，仍需人工核验。",
+        "即使复现成功，也不等于论文可投稿。",
+        "如果未来形成复现闭环，仍需导师核验论文结论。",
+        "尚未确认复现成功；当前指标仅作待核验对照。",
+    ]
+    for text in safe_boundary_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"Safe boundary text was falsely rejected: {text} (reason: {reason})"
+        assert reason is None
+
+    # Semantic reproduction-claim and percentage violations -> MUST FAIL
+    semantic_violation_cases = [
+        "本轮复现的成功率达到 98%。",
+        "reproduction success rate 达到 98%。",
+        "Accuracy 超过 81% 即算复现通过。",
+        "本次已成功复现 GCN。",
+        "本轮实验完成率为 85%。",
+    ]
+    for text in semantic_violation_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Semantic violation text was falsely accepted: {text}"
+        assert reason is not None
