@@ -562,3 +562,37 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         )
         assert is_valid_ok, f"Fingerprint match was falsely rejected: {text} ({reason_ok})"
         assert reason_ok is None
+
+    # P1-Assertive: Non-assertive user evidence (questions, conditions, risk boundaries, denials)
+    non_assertive_evidences = [
+        "如果实验结果与论文结果一致，我下一步应该做什么？",
+        "即使实验结果与论文结果一致，也不能认定复现成功。",
+        "实验结果是否与论文结果一致？",
+        "我还没有实验结果。",
+        "实验结果尚未与论文结果对比。",
+    ]
+    target_fact_text = "fact：用户报告实验结果与论文结果一致；to_verify：仍需核验。"
+    for non_assertive_ev in non_assertive_evidences:
+        is_valid_na, reason_na = validate_jiangjiang_output(
+            target_fact_text,
+            evidence_context=non_assertive_ev,
+        )
+        assert not is_valid_na, (
+            f"Non-assertive evidence falsely substantiated fact: {non_assertive_ev}"
+        )
+        assert reason_na is not None
+
+    # Explicit affirmative user observations allow the fact
+    assertive_evidences = [
+        "我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+        "本次实验结果与论文结果一致；随机种子和数据划分仍待核验。",
+    ]
+    for assertive_ev in assertive_evidences:
+        is_valid_as, reason_as = validate_jiangjiang_output(
+            target_fact_text,
+            evidence_context=assertive_ev,
+        )
+        assert is_valid_as, (
+            f"Assertive evidence was falsely rejected: {assertive_ev} ({reason_as})"
+        )
+        assert reason_as is None

@@ -142,13 +142,59 @@ _FINGERPRINTS = (
 )
 
 
-def _get_supported_evidence_fingerprints(evidence_text: str) -> set[str]:
-    if not evidence_text:
+_EVIDENCE_QUESTION_PATTERN = re.compile(
+    r"[?？]|(?:是否|是不是|有没有|能否|可否|为何|为什么|怎么|怎样|如何|什么|哪|请问|吗$|吗[，。；\s])",
+    re.IGNORECASE,
+)
+
+_EVIDENCE_CONDITION_PATTERN = re.compile(
+    r"(?:如果|若|哪怕|即使|即便|假使|假设|要是|若是|如若|一旦|假如)",
+    re.IGNORECASE,
+)
+
+_EVIDENCE_NEGATION_PATTERN = re.compile(
+    r"(?:没有|尚未|未曾|未能|并未|未有|未做|未进行|未对比|不代表|不能|无法|并不|不是|暂无|毫无|未得到)",
+    re.IGNORECASE,
+)
+
+
+def _is_asserted_evidence_clause(clause: str) -> bool:
+    c = clause.strip()
+    if not c:
+        return False
+    if bool(_EVIDENCE_QUESTION_PATTERN.search(c)):
+        return False
+    if bool(_EVIDENCE_CONDITION_PATTERN.search(c)):
+        return False
+    if bool(_EVIDENCE_NEGATION_PATTERN.search(c)):
+        return False
+    return True
+
+
+def _get_supported_evidence_fingerprints(
+    evidence_context: Sequence[str] | str | None,
+) -> set[str]:
+    if evidence_context is None:
         return set()
+    if isinstance(evidence_context, str):
+        items = [evidence_context]
+    else:
+        items = list(evidence_context)
+
     supported: set[str] = set()
-    for fp_name, fp_pattern in _FINGERPRINTS:
-        if fp_pattern.search(evidence_text):
-            supported.add(fp_name)
+    for item in items:
+        if not item or not isinstance(item, str):
+            continue
+        clauses = _split_into_clauses(item)
+        if not clauses:
+            clauses = [(0, len(item), item)]
+        for _, _, clause_text in clauses:
+            if not _is_asserted_evidence_clause(clause_text):
+                continue
+            for fp_name, fp_pattern in _FINGERPRINTS:
+                if fp_pattern.search(clause_text):
+                    supported.add(fp_name)
+
     return supported
 
 
@@ -157,6 +203,7 @@ def _get_claim_fingerprint(claim_text: str) -> str | None:
         if fp_pattern.search(claim_text):
             return fp_name
     return None
+
 
 
 _LOCAL_PREFIX_DELIMITER_PATTERN = re.compile(
@@ -275,8 +322,7 @@ def _contains_ungrounded_reproduction_success_claim(
     3. Prevents cross-clause negation leaks.
     4. Enforces verifiable, locally bound user-source provenance and adjacent post to_verify.
     """
-    evidence_text = _extract_evidence_text(evidence_context)
-    supported_evidence_fps = _get_supported_evidence_fingerprints(evidence_text)
+    supported_evidence_fps = _get_supported_evidence_fingerprints(evidence_context)
 
     clauses = _split_into_clauses(text)
     if not clauses:

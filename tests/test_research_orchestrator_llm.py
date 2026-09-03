@@ -1354,3 +1354,28 @@ def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
     assert len(state_in_db_fp.plan_history or []) == 0
     profiles_fp = orch_fp_mis.get_learner_profiles("conv-p1-fp-mis", db_session)
     assert len(profiles_fp.history) == 0
+
+    # 12. Non-assertive user question in orchestrator -> status failed, no advancement
+    fake_gen_q = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文结果一致；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_q = ResearchConversationOrchestrator(llm_generator=fake_gen_q)
+    conv_q = ResearchConversationModel(id="conv-p1-q", profile_data={}, messages_data=[])
+    db_session.add(conv_q)
+    db_session.commit()
+
+    resp_q = orch_q.process_message(
+        "conv-p1-q",
+        SendOrchestratorMessageRequest(message="实验结果是否与论文结果一致？"),
+        db_session,
+    )
+    assert resp_q.status == "failed"
+    assert resp_q.reply_message is None
+    assert resp_q.state.last_status == "failed"
+    assert resp_q.state.current_stage == "research_need"
+    assert resp_q.state.subtasks.need_defined is False
+    state_in_db_q = orch_q.get_state_model("conv-p1-q", db_session)
+    assert state_in_db_q.current_plan is None
+    assert len(state_in_db_q.plan_history or []) == 0
+    profiles_q = orch_q.get_learner_profiles("conv-p1-q", db_session)
+    assert len(profiles_q.history) == 0
