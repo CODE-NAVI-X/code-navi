@@ -368,3 +368,38 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
             f"Evidence boundary safe text was falsely rejected: {text} (reason: {reason})"
         )
         assert reason is None
+
+    # P1-A: Ungrounded consistent / reliable / baseline claims -> MUST FAIL
+    p1_a_consistent_reliable_violations = [
+        "结果和原论文吻合，可以进入下一阶段。",
+        "指标已达到论文基线，因此复现可靠。",
+        "实验结果与论文结论一致。",
+        "指标超过论文基线，因此可以确认复现。",
+    ]
+    for text in p1_a_consistent_reliable_violations:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"P1-A ungrounded text was falsely accepted: {text}"
+        assert reason is not None
+
+    # P1-B: Intra-clause compliant negation and boundary descriptions -> MUST PASS
+    p1_b_intra_clause_safe_cases = [
+        "实验完成率作为实验过程指标，而非复现结论。",
+        "不应根据实验完成率就声称复现成功。",
+        "实验完成率的计算口径仍待确认。",
+        "若实验完成率达到80%，也不能判为复现成功。",
+    ]
+    for text in p1_b_intra_clause_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, (
+            f"P1-B intra-clause safe text was falsely rejected: {text} (reason: {reason})"
+        )
+        assert reason is None
+
+    # Cross-clause mixed negation bypass -> MUST FAIL
+    cross_clause_negation_bypass = [
+        "不应根据实验完成率声称复现成功，但本轮已成功复现论文结果。",
+    ]
+    for text in cross_clause_negation_bypass:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Cross clause bypass text was falsely accepted: {text}"
+        assert reason is not None

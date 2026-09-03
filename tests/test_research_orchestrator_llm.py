@@ -1011,3 +1011,41 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_safe3.status == "completed"
     assert resp_safe3.reply_message is not None
     assert "实验完成率的计算口径仍待确认" in resp_safe3.reply_message.content
+
+    # 15. P1-A violation "结果和原论文吻合，可以进入下一阶段。" -> failed
+    fake_gen_v8 = FakeOrchestratorLlmGenerator(
+        responses=["结果和原论文吻合，可以进入下一阶段 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v8 = ResearchConversationOrchestrator(llm_generator=fake_gen_v8)
+    conv_v8 = ResearchConversationModel(id="conv-repro-v8", profile_data={}, messages_data=[])
+    db_session.add(conv_v8)
+    db_session.commit()
+
+    resp_v8 = orchestrator_v8.process_message(
+        "conv-repro-v8",
+        SendOrchestratorMessageRequest(message="检查吻合度"),
+        db_session,
+    )
+    assert resp_v8.status == "failed"
+    assert resp_v8.reply_message is None
+    assert resp_v8.state.last_status == "failed"
+    assert resp_v8.state.current_stage == "research_need"
+    assert resp_v8.state.subtasks.need_defined is False
+
+    # 16. P1-B intra-clause safe case "实验完成率作为实验过程指标，而非复现结论。" -> completed
+    fake_gen_safe4 = FakeOrchestratorLlmGenerator(
+        responses=["实验完成率作为实验过程指标，而非复现结论 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe4 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe4)
+    conv_safe4 = ResearchConversationModel(id="conv-repro-safe4", profile_data={}, messages_data=[])
+    db_session.add(conv_safe4)
+    db_session.commit()
+
+    resp_safe4 = orchestrator_safe4.process_message(
+        "conv-repro-safe4",
+        SendOrchestratorMessageRequest(message="过程指标说明"),
+        db_session,
+    )
+    assert resp_safe4.status == "completed"
+    assert resp_safe4.reply_message is not None
+    assert "实验完成率作为实验过程指标" in resp_safe4.reply_message.content

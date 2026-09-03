@@ -55,29 +55,34 @@ _TRANSITION_WORDS = ["但是", "然而", "不过", "反而", "可是", "并且",
 
 _REPRODUCTION_CLAIM_PATTERN = re.compile(
     r"(?:"
-    # Rate and percentage claims (e.g. 复现率, 复现成功率, 实验完成率, reproduction success rate)
+    # 1. Rate and percentage claims (e.g. 复现率, 复现成功率, 实验完成率, reproduction success rate)
     r"reproduction\s+success\s+rate|"
     r"(?:复现|重现|再现)(?:的)?(?:成功)?率|"
     r"(?:实验|复现|重现|再现|复刻)(?:的)?完成率|"
-    # 跑通实验
+    # 2. 跑通实验
     r"(?:已(?:经)?)?(?:成功)?跑通(?:了)?(?:论文)?(?:的)?(?:复现|重现|再现|复刻)?(?:实验)?|"
-    # 完成复现 / 复现完成 / 复现验证完成 / 复现实验验证完成
+    # 3. 完成复现 / 复现完成 / 复现验证完成 / 复现实验验证完成
     r"完成(?:了|已经|已)?(?:复现|重现|再现|复刻)|"
     r"(?:复现|重现|再现|复刻)(?:实验)?(?:验证)?(?:已经完成|已完成|完成了|完成)|"
     r"(?:实验)?(?:验证)(?:已经完成|已完成|完成了|完成)|"
-    # Adverb + verb: 被? + 已/已经 + 成功/稳定 + 地? + 复现/重现/再现/复刻
+    # 4. 复现可靠 / 确认复现 / 复现成立 / 推进下一阶段
+    r"(?:确认|判定|断定|证明)(?:了)?(?:复现|重现|再现|复刻)|"
+    r"(?:复现|重现|再现|复刻)(?:可靠|成立|有效|闭环|达标|通过|成功)|"
+    r"(?:复现|重现|再现|复刻)(?:已经)?可(?:以)?(?:推进|进入)(?:到)?(?:下一阶段|下个阶段)|"
+    r"可以(?:推进|进入)(?:到)?(?:下一阶段|下个阶段)|"
+    # 5. 结果/结论 与 论文/基线 吻合/一致/达到基线/超过基线
+    r"(?:实验|复现|重现|再现)?结果(?:和|与|跟)(?:原)?论文(?:结论|实验|结果|描述)?(?:完全)?(?:吻合|一致|相同)|"
+    r"与(?:原)?论文(?:中的)?(?:实验)?(?:结果|结论)(?:完全)?(?:吻合|一致|相同)|"
+    r"(?:指标|结果)(?:已|已经)?达到(?:论文)?基线|"
+    r"(?:指标|结果)超过(?:论文)?基线|"
+    # 6. Adverb + verb: 被? + 已/已经 + 成功/稳定 + 地? + 复现/重现/再现/复刻
     r"(?:被)?(?:已(?:经)?)?(?:成功|稳定)(?:地)?(?:复现|重现|再现|复刻)|"
-    # 已经/已 + 复现/重现/再现/复刻
+    # 7. 已经/已 + 复现/重现/再现/复刻
     r"(?:已经|已)(?:复现|重现|再现|复刻)|"
-    # 复现了/重现了/再现了/复刻了
+    # 8. 复现了/重现了/再现了/复刻了
     r"(?:复现|重现|再现|复刻)了|"
-    # 复现成功/重现成功/再现成功/复刻成功/复现通过/复现达标/复现闭环
-    r"(?:复现|重现|再现|复刻)(?:成功|通过|达标|闭环)|"
-    # 重现/复刻/复现/再现 + 论文(中的)?(实验)?结果
-    r"(?:复现|重现|再现|复刻)论文(?:中的)?(?:实验)?结果|"
-    # (复现/重现/再现/实验)?结果与(论文/原论文/原文/基线)一致 / 吻合
-    r"(?:复现|重现|再现|实验)?结果与(?:论文|原论文|原文|基线)(?:完全)?(?:一致|吻合|相同)|"
-    r"与(?:论文|原论文|原文|基线)(?:的)?(?:实验)?结果(?:完全)?(?:一致|吻合|相同)"
+    # 9. 重现/复刻/复现/再现 + 论文(中的)?(实验)?结果
+    r"(?:复现|重现|再现|复刻)论文(?:中的)?(?:实验)?结果"
     r")",
     re.IGNORECASE,
 )
@@ -95,7 +100,7 @@ _NEGATION_PREFIX_PATTERN = re.compile(
     r")"
     r")"
     r"(?:[“\"'「『（(【\[\s]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|"
-    r"(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认为|得出|下达|形成|确认|视作|视为|说明|定义|宣称|断定|判为)){0,18}"
+    r"(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认为|得出|下达|形成|确认|视作|视为|说明|定义|宣称|断定|判为)){0,25}"
     r"[“\"'「『（(【\[\s]{0,2}$"
 )
 
@@ -110,76 +115,94 @@ _SUFFIX_BOUNDARY_PATTERN = re.compile(
     r"不代表|不等于|不等同于|不构成|并不|并非|不是|不意味着|"
     r"尚待|未确认|未形成|存在疑问|难以确认|不成立|的结论尚不能下|的结论仍不能下|"
     r"当作结论|作为结论|等当作|等作为|"
+    r"作为(?:实验)?过程(?:指标|参数|数据)|"
     r"(?:的)?(?:计算口径|计算方式|计算方法|口径|定义|统计方式)(?:[，,\s]*(?:仍待|尚待|待确认|待核验|需确认|需核验|存在疑问|未确认))?"
     r")"
 )
 
 
-def _find_clause_start(text: str, start_pos: int, last_end_pos: int) -> int:
-    """Find the start index of the local clause preceding start_pos."""
-    earliest = last_end_pos
+def _split_into_clauses(text: str) -> list[tuple[int, int, str]]:
+    """Split text into local semantic clauses based on punctuation and transition words."""
+    split_indices = {0, len(text)}
 
-    # Search backwards from start_pos to earliest for punctuation delimiter
-    punct_pos = -1
-    for idx in range(start_pos - 1, earliest - 1, -1):
-        if text[idx] in _PUNCTUATION_DELIMITERS:
-            punct_pos = idx + 1
-            break
+    for idx, ch in enumerate(text):
+        if ch in _PUNCTUATION_DELIMITERS:
+            split_indices.add(idx)
+            split_indices.add(idx + 1)
 
-    clause_start = max(earliest, punct_pos if punct_pos != -1 else earliest)
-
-    # Search for transition words within the clause (take closest to start_pos)
-    prefix_so_far = text[clause_start:start_pos]
-    closest_transition_end = -1
     for word in _TRANSITION_WORDS:
-        w_idx = prefix_so_far.rfind(word)
-        if w_idx != -1:
-            t_end = clause_start + w_idx + len(word)
-            if t_end > closest_transition_end:
-                closest_transition_end = t_end
+        start = 0
+        while True:
+            pos = text.find(word, start)
+            if pos == -1:
+                break
+            split_indices.add(pos)
+            split_indices.add(pos + len(word))
+            start = pos + len(word)
 
-    if closest_transition_end > clause_start:
-        clause_start = closest_transition_end
+    sorted_splits = sorted(split_indices)
+    clauses: list[tuple[int, int, str]] = []
+    for i in range(len(sorted_splits) - 1):
+        s = sorted_splits[i]
+        e = sorted_splits[i + 1]
+        chunk = text[s:e].strip()
+        if (
+            chunk
+            and not all(c in _PUNCTUATION_DELIMITERS for c in chunk)
+            and chunk not in _TRANSITION_WORDS
+        ):
+            clauses.append((s, e, text[s:e]))
 
-    return clause_start
+    return clauses
 
 
 def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
     """Check if text contains ungrounded affirmative reproduction success claims.
 
-    1. Each reproduction/recreation claim or success rate/completion percentage term
-       is checked within its isolated local clause.
-    2. Allows explicit prefix negation/condition or suffix boundary qualification.
-    3. Rejects ungrounded affirmative assertions.
+    1. Splits text into isolated local semantic clauses.
+    2. Evaluates claims against clause or local negation/condition/suffix boundaries.
+    3. Prevents cross-clause negation leaks.
     """
-    matches = list(_REPRODUCTION_CLAIM_PATTERN.finditer(text))
-    if not matches:
-        return False
+    clauses = _split_into_clauses(text)
+    if not clauses:
+        clauses = [(0, len(text), text)]
 
-    last_end_pos = 0
-
-    for m in matches:
-        start_pos = m.start()
-        end_pos = m.end()
-        clause_start = _find_clause_start(text, start_pos, last_end_pos)
-        local_prefix = text[clause_start:start_pos]
-
-        prefix_has_boundary = bool(
-            _NEGATION_PREFIX_PATTERN.search(local_prefix)
-            or _CONDITION_PREFIX_PATTERN.search(local_prefix)
-        )
-        if prefix_has_boundary:
-            last_end_pos = end_pos
+    for _, _, clause_str in clauses:
+        matches = list(_REPRODUCTION_CLAIM_PATTERN.finditer(clause_str))
+        if not matches:
             continue
 
-        # Check suffix within the same clause
-        following_window = text[end_pos: min(len(text), end_pos + 25)]
-        suffix_has_boundary = bool(_SUFFIX_BOUNDARY_PATTERN.search(following_window))
-        if suffix_has_boundary:
-            last_end_pos = end_pos
+        first_match = matches[0]
+        clause_prefix = clause_str[:first_match.start()]
+
+        # Clause-level prefix boundary
+        if bool(
+            _NEGATION_PREFIX_PATTERN.search(clause_prefix)
+            or _CONDITION_PREFIX_PATTERN.search(clause_prefix)
+        ):
             continue
 
-        return True
+        # Check each match individually within the clause
+        has_unbounded_claim = False
+        for m in matches:
+            local_prefix = clause_str[:m.start()]
+            prefix_boundary = bool(
+                _NEGATION_PREFIX_PATTERN.search(local_prefix)
+                or _CONDITION_PREFIX_PATTERN.search(local_prefix)
+            )
+            if prefix_boundary:
+                continue
+
+            local_suffix = clause_str[m.end():]
+            suffix_boundary = bool(_SUFFIX_BOUNDARY_PATTERN.search(local_suffix))
+            if suffix_boundary:
+                continue
+
+            has_unbounded_claim = True
+            break
+
+        if has_unbounded_claim:
+            return True
 
     return False
 
