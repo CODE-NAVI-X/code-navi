@@ -403,3 +403,30 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert not is_valid, f"Cross clause bypass text was falsely accepted: {text}"
         assert reason is not None
+
+    # Consistency and verification claim violations -> MUST FAIL
+    consistency_verification_claim_violations = [
+        "指标达到81%，复现结果和基线一致。",
+        "指标达到81%，复现指标与论文一致。",
+        "指标达到81%，结果与论文基本一致。",
+        "复现实验已通过验证。",
+        "复现验证通过。",
+        "实验验证已通过。",
+    ]
+    for text in consistency_verification_claim_violations:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Consistency/verification violation text was falsely accepted: {text}"
+        assert reason is not None
+
+    # Compound coordination safe cases -> MUST PASS
+    compound_coordination_safe_cases = [
+        "不应断言复现成功或复现实验完成。",
+        "不得视为复现成功和复现验证完成。",
+        "尚不足以认为复现成功、复现实验完成。",
+    ]
+    for text in compound_coordination_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, (
+            f"Compound coordination safe text was falsely rejected: {text} (reason: {reason})"
+        )
+        assert reason is None

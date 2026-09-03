@@ -1049,3 +1049,41 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_safe4.status == "completed"
     assert resp_safe4.reply_message is not None
     assert "实验完成率作为实验过程指标" in resp_safe4.reply_message.content
+
+    # 17. Consistency violation "指标达到81%，复现指标与论文一致。" -> failed
+    fake_gen_v9 = FakeOrchestratorLlmGenerator(
+        responses=["指标达到81%，复现指标与论文一致 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v9 = ResearchConversationOrchestrator(llm_generator=fake_gen_v9)
+    conv_v9 = ResearchConversationModel(id="conv-repro-v9", profile_data={}, messages_data=[])
+    db_session.add(conv_v9)
+    db_session.commit()
+
+    resp_v9 = orchestrator_v9.process_message(
+        "conv-repro-v9",
+        SendOrchestratorMessageRequest(message="检查指标一致性"),
+        db_session,
+    )
+    assert resp_v9.status == "failed"
+    assert resp_v9.reply_message is None
+    assert resp_v9.state.last_status == "failed"
+    assert resp_v9.state.current_stage == "research_need"
+    assert resp_v9.state.subtasks.need_defined is False
+
+    # 18. Compound coordination safe case "不应断言复现成功或复现实验完成。" -> completed
+    fake_gen_safe5 = FakeOrchestratorLlmGenerator(
+        responses=["不应断言复现成功或复现实验完成 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe5 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe5)
+    conv_safe5 = ResearchConversationModel(id="conv-repro-safe5", profile_data={}, messages_data=[])
+    db_session.add(conv_safe5)
+    db_session.commit()
+
+    resp_safe5 = orchestrator_safe5.process_message(
+        "conv-repro-safe5",
+        SendOrchestratorMessageRequest(message="复合边界说明"),
+        db_session,
+    )
+    assert resp_safe5.status == "completed"
+    assert resp_safe5.reply_message is not None
+    assert "不应断言复现成功或复现实验完成" in resp_safe5.reply_message.content
