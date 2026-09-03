@@ -93,27 +93,70 @@ _REPRODUCTION_CLAIM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Category 1: Result/Metric consistency with paper
-_CLAIM_RESULT_CONSISTENCY_PATTERN = re.compile(
+# Fingerprint 1: 实验/复现结果 ↔ (原)论文(结果)
+_FINGERPRINT_RESULT_PAPER_RESULT = re.compile(
     r"(?:"
-    r"(?:实验结果|复现结果|复现指标|指标|结果)(?:和|与|跟)"
-    r"(?:原论文|论文|论文基线|原论文基线|基线|论文结论|论文结果|论文指标)"
+    r"(?:实验结果|复现结果|结果)(?:和|与|跟)(?:原论文|论文)(?:中的)?(?:实验)?结果"
     r"(?:完全|基本|大致)?(?:一致|吻合|相同)|"
-    r"(?:与|和|跟)(?:原论文|论文|论文基线|原论文基线|基线)(?:中的)?(?:实验)?"
-    r"(?:结果|结论|指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
-    r"(?:结果|指标)(?:和|与|跟)?(?:论文)?(?:完全|基本|大致)?(?:一致|吻合|相同)"
+    r"(?:与|和|跟)(?:原论文|论文)(?:中的)?(?:实验)?结果(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:实验结果|复现结果)(?:和|与|跟)(?:原论文|论文)(?:完全|基本|大致)?(?:一致|吻合|相同)"
     r")",
     re.IGNORECASE,
 )
 
-# Category 2: Metric reaches or exceeds baseline
-_CLAIM_METRIC_BASELINE_PATTERN = re.compile(
+# Fingerprint 2: 实验/复现结果 ↔ (原)论文结论
+_FINGERPRINT_RESULT_PAPER_CONCLUSION = re.compile(
+    r"(?:"
+    r"(?:实验结果|复现结果|结果)(?:和|与|跟)(?:原论文|论文)(?:中的)?(?:论文)?结论"
+    r"(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:与|和|跟)(?:原论文|论文)(?:中的)?(?:论文)?结论(?:完全|基本|大致)?(?:一致|吻合|相同)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Fingerprint 3: (复现)指标 ↔ (原)论文(指标)
+_FINGERPRINT_METRIC_PAPER_METRIC = re.compile(
+    r"(?:"
+    r"(?:复现指标|指标)(?:和|与|跟)(?:原论文|论文)(?:中的)?(?:论文)?指标"
+    r"(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:与|和|跟)(?:原论文|论文)(?:中的)?(?:论文)?指标(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:复现指标|指标)(?:和|与|跟)(?:原论文|论文)(?:完全|基本|大致)?(?:一致|吻合|相同)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Fingerprint 4: (复现)指标/结果 达到或超过 (原)论文基线/指标
+_FINGERPRINT_METRIC_BASELINE = re.compile(
     r"(?:"
     r"(?:复现)?(?:指标|结果)(?:已|已经)?达到(?:原论文|论文)?(?:基线|指标)|"
     r"(?:复现)?(?:指标|结果)超过(?:原论文|论文)?(?:基线|指标)"
     r")",
     re.IGNORECASE,
 )
+
+_FINGERPRINTS = (
+    ("result_paper_result", _FINGERPRINT_RESULT_PAPER_RESULT),
+    ("result_paper_conclusion", _FINGERPRINT_RESULT_PAPER_CONCLUSION),
+    ("metric_paper_metric", _FINGERPRINT_METRIC_PAPER_METRIC),
+    ("metric_baseline", _FINGERPRINT_METRIC_BASELINE),
+)
+
+
+def _get_supported_evidence_fingerprints(evidence_text: str) -> set[str]:
+    if not evidence_text:
+        return set()
+    supported: set[str] = set()
+    for fp_name, fp_pattern in _FINGERPRINTS:
+        if fp_pattern.search(evidence_text):
+            supported.add(fp_name)
+    return supported
+
+
+def _get_claim_fingerprint(claim_text: str) -> str | None:
+    for fp_name, fp_pattern in _FINGERPRINTS:
+        if fp_pattern.search(claim_text):
+            return fp_name
+    return None
 
 
 _LOCAL_PREFIX_DELIMITER_PATTERN = re.compile(
@@ -122,6 +165,7 @@ _LOCAL_PREFIX_DELIMITER_PATTERN = re.compile(
 
 _ADJACENT_POST_TO_VERIFY_PATTERN = re.compile(
     r"^[；;\s，,\n]*"
+    r"(?:(?:且|并|但|还)?(?:仍|尚|还)?(?:待核验|需核验|待确认|需确认|有待核验)[；;\s，,\n]*)*"
     r"(?:to_verify|待核验|需核验|尚待核验|有待核验|需确认|待确认|仍需核验|还需核验)"
     r"[:：]?",
     re.IGNORECASE,
@@ -232,8 +276,7 @@ def _contains_ungrounded_reproduction_success_claim(
     4. Enforces verifiable, locally bound user-source provenance and adjacent post to_verify.
     """
     evidence_text = _extract_evidence_text(evidence_context)
-    has_user_evidence_cat1 = bool(_CLAIM_RESULT_CONSISTENCY_PATTERN.search(evidence_text))
-    has_user_evidence_cat2 = bool(_CLAIM_METRIC_BASELINE_PATTERN.search(evidence_text))
+    supported_evidence_fps = _get_supported_evidence_fingerprints(evidence_text)
 
     clauses = _split_into_clauses(text)
     if not clauses:
@@ -291,18 +334,12 @@ def _contains_ungrounded_reproduction_success_claim(
                 _ADJACENT_POST_TO_VERIFY_PATTERN.search(following_text)
             )
 
-            # 3. Claim category must be supported by matching user evidence
+            # 3. Claim fingerprint must be supported by matching user evidence fingerprint
             matched_claim = m.group()
-            is_cat1 = bool(_CLAIM_RESULT_CONSISTENCY_PATTERN.search(matched_claim))
-            is_cat2 = bool(_CLAIM_METRIC_BASELINE_PATTERN.search(matched_claim))
+            claim_fp = _get_claim_fingerprint(matched_claim)
+            fp_supported = claim_fp is not None and claim_fp in supported_evidence_fps
 
-            category_supported = False
-            if is_cat1 and has_user_evidence_cat1:
-                category_supported = True
-            elif is_cat2 and has_user_evidence_cat2:
-                category_supported = True
-
-            if has_local_user_source and has_adjacent_to_verify and category_supported:
+            if has_local_user_source and has_adjacent_to_verify and fp_supported:
                 continue
 
             has_unbounded_claim = True

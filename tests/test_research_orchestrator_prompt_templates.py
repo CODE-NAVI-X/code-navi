@@ -533,3 +533,32 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
     )
     assert is_valid_cat2, f"Matching category 2 evidence was falsely rejected: {reason_cat2}"
     assert reason_cat2 is None
+
+    # P1-Fingerprints: Fine-grained fact fingerprint alignment
+    fp_base_evidence = "我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+    fp_mismatch_violations = [
+        "fact：用户报告复现指标与论文指标一致；to_verify：仍需核验。",
+        "fact：用户报告指标与论文一致；to_verify：仍需核验。",
+        "fact：用户报告实验结果与论文结论一致；to_verify：仍需核验。",
+    ]
+    for text in fp_mismatch_violations:
+        is_valid_fp, reason_fp = validate_jiangjiang_output(
+            text,
+            evidence_context=fp_base_evidence,
+        )
+        assert not is_valid_fp, f"Fingerprint mismatch was falsely accepted: {text}"
+        assert reason_fp is not None
+
+    # Fine-grained matching allowed cases (synonyms and inline retention)
+    fp_allowed_cases = [
+        "fact：用户报告实验结果与论文结果一致；to_verify：仍需核验。",
+        "fact：用户报告实验结果与论文结果吻合；to_verify：仍需核验。",
+        "fact：用户报告实验结果与论文结果一致且仍待核验；to_verify：仍需核验。",
+    ]
+    for text in fp_allowed_cases:
+        is_valid_ok, reason_ok = validate_jiangjiang_output(
+            text,
+            evidence_context=fp_base_evidence,
+        )
+        assert is_valid_ok, f"Fingerprint match was falsely rejected: {text} ({reason_ok})"
+        assert reason_ok is None

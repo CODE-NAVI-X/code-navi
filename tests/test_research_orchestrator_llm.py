@@ -1325,3 +1325,32 @@ def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
     assert resp_cat2.status == "completed"
     assert resp_cat2.reply_message is not None
     assert "fact：用户报告指标达到论文基线" in resp_cat2.reply_message.content
+
+    # 11. Fine-grained fingerprint mismatch in orchestrator -> status failed, no advancement
+    fake_gen_fp_mis = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告复现指标与论文指标一致；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_fp_mis = ResearchConversationOrchestrator(llm_generator=fake_gen_fp_mis)
+    conv_fp_mis = ResearchConversationModel(
+        id="conv-p1-fp-mis", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_fp_mis)
+    db_session.commit()
+
+    resp_fp_mis = orch_fp_mis.process_message(
+        "conv-p1-fp-mis",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_fp_mis.status == "failed"
+    assert resp_fp_mis.reply_message is None
+    assert resp_fp_mis.state.last_status == "failed"
+    assert resp_fp_mis.state.current_stage == "research_need"
+    assert resp_fp_mis.state.subtasks.need_defined is False
+    state_in_db_fp = orch_fp_mis.get_state_model("conv-p1-fp-mis", db_session)
+    assert state_in_db_fp.current_plan is None
+    assert len(state_in_db_fp.plan_history or []) == 0
+    profiles_fp = orch_fp_mis.get_learner_profiles("conv-p1-fp-mis", db_session)
+    assert len(profiles_fp.history) == 0
