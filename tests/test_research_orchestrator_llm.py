@@ -953,3 +953,23 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_safe2.status == "completed"
     assert resp_safe2.reply_message is not None
     assert "严禁声称复现成功率" in resp_safe2.reply_message.content
+
+    # 12. Final R4 positive claim "模型成功跑通了论文复现实验。" -> failed
+    fake_gen_v6 = FakeOrchestratorLlmGenerator(
+        responses=["模型成功跑通了论文复现实验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v6 = ResearchConversationOrchestrator(llm_generator=fake_gen_v6)
+    conv_v6 = ResearchConversationModel(id="conv-repro-v6", profile_data={}, messages_data=[])
+    db_session.add(conv_v6)
+    db_session.commit()
+
+    resp_v6 = orchestrator_v6.process_message(
+        "conv-repro-v6",
+        SendOrchestratorMessageRequest(message="检查实验运行结果"),
+        db_session,
+    )
+    assert resp_v6.status == "failed"
+    assert resp_v6.reply_message is None
+    assert resp_v6.state.last_status == "failed"
+    assert resp_v6.state.current_stage == "research_need"
+    assert resp_v6.state.subtasks.need_defined is False

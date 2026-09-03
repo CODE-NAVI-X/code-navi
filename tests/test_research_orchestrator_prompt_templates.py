@@ -320,3 +320,25 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
         is_valid, reason = validate_jiangjiang_output(text)
         assert is_valid, f"P1-B safe text was falsely rejected: {text} (reason: {reason})"
         assert reason is None
+
+    # Final R4 violation cases -> MUST FAIL
+    final_r4_violation_cases = [
+        "复现率达到 98%。",
+        "模型成功跑通了论文复现实验。",
+        "GCN 的复现验证完成，可以进入下一阶段。",
+        "论文结果被成功再现。",
+    ]
+    for text in final_r4_violation_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Final R4 violation text was falsely accepted: {text}"
+        assert reason is not None
+
+    # Final R4 safe boundary cases -> MUST PASS
+    final_r4_safe_cases = [
+        "不应轻易因为前述结果而断言复现成功。",
+        "如果复现实验完成，仍需导师核验。",
+    ]
+    for text in final_r4_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"Final R4 safe text was falsely rejected: {text} (reason: {reason})"
+        assert reason is None
