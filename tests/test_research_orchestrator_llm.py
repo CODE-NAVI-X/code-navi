@@ -1087,3 +1087,71 @@ def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirma
     assert resp_safe5.status == "completed"
     assert resp_safe5.reply_message is not None
     assert "不应断言复现成功或复现实验完成" in resp_safe5.reply_message.content
+
+
+def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
+    """P1 Orchestrator regressions:
+    1. Provider affirmative completion violation -> failed, no advancement.
+    2. Provider compliant fact/to_verify and conditional boundary -> completed.
+    """
+    # 1. Provider outputs word-order variant completion claim -> status failed
+    fake_gen_bad = FakeOrchestratorLlmGenerator(
+        responses=["本轮实验已通过复现验证 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_bad = ResearchConversationOrchestrator(llm_generator=fake_gen_bad)
+    conv_bad = ResearchConversationModel(id="conv-p1-bad", profile_data={}, messages_data=[])
+    db_session.add(conv_bad)
+    db_session.commit()
+
+    resp_bad = orch_bad.process_message(
+        "conv-p1-bad",
+        SendOrchestratorMessageRequest(message="验证实验完成情况"),
+        db_session,
+    )
+    assert resp_bad.status == "failed"
+    assert resp_bad.reply_message is None
+    assert resp_bad.state.last_status == "failed"
+    assert "Jiang Jiang output boundary validation failure" in (resp_bad.error or "")
+    assert resp_bad.state.current_stage == "research_need"
+    assert resp_bad.state.subtasks.need_defined is False
+    state_in_db = orch_bad.get_state_model("conv-p1-bad", db_session)
+    assert state_in_db.current_plan is None
+    assert len(state_in_db.plan_history or []) == 0
+    profiles_bad = orch_bad.get_learner_profiles("conv-p1-bad", db_session)
+    assert len(profiles_bad.history) == 0
+
+    # 2. Provider outputs compliant fact/to_verify -> status completed
+    fake_gen_ok1 = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文一致；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_ok1 = ResearchConversationOrchestrator(llm_generator=fake_gen_ok1)
+    conv_ok1 = ResearchConversationModel(id="conv-p1-ok1", profile_data={}, messages_data=[])
+    db_session.add(conv_ok1)
+    db_session.commit()
+
+    resp_ok1 = orch_ok1.process_message(
+        "conv-p1-ok1",
+        SendOrchestratorMessageRequest(message="汇报当前事实边界"),
+        db_session,
+    )
+    assert resp_ok1.status == "completed"
+    assert resp_ok1.reply_message is not None
+    assert "fact：用户报告实验结果与论文一致；to_verify：仍需核验" in resp_ok1.reply_message.content
+
+    # 3. Provider outputs compliant conditional boundary -> status completed
+    fake_gen_ok2 = FakeOrchestratorLlmGenerator(
+        responses=["即使实验结果与论文一致，也不能据此认定复现成功 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_ok2 = ResearchConversationOrchestrator(llm_generator=fake_gen_ok2)
+    conv_ok2 = ResearchConversationModel(id="conv-p1-ok2", profile_data={}, messages_data=[])
+    db_session.add(conv_ok2)
+    db_session.commit()
+
+    resp_ok2 = orch_ok2.process_message(
+        "conv-p1-ok2",
+        SendOrchestratorMessageRequest(message="说明基线一致与复现成功的边界"),
+        db_session,
+    )
+    assert resp_ok2.status == "completed"
+    assert resp_ok2.reply_message is not None
+    assert "即使实验结果与论文一致，也不能据此认定复现成功" in resp_ok2.reply_message.content

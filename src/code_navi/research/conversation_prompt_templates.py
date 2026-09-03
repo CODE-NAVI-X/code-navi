@@ -61,7 +61,8 @@ _REPRODUCTION_CLAIM_PATTERN = re.compile(
     r"(?:实验|复现|重现|再现|复刻)(?:的)?完成率|"
     # 2. 跑通实验 / 通过验证
     r"(?:已(?:经)?)?(?:成功)?跑通(?:了)?(?:论文)?(?:的)?(?:复现|重现|再现|复刻)?(?:实验)?|"
-    r"(?:复现|重现|再现|复刻)?(?:实验)?(?:验证)?(?:已(?:经)?)?通过(?:了)?验证|"
+    r"(?:复现|重现|再现|复刻)?(?:实验)?(?:验证)?(?:已(?:经)?)?通过(?:了)?(?:论文)?(?:的)?(?:复现|重现|再现|复刻)?(?:实验)?(?:的)?验证|"
+    r"(?:已(?:经)?)?通过(?:了)?(?:论文)?(?:的)?(?:复现|重现|再现|复刻)(?:实验)?(?:验证)?|"
     r"(?:复现|重现|再现|复刻)?(?:实验)?(?:验证)(?:已(?:经)?)?通过|"
     # 3. 完成复现 / 复现完成 / 复现验证完成 / 复现实验验证完成
     r"完成(?:了|已经|已)?(?:复现|重现|再现|复刻)|"
@@ -91,6 +92,30 @@ _REPRODUCTION_CLAIM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_CONSISTENCY_CLAIM_PATTERN = re.compile(
+    r"(?:"
+    r"(?:实验结果|复现结果|复现指标|指标|结果)(?:和|与|跟)(?:原论文|论文|论文基线|原论文基线|基线|论文结论|论文结果|论文指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:与|和|跟)(?:原论文|论文|论文基线|原论文基线|基线)(?:中的)?(?:实验)?(?:结果|结论|指标)(?:完全|基本|大致)?(?:一致|吻合|相同)|"
+    r"(?:指标|结果)(?:已|已经)?达到(?:论文)?基线|"
+    r"(?:指标|结果)超过(?:论文)?基线"
+    r")",
+    re.IGNORECASE,
+)
+
+_USER_SOURCE_PREFIX_PATTERN = re.compile(
+    r"(?:fact|事实)?[:：]?\s*"
+    r"(?:由|据|根据|依据|基于)?"
+    r"(?:用户|学生)"
+    r"(?:报告|提供|反馈|表示|声称|称|输入|提交)"
+    r"[“\"'「『（(【\[\s]{0,5}$",
+    re.IGNORECASE,
+)
+
+_TO_VERIFY_PATTERN = re.compile(
+    r"(?:to_verify|待核验|需核验|尚待核验|有待核验|需确认|待确认|核验|查验)",
+    re.IGNORECASE,
+)
+
 _NEGATION_PREFIX_PATTERN = re.compile(
     r"(?:"
     # Inspection / to_verify phrases
@@ -103,14 +128,14 @@ _NEGATION_PREFIX_PATTERN = re.compile(
     r"不代表|不等于|不等同于|不构成|并非|不是|不视为|不算作|不算|≠|!="
     r")"
     r")"
-    r"(?:[“\"'「『（(【\[\s]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|"
-    r"(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认为|得出|下达|形成|确认|视作|视为|说明|定义|宣称|断定|判为)){0,25}"
+    r"(?:[“\"'「『（(【\[\s]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|据此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|"
+    r"(?:轻易|直接|盲目|贸然)?(?:下|声称|断言|判定|认定|认为|得出|下达|形成|确认|视作|视为|说明|定义|宣称|断定|判为)){0,25}"
     r"[“\"'「『（(【\[\s]{0,2}$"
 )
 
 _CONDITION_PREFIX_PATTERN = re.compile(
     r"(?:即使|即便|哪怕|假使|假设|如果未来|如果|若)"
-    r"(?:[“\"'「『（(【\[\s]|(?:未来|后续|最终)?(?:形成|达成|达到|实现|得出|出现|能够)?){0,6}"
+    r"(?:[“\"'「『（(【\[\s]|(?:用户|学生)?(?:报告|提供|反馈|表示|声称|称|输入)?|(?:未来|后续|最终)?(?:形成|达成|达到|实现|得出|出现|能够)?){0,15}"
     r"[“\"'「『（(【\[\s]{0,2}$"
 )
 
@@ -167,6 +192,8 @@ def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
     2. Evaluates claims against clause or local negation/condition/suffix boundaries.
     3. Prevents cross-clause negation leaks.
     """
+    has_text_to_verify = bool(_TO_VERIFY_PATTERN.search(text))
+
     clauses = _split_into_clauses(text)
     if not clauses:
         clauses = [(0, len(text), text)]
@@ -200,6 +227,16 @@ def _contains_ungrounded_reproduction_success_claim(text: str) -> bool:
             local_suffix = clause_str[m.end():]
             suffix_boundary = bool(_SUFFIX_BOUNDARY_PATTERN.search(local_suffix))
             if suffix_boundary:
+                continue
+
+            # Allow user-attributed consistency comparisons when to_verify is explicitly retained
+            matched_text = m.group()
+            is_consistency_claim = bool(_CONSISTENCY_CLAIM_PATTERN.search(matched_text))
+            has_user_source = bool(
+                _USER_SOURCE_PREFIX_PATTERN.search(local_prefix)
+                or _USER_SOURCE_PREFIX_PATTERN.search(clause_prefix)
+            )
+            if is_consistency_claim and has_user_source and has_text_to_verify:
                 continue
 
             has_unbounded_claim = True

@@ -430,3 +430,40 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
             f"Compound coordination safe text was falsely rejected: {text} (reason: {reason})"
         )
         assert reason is None
+
+
+def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
+    """P1-A: Reject ungrounded affirmative completion claims with word order variants."""
+    p1_a_violations = [
+        "实验通过了复现验证。",
+        "本轮实验已通过复现验证。",
+        "验证表明实验已经复现成功。",
+    ]
+    for text in p1_a_violations:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"P1-A violation text was falsely accepted: {text}"
+        assert reason is not None
+
+    # P1-B: Allow compliant fact / inference / to_verify, conditional,
+    # and risk boundary statements
+    p1_b_safe_cases = [
+        "fact：用户报告实验结果与论文一致；to_verify：仍需核验。",
+        "若用户报告实验结果与论文一致，仍需核验。",
+        "即使实验结果与论文一致，也不能据此认定复现成功。",
+        "实验完成率作为实验过程指标，而非复现结论。",
+        "不应根据实验完成率就声称复现成功。",
+    ]
+    for text in p1_b_safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"P1-B safe text was falsely rejected: {text} (reason: {reason})"
+        assert reason is None
+
+    # P1-C: Reject cross-clause affirmative reproduction conclusions
+    p1_c_violations = [
+        "fact：用户报告实验结果与论文一致；但姜姜确认已经复现成功。",
+        "不应根据实验完成率声称复现成功，但本轮已成功复现论文结果。",
+    ]
+    for text in p1_c_violations:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"P1-C violation text was falsely accepted: {text}"
+        assert reason is not None
