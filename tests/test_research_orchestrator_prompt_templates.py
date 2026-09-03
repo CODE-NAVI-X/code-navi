@@ -606,6 +606,11 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         "这说明你的线性代数和谱图论基本功已经很扎实了。",
         "你已经具备独立完成 GCN 复现实验的能力。",
         "你已经掌握了图神经网络的核心知识。",
+        "你已经有用 GCN 做节点分类的实践经验。",
+        "你目前掌握的基础，是这个领域非常关键的两块拼图。",
+        "你大概知道了怎么在图上做邻居信息聚合。",
+        "这说明你已经具备做比较深入研究的入口了。",
+        "看来你刚刚打通了 GraphSAGE 的任督二脉。",
     ]
     for text in mastery_violations:
         is_valid_mv, reason_mv = validate_jiangjiang_output(
@@ -619,6 +624,11 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         "学习端记录显示你已学习 GCN 数学推导与节点分类相关内容。",
         "当前进度记录为已完成理论推导，接下来可以一起确认实验环境与数据集准备情况。",
         "这些学习记录不等于已经完成实验；是否跑通训练流程仍需你确认。",
+        "学习端记录显示你已学习 GCN 数学推导与节点分类相关内容。",
+        "当前进度记录为：完成理论推导，准备开展真实实验。",
+        "学习端新增记录为：GraphSAGE 邻居采样与大规模图训练。",
+        "这些记录不等于已具备编码、实验或研究能力；实际经验仍需你确认。",
+        "如果你愿意，可以先确认是否有实际运行训练流程的经历。",
     ]
     for text in mastery_compliant_cases:
         is_valid_mc, reason_mc = validate_jiangjiang_output(

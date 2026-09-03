@@ -1416,3 +1416,27 @@ def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
     assert resp_mast.state.last_status == "failed"
     assert resp_mast.state.current_stage == "research_need"
     assert resp_mast.state.subtasks.need_defined is False
+
+    # 15. Capability/entrance inference from learning context -> status failed, no advancement
+    for raw_resp in [
+        "你已经有用 GCN 做节点分类的实践经验 (｡･ω･｡)。",
+        "这说明你已经具备做比较深入研究的入口了 (•̀ᴗ•́)و ̑̑。",
+    ]:
+        orch_cap = ResearchConversationOrchestrator(
+            llm_generator=FakeOrchestratorLlmGenerator(responses=[raw_resp])
+        )
+        cid = f"conv-cap-{abs(hash(raw_resp))}"
+        conv_cap = ResearchConversationModel(id=cid, profile_data={}, messages_data=[])
+        db_session.add(conv_cap)
+        db_session.commit()
+        resp_cap = orch_cap.process_message(
+            cid,
+            SendOrchestratorMessageRequest(message="你好姜姜，我想开始科研"),
+            db_session,
+        )
+        assert resp_cap.status == "failed"
+        assert resp_cap.reply_message is None
+        assert resp_cap.state.last_status == "failed"
+        assert resp_cap.state.current_stage == "research_need"
+        assert resp_cap.state.subtasks.need_defined is False
+        assert resp_cap.state.completed_stages == []

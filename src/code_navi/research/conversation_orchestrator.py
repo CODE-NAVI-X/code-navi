@@ -149,7 +149,8 @@ class RuntimeOrchestratorLlmGenerator:
                     model=model,
                     messages=messages,
                     temperature=0.7,
-                    max_tokens=1500,
+                    max_tokens=2500,
+                    extra_body={"thinking": {"type": "disabled"}},
                 )
                 text = response.choices[0].message.content
                 return OrchestratorLlmOutcome(status="generated", reply_text=text)
@@ -162,11 +163,17 @@ class RuntimeOrchestratorLlmGenerator:
         if self.provider_factory is not None:
             return self.provider_factory()
         settings = ProviderSettings.resolve(timeout=self.timeout_seconds)
-        if settings.name == "deepseek":
+        is_deepseek = settings.name == "deepseek" or (
+            settings.name == "mock" and bool(os.getenv("DEEPSEEK_API_KEY"))
+        )
+        if is_deepseek:
             if not os.getenv("DEEPSEEK_API_KEY"):
                 return None
             return DeepSeekGuidanceProvider(timeout_seconds=self.timeout_seconds)
-        if settings.name == "openai":
+        is_openai = settings.name == "openai" or (
+            settings.name == "mock" and bool(os.getenv("OPENAI_API_KEY"))
+        )
+        if is_openai:
             if not os.getenv("OPENAI_API_KEY"):
                 return None
             return create_provider(settings)
