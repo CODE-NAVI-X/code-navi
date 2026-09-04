@@ -40,6 +40,52 @@ export interface PracticeGatewaySetResponse {
   effective_topic: string | null;
 }
 
+export interface PracticeCodeFillBlank {
+  blank_id: string;
+  hint: string;
+  step_no: number;
+}
+
+export interface PracticeCodeFillStep {
+  step_no: number;
+  title: string;
+  reason: string;
+  sub_steps: string[];
+}
+
+export interface PracticeCodeFillPayload {
+  title: string;
+  language: "python";
+  complexity: "light" | "heavy";
+  judge_mode: "llm_static" | "explain_only";
+  code_masked: string;
+  blanks: PracticeCodeFillBlank[];
+  steps: PracticeCodeFillStep[];
+  source: "generated" | "upload_derived";
+  reference_code_hash: string;
+}
+
+export interface PracticeCodeFillGradeResult {
+  blank_id: string;
+  correct: boolean;
+  score: number;
+  max_score: number;
+  comment: string | null;
+  graded_by: "rules" | "model" | "mock";
+}
+
+export interface PracticeCodeFillGradeResponse {
+  attempt_id: string;
+  item_id: string;
+  set_id: string;
+  results: PracticeCodeFillGradeResult[];
+  total_score: number;
+  total_max_score: number;
+  graded: boolean;
+  is_mock: boolean;
+  provider_name: string | null;
+}
+
 export interface CodeProjectSymbol {
   kind: "class" | "function" | "method";
   name: string;
@@ -129,6 +175,7 @@ export async function generatePracticeSetWithContext(payload: {
   context: PracticeContextV1;
   count?: number;
   difficulty?: "easy" | "medium" | "hard";
+  profileId?: string;
 }): Promise<PracticeGatewaySetResponse> {
   return request<PracticeGatewaySetResponse>("/api/v1/practice/sets/generate", {
     method: "POST",
@@ -137,6 +184,29 @@ export async function generatePracticeSetWithContext(payload: {
       count: payload.count ?? 5,
       difficulty: payload.difficulty ?? "medium",
       context: payload.context,
+      profile_id: payload.profileId,
+    }),
+  });
+}
+
+export async function gradePracticeCodeFill(payload: {
+  setId: string;
+  itemId: string;
+  attemptId: string;
+  blankAnswers: Array<{ blankId: string; value: string }>;
+  profileId?: string;
+}): Promise<PracticeCodeFillGradeResponse> {
+  return request<PracticeCodeFillGradeResponse>("/api/v1/practice/code-fill/grade", {
+    method: "POST",
+    body: JSON.stringify({
+      set_id: payload.setId,
+      item_id: payload.itemId,
+      attempt_id: payload.attemptId,
+      blank_answers: payload.blankAnswers.map((answer) => ({
+        blank_id: answer.blankId,
+        value: answer.value,
+      })),
+      profile_id: payload.profileId,
     }),
   });
 }
