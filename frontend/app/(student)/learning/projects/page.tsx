@@ -18,6 +18,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Upload,
+  Wand2,
   X,
 } from "lucide-react";
 import {
@@ -26,6 +27,9 @@ import {
   CodeProjectSymbol,
   fetchCodeProject,
   fetchCodeProjectFile,
+  explainCodeProject,
+  generateProjectCodeFill,
+  ProjectExplanationResponse,
   PracticeApiError,
   uploadCodeProject,
 } from "@/lib/api/practice";
@@ -183,6 +187,9 @@ export default function ProjectCodeNavigationPage() {
   const [fileLoading, setFileLoading] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [explanation, setExplanation] = useState<ProjectExplanationResponse | null>(null);
+  const [explaining, setExplaining] = useState(false);
+  const [generatingPractice, setGeneratingPractice] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -215,11 +222,39 @@ export default function ProjectCodeNavigationPage() {
     try {
       const response = await fetchCodeProjectFile(project.project_id, file.path);
       setContent(response.content);
+      setExplanation(null);
     } catch (reason) {
       setContent("");
       setError(reason instanceof Error ? reason.message : "无法读取项目文件");
     } finally {
       setFileLoading(false);
+    }
+  }
+
+  async function explainSelectedFile() {
+    if (!project || !selectedFile) return;
+    setExplaining(true);
+    setError(null);
+    try {
+      setExplanation(await explainCodeProject(project.project_id, { path: selectedFile.path }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法生成项目讲解");
+    } finally {
+      setExplaining(false);
+    }
+  }
+
+  async function createFillPractice() {
+    if (!project || !selectedFile || selectedFile.kind !== "python") return;
+    setGeneratingPractice(true);
+    setError(null);
+    try {
+      const practice = await generateProjectCodeFill(project.project_id, { path: selectedFile.path });
+      router.push(`/learning/practice?set_id=${encodeURIComponent(practice.set_id)}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法生成代码挖空练习");
+    } finally {
+      setGeneratingPractice(false);
     }
   }
 
@@ -323,9 +358,10 @@ export default function ProjectCodeNavigationPage() {
               <article className="flex min-h-0 flex-col bg-slate-950 text-slate-100">
                 <div className="flex min-h-11 items-center justify-between border-b border-slate-700 px-4 text-xs text-slate-300">
                   <span className="truncate">{selectedFile?.path ?? "选择左侧文件以查看代码"}</span>
-                  {selectedFile ? <span>{selectedFile.kind === "python" ? "Python" : "Markdown"}</span> : null}
+                  {selectedFile ? <div className="flex items-center gap-2"><span>{selectedFile.kind === "python" ? "Python" : "Markdown"}</span><button type="button" onClick={() => void explainSelectedFile()} disabled={explaining} className="inline-flex items-center gap-1 text-sky-300 disabled:opacity-50" title="AI 讲解当前文件">{explaining ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}讲解</button>{selectedFile.kind === "python" ? <button type="button" onClick={() => void createFillPractice()} disabled={generatingPractice} className="text-emerald-300 disabled:opacity-50" title="从当前文件生成关键逻辑挖空练习">{generatingPractice ? "生成中" : "挖空练习"}</button> : null}</div> : null}
                 </div>
                 {fileLoading ? <div className="flex flex-1 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div> : selectedFile ? <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-sm leading-6"><code>{content}</code></pre> : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-400"><FileCode2 className="h-8 w-8" /><p>从项目树选择 Python 或 Markdown 文件。</p></div>}
+                {explanation ? <section className="max-h-64 overflow-auto border-t border-slate-700 bg-slate-900 p-4 text-sm"><p className="mb-2 text-xs text-slate-400">{explanation.source === "model" ? "模型讲解" : "规则讲解"}</p>{explanation.entries.map((entry) => <div key={`${entry.path}-${entry.symbol ?? "file"}`} className="mb-3 space-y-1"><p className="font-medium text-slate-100">{entry.symbol ?? entry.path}</p>{entry.fact.map((text) => <p key={text} className="text-slate-300">事实：{text}</p>)}{entry.inference.map((text) => <p key={text} className="text-amber-200">推测：{text}</p>)}{entry.to_verify.map((text) => <p key={text} className="text-sky-200">待确认：{text}</p>)}</div>)}</section> : null}
               </article>
             </div>
           </section>

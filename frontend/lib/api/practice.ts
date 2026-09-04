@@ -69,6 +69,20 @@ export interface CodeProjectFileContent {
   symbols: CodeProjectSymbol[];
 }
 
+export interface ProjectExplanationEntry {
+  path: string;
+  symbol: string | null;
+  fact: string[];
+  inference: string[];
+  to_verify: string[];
+}
+
+export interface ProjectExplanationResponse {
+  project_id: string;
+  entries: ProjectExplanationEntry[];
+  source: "model" | "rules";
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
@@ -148,5 +162,25 @@ export async function fetchCodeProjectFile(
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   return request<CodeProjectFileContent>(
     `/api/v1/practice/projects/${encodeURIComponent(projectId)}/files/${encodedPath}`,
+  );
+}
+
+export async function explainCodeProject(
+  projectId: string,
+  payload: { path?: string; symbol?: string } = {},
+): Promise<ProjectExplanationResponse> {
+  return request<ProjectExplanationResponse>(
+    `/api/v1/practice/projects/${encodeURIComponent(projectId)}/explain`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function generateProjectCodeFill(
+  projectId: string,
+  payload: { path: string; symbol?: string; count?: number },
+): Promise<PracticeGatewaySetResponse> {
+  return request<PracticeGatewaySetResponse>(
+    `/api/v1/practice/projects/${encodeURIComponent(projectId)}/code-fill`,
+    { method: "POST", body: JSON.stringify(payload) },
   );
 }

@@ -32,6 +32,9 @@ from .schemas import (
     ExplainSymbolResponse,
     PracticeSetGenerateRequest,
     PracticeSetResponse,
+    ProjectCodeFillRequest,
+    ProjectExplainRequest,
+    ProjectExplainResponse,
     StructureCatalogResponse,
 )
 from .service import (
@@ -287,6 +290,55 @@ async def get_code_project_file(
             project_id, file_path, db,
             owned_ids=get_owned_principal_ids(principal, db) if principal else None,
         )
+    except UploadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/projects/{project_id}/explain",
+    response_model=ProjectExplainResponse,
+    status_code=200,
+)
+async def explain_code_project(
+    project_id: str,
+    request: ProjectExplainRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> ProjectExplainResponse:
+    """Explain project structure without executing its uploaded code."""
+    try:
+        return _practice_service.explain_code_project(
+            project_id,
+            request,
+            db,
+            owned_ids=get_owned_principal_ids(principal, db) if principal else None,
+        )
+    except UploadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/projects/{project_id}/code-fill",
+    response_model=PracticeSetResponse,
+    status_code=200,
+)
+async def generate_project_code_fill(
+    project_id: str,
+    request: ProjectCodeFillRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> PracticeSetResponse:
+    """Create project-derived blanks and archive answers only for the judge."""
+    try:
+        return _practice_service.generate_project_code_fill(
+            project_id,
+            request,
+            db,
+            owner_principal_id=principal.principal_id if principal else None,
+            owned_ids=get_owned_principal_ids(principal, db) if principal else None,
+        )
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except UploadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

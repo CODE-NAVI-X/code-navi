@@ -221,6 +221,21 @@ CodeFillSpec {
 规则解析出的符号。项目不存在、越权或文件不存在统一返回 404。该能力只提供规则解析与
 代码读取，不调用模型、不执行上传代码，AI 讲解和挖空出题另见后续 Issue。
 
+### 1.9 项目代码讲解与挖空练习（Issue #83）
+
+`POST /api/v1/practice/projects/{project_id}/explain` 接收可选 `{path, symbol}` 作用域，
+返回按 `fact`、`inference` 和 `to_verify` 明确标注的文件或符号讲解，以及来源
+`model|rules`。模型只基于受控项目文本生成解释；不可用或结构不合格时返回规则讲解，
+不声称执行过项目代码。
+
+`POST /api/v1/practice/projects/{project_id}/code-fill` 接收 `{path, symbol?, count?,
+difficulty?}`，仅支持 Python 文件。服务端从条件、返回和关键调用/计算表达式中生成
+`code_fill`，不挖空 import、普通变量名或格式性语句；需要至少两个关键逻辑点，否则返回
+422。题目仍归档为既有 `practice_sets`/`practice_set_items` 并使用
+`POST /api/v1/practice/code-fill/grade` 判题。答案、等价答案和参考代码只保存在
+`judge_secret`，任何项目讲解、题目生成或题集读取响应均不得返回这些字段。项目不存在、
+越权、文件或符号不存在统一返回 404。
+
 ## 2. 科研引导 `/api/v1/research/conversations/{conversation_id}/...`
 
 全部端点挂现有 research router，沿用会话 404、准备度 409 语义。破坏性字段变更一律 additive：新增字段 + 旧字段投影保留，前端迁移完成后下线旧字段。两处例外：§2.5 论文蓝图（唯一非 additive 变更，豁免理由见该节）；§2.6 复现评估（已落库，改用 payload `schema_version` 版本化共存）。

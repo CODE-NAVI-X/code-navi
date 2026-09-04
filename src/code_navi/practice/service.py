@@ -42,8 +42,10 @@ from .prompts import (
     CODE_FILL_STATIC_GRADER_SYSTEM_PROMPT,
     CODE_FILL_SYSTEM_PROMPT,
     EXPLAIN_SYMBOL_SYSTEM_PROMPT,
+    PROJECT_EXPLAIN_SYSTEM_PROMPT,
     code_fill_user_prompt,
     explain_symbol_user_prompt,
+    project_explain_user_prompt,
     static_grade_user_prompt,
 )
 from .schemas import (
@@ -62,6 +64,10 @@ from .schemas import (
     PracticeItem,
     PracticeSetGenerateRequest,
     PracticeSetResponse,
+    ProjectCodeFillRequest,
+    ProjectExplainRequest,
+    ProjectExplainResponse,
+    ProjectExplanationEntry,
     StructureCatalogExercise,
     StructureCatalogResponse,
     StructureCatalogTopic,
@@ -877,6 +883,208 @@ class PracticeSetService:
                 )
         raise UploadNotFoundError(f"project file {normalized} not found")
 
+    def explain_code_project(
+        self,
+        project_id: str,
+        request: ProjectExplainRequest,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> ProjectExplainResponse:
+        """Explain archived project structure without executing uploaded source."""
+        project = self._owned_code_project(project_id, db, owned_ids=owned_ids)
+        selected = self._project_files_for_scope(project, request.path)
+        if request.symbol:
+            selected = [
+                item
+                for item in selected
+                if any(symbol.get("name") == request.symbol for symbol in item.get("symbols", []))
+            ]
+            if not selected:
+                raise UploadNotFoundError(f"symbol {request.symbol} not found")
+
+        model_response = self._project_explanation_from_model(
+            project.name, selected, request.symbol
+        )
+        if model_response is not None:
+            return ProjectExplainResponse(
+                project_id=project_id, entries=model_response, source="model"
+            )
+        return ProjectExplainResponse(
+            project_id=project_id,
+            entries=self._project_rules_explanation(selected, request.symbol),
+            source="rules",
+        )
+
+    def generate_project_code_fill(
+        self,
+        project_id: str,
+        request: ProjectCodeFillRequest,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> PracticeSetResponse:
+        """Archive project-derived blanks while keeping references server-side."""
+        project = self._owned_code_project(project_id, db, owned_ids=owned_ids)
+        files = self._project_files_for_scope(project, request.path)
+        file = files[0]
+        if file.get("kind") != "python":
+            raise UploadValidationError("仅 Python 文件可以生成代码挖空练习", status_code=422)
+
+        reference_code = str(file.get("content") or "")
+        if request.symbol:
+            reference_code = _project_symbol_excerpt(reference_code, request.symbol)
+            if not reference_code:
+                raise UploadNotFoundError(f"symbol {request.symbol} not found")
+        payload_secret_pairs = _project_code_fill_items(
+            reference_code, request.path, request.count
+        )
+        if not payload_secret_pairs:
+            raise UploadValidationError("未找到足够的关键逻辑可供挖空", status_code=422)
+
+        set_id = str(uuid4())
+        knowledge_point = request.symbol or request.path
+        items = [
+            PracticeSetItemModel(
+                set_id=set_id,
+                item_id=f"item-{position:02d}",
+                position=position,
+                item_kind="code_fill",
+                payload=payload,
+                judge_secret=secret,
+                owner_principal_id=owner_principal_id,
+            )
+            for position, (payload, secret) in enumerate(payload_secret_pairs, start=1)
+        ]
+        snapshot = {
+            "request": {"topic": knowledge_point, "difficulty": request.difficulty},
+            "coverage": [knowledge_point],
+            "project_source": {
+                "project_id": project_id,
+                "path": request.path,
+                "symbol": request.symbol,
+            },
+        }
+        set_model = PracticeSetModel(
+            set_id=set_id,
+            kind="code_practice",
+            context_snapshot=snapshot,
+            generation_mode="rules_fallback",
+            provider_name="rules",
+            owner_principal_id=owner_principal_id,
+        )
+        set_model.items = items
+        db.add(set_model)
+        db.commit()
+        return PracticeSetResponse(
+            set_id=set_id,
+            kind="code_practice",
+            items=[
+                PracticeItem(
+                    item_id=item.item_id,
+                    position=item.position,
+                    item_kind="code_fill",
+                    knowledge_points=[knowledge_point],
+                    judging=_judging_channel("code_fill"),
+                    payload=_public_payload("code_fill", item.payload),
+                )
+                for item in items
+            ],
+            coverage=[knowledge_point],
+            generation_mode="rules_fallback",
+            provider_name="rules",
+            effective_topic=knowledge_point,
+        )
+
+    @staticmethod
+    def _owned_code_project(
+        project_id: str, db: Session, *, owned_ids: list[str] | None
+    ) -> CodeProjectModel:
+        query = db.query(CodeProjectModel).filter(CodeProjectModel.project_id == project_id)
+        if owned_ids:
+            query = query.filter(CodeProjectModel.owner_principal_id.in_(owned_ids))
+        project = query.first()
+        if project is None:
+            raise UploadNotFoundError(f"project {project_id} not found")
+        return project
+
+    @staticmethod
+    def _project_files_for_scope(project: CodeProjectModel, path: str | None) -> list[dict]:
+        files = project.files or []
+        if path is None:
+            return files
+        normalized = path.replace("\\", "/").strip("/")
+        selected = [item for item in files if item.get("path") == normalized]
+        if not selected:
+            raise UploadNotFoundError(f"project file {normalized} not found")
+        return selected
+
+    def _project_explanation_from_model(
+        self, project_name: str, files: list[dict], symbol: str | None
+    ) -> list[ProjectExplanationEntry] | None:
+        if self._provider_name() == "mock":
+            return None
+        model_files = [
+            {"path": str(item.get("path")), "content": str(item.get("content") or "")[:4000]}
+            for item in files[:8]
+        ]
+        try:
+            result, _ = self._run_agent(
+                agent_name="practice_project_explain",
+                system_prompt=PROJECT_EXPLAIN_SYSTEM_PROMPT,
+                user_input=project_explain_user_prompt(project_name, model_files),
+                session_id=f"practice-project-explain-{uuid4()}",
+            )
+            data = _loads_model_json(result.output_text or "")
+            raw_entries = data.get("entries") if data else None
+            if not isinstance(raw_entries, list):
+                return None
+            entries = [ProjectExplanationEntry.model_validate(entry) for entry in raw_entries[:50]]
+            if symbol:
+                entries = [entry for entry in entries if entry.symbol == symbol]
+            return entries or None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _project_rules_explanation(
+        files: list[dict], symbol: str | None
+    ) -> list[ProjectExplanationEntry]:
+        entries: list[ProjectExplanationEntry] = []
+        for item in files:
+            symbols = item.get("symbols") or []
+            matching = [entry for entry in symbols if not symbol or entry.get("name") == symbol]
+            if matching:
+                for entry in matching:
+                    name = str(entry.get("name"))
+                    signature = str(entry.get("signature") or name)
+                    entries.append(
+                        ProjectExplanationEntry(
+                            path=str(item.get("path")),
+                            symbol=name,
+                            fact=[
+                                f"定义了 {entry.get('kind')} `{signature}`"
+                                f"（第 {entry.get('line')} 行）。"
+                            ],
+                            inference=[f"从名称和签名看，它可能承担与 `{name}` 相关的职责。"],
+                            to_verify=["确认其调用方、外部输入和实际运行结果。"],
+                        )
+                    )
+            elif not symbol:
+                entries.append(
+                    ProjectExplanationEntry(
+                        path=str(item.get("path")),
+                        fact=[
+                            f"文件类型为 {item.get('kind')}，规则解析到 {len(symbols)} 个"
+                            " Python 符号。"
+                        ],
+                        inference=["文件在项目中的具体协作关系需要结合调用方确认。"],
+                        to_verify=["确认入口文件和运行参数。"],
+                    )
+                )
+        return entries
+
     @staticmethod
     def _analyze_python_upload(
         filename: str,
@@ -1616,6 +1824,88 @@ def _public_payload(item_kind: str, payload: dict) -> dict:
 def _normalize_code_fill_value(value: str) -> str:
     """Normalize a student answer for deterministic rule comparison."""
     return "".join(value.split()).casefold()
+
+
+def _project_symbol_excerpt(content: str, symbol_name: str) -> str | None:
+    """Return one class/function source block by its stored display name."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        name = node.name
+        if name == symbol_name or symbol_name.endswith(f".{name}"):
+            excerpt = ast.get_source_segment(content, node)
+            if excerpt:
+                return excerpt
+    return None
+
+
+def _project_code_fill_items(
+    reference_code: str, path: str, requested_count: int
+) -> list[tuple[dict, dict]]:
+    """Create deterministic blanks from conditions, returns and meaningful expressions."""
+    try:
+        tree = ast.parse(reference_code)
+    except SyntaxError:
+        return []
+    candidates: list[tuple[str, str, str]] = []
+    for node in ast.walk(tree):
+        expression: ast.AST | None = None
+        hint = "补全该关键表达式。"
+        if isinstance(node, ast.If):
+            expression, hint = node.test, "补全决定分支走向的条件。"
+        elif isinstance(node, ast.Return):
+            expression, hint = node.value, "补全函数返回的核心结果。"
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            expression, hint = node.value, "补全参与主要计算或调用的表达式。"
+        if expression is None or not isinstance(
+            expression, (ast.Call, ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp, ast.ListComp)
+        ):
+            continue
+        source = ast.get_source_segment(reference_code, expression)
+        if source and source.strip() and source not in {item[0] for item in candidates}:
+            candidates.append((source, hint, type(node).__name__))
+
+    selected = candidates[: min(requested_count, 6)]
+    if len(selected) < 2:
+        return []
+    code_masked = reference_code
+    blanks: list[dict] = []
+    for index, (answer, hint, _) in enumerate(selected, start=1):
+        code_masked = code_masked.replace(answer, "______", 1)
+        blanks.append(
+            {
+                "blank_id": f"blank-{index}",
+                "answer": answer,
+                "alternate_answers": [],
+                "hint": hint,
+                "step_no": 1,
+            }
+        )
+    complexity, judge_mode = _code_fill_mode_from_reference(reference_code)
+    payload = {
+        "title": f"项目关键逻辑挖空：{path}",
+        "language": "python",
+        "complexity": complexity,
+        "judge_mode": judge_mode,
+        "code_masked": code_masked,
+        "blanks": [{key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS} for blank in blanks],
+        "steps": [
+            {
+                "step_no": 1,
+                "title": "还原关键控制和计算逻辑",
+                "reason": "空白来自条件、返回或关键调用，避免考查 import 和普通变量名。",
+                "sub_steps": ["阅读上下文", "判断表达式作用", "填入等价逻辑"],
+            }
+        ],
+        "source": "upload_derived",
+        "reference_code_hash": hashlib.sha256(reference_code.encode("utf-8")).hexdigest(),
+    }
+    secret = {"blanks": blanks, "reference_code": reference_code}
+    return [(payload, secret)]
 
 
 def _looks_like_dataset_content(content: str) -> bool:
