@@ -400,6 +400,41 @@ export async function submitStructureExercise(payload: {
   );
 }
 
+export async function evaluateStructureExercise(payload: {
+  exerciseId: string;
+  answer: string | string[] | string[][];
+  level?: number;
+}): Promise<{ ai: CompilerAiFeedback }> {
+  return request<{ ai: CompilerAiFeedback }>(
+    `/api/v1/practice/structure-exercises/${encodeURIComponent(payload.exerciseId)}/evaluate`,
+    {
+      method: "POST",
+      body: JSON.stringify({ answer: payload.answer, level: payload.level }),
+    },
+  );
+}
+
+export async function askStructureTutor(payload: {
+  exerciseId: string;
+  question: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+}): Promise<{
+  ai: { reply: string; strategy: "question" | "hint" | "explanation"; blocked: boolean };
+}> {
+  return request<{
+    ai: { reply: string; strategy: "question" | "hint" | "explanation"; blocked: boolean };
+  }>(
+    `/api/v1/practice/structure-exercises/${encodeURIComponent(payload.exerciseId)}/chat`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        question: payload.question,
+        history: payload.history,
+      }),
+    },
+  );
+}
+
 import { getStoredCsrfToken } from "@/lib/api/auth";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
