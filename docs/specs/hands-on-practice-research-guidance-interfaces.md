@@ -127,6 +127,38 @@ CodeFillSpec {
 
 错误：422 schema 或缺少生成依据；404 引用的 `upload_id` 不存在或非本人；409 Provider 禁用且规则回退也不可用（同现状 quiz 语义）；413 不会出现（上下文超限归入 422）。
 
+### 1.2a `POST /api/v1/practice/sets/generate-from-learning` — 基于学习数据生成
+
+请求只接受服务端可验证的学习画像键和本地练习范围：
+
+```text
+{
+  "local_profile_id": str 1..64,
+  "profile_id": uuid_v4,
+  "kind": "concept_quiz"|"code_practice"|"mixed" = "mixed",
+  "count": int 3..8 = 5,
+  "difficulty": "easy"|"medium"|"hard" = "medium",
+  "knowledge_points": [str] <=4             # 可选的直接练习知识点；不得带 mastery
+}
+```
+
+处理：服务端读取既有学习画像和 `GET /api/v1/learning/knowledge-gaps` 的同源投影，不新建学习事实表。客户端指定 `knowledge_points` 时按指定点生成，否则按已达到样本阈值的弱项、困惑标记、最近错误依序选取最多 4 个知识点；掌握度不足时保持 `null`。再用已归档题集的 `coverage` 判断题库缺口，生成 `practice-context.v1` 后复用 §1.2 的 PracticeSet、题型和服务端判题链路；`code_practice` 指向既有结构题目录时复用其框架/结构练习。生成快照记录 `learning-data.v1`、知识点、题库缺口和去重指纹；相同 profile、题型、难度与知识点组合返回 409，避免重复题集。
+
+真实 Provider 被显式启用时，本端点要求其生成的 code_fill 通过既有结构校验；Provider 失败或输出不足返回 503，不保存规则降级题集并且不得伪称 AI 成功。Mock Provider 仍可用于离线确定性闭环。
+
+响应：
+
+```text
+{
+  "practice_set": PracticeSetResponse,      # 与 §1.2 相同，答案仍不出参
+  "generation_version": "learning-data.v1",
+  "selected_knowledge_points": [str] <=4,
+  "question_bank_gaps": [str] <=4
+}
+```
+
+错误：409 无可追溯薄弱知识点或检测到等价题集；503 显式 AI 生成失败；422 请求字段非法。任何响应、快照元数据和 Runtime Event 均不得包含 `answer`、`alternate_answers` 或 `judge_secret`。
+
 ### 1.3 `GET /api/v1/practice/sets/{set_id}` — 恢复归档
 
 按 owner 校验返回 1.2 响应结构（重建 `effective_context`/`effective_topic`），供刷新恢复。404：不存在或非本人。出参永不含 `judge_secret` 与 `blanks[].answer`。

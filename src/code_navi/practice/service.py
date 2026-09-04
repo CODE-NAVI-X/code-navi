@@ -30,6 +30,7 @@ from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
 from ..learning.models import NotebookItemModel
 from ..learning.quiz.schemas import QuizQuestion
+from ..learning_profile.schemas import KnowledgeGapItem, ProfileResponse
 from ..providers import ProviderSettings, create_provider
 from .models import (
     CodeFillAttemptModel,
@@ -61,6 +62,10 @@ from .schemas import (
     CodeUploadSymbol,
     ExplainSymbolRequest,
     ExplainSymbolResponse,
+    LearningDataPracticeGenerateRequest,
+    LearningDataPracticeGenerateResponse,
+    PracticeContextKnowledgePoint,
+    PracticeContextV1,
     PracticeItem,
     PracticeSetGenerateRequest,
     PracticeSetResponse,
@@ -111,6 +116,18 @@ class MissingGenerationBasis(Exception):
     """Raised when topic/context/upload_ids are all absent (→ 422)."""
 
 
+class MissingLearningData(Exception):
+    """Raised when a profile has no traceable weak point to practise."""
+
+
+class PracticeModelGenerationError(Exception):
+    """Raised when an explicitly requested model generation cannot be used."""
+
+
+class DuplicateLearningPracticeSetError(Exception):
+    """Raised when the same learning snapshot already has an archived set."""
+
+
 class UploadValidationError(Exception):
     """Raised when an upload is rejected by rules (→ 4xx)."""
 
@@ -144,6 +161,7 @@ class PracticeSetService:
         db: Session,
         owner_principal_id: str | None = None,
         owned_ids: list[str] | None = None,
+        strict_model: bool = False,
     ) -> PracticeSetResponse:
         self._validate_basis(request)
         self._validate_upload_ids(request, db, owned_ids=owned_ids)
@@ -163,7 +181,7 @@ class PracticeSetService:
         knowledge_points = self._bound_knowledge_points(request)
         set_id = str(uuid4())
         code_fill_specs, code_fill_provider, code_fill_used_model = (
-            self._generate_code_fill_specs(request)
+            self._generate_code_fill_specs(request, strict_model=strict_model)
             if request.kind != "concept_quiz"
             else ([], "mock", False)
         )
@@ -274,6 +292,163 @@ class PracticeSetService:
             effective_context=effective_context,
             effective_topic=effective_topic,
         )
+
+    def generate_from_learning(
+        self,
+        request: LearningDataPracticeGenerateRequest,
+        profile: ProfileResponse,
+        gaps: list[KnowledgeGapItem],
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> LearningDataPracticeGenerateResponse:
+        """Create one set from persisted portrait and gap projections only."""
+        points = self._select_learning_points(profile, gaps, request.knowledge_points)
+        if not points:
+            raise MissingLearningData("No weak knowledge points are available for generation")
+
+        question_bank_gaps = self._question_bank_gaps(points, db, owned_ids=owned_ids)
+        fingerprint = self._learning_generation_fingerprint(request, points)
+        duplicate_query = db.query(PracticeSetModel).filter(
+            PracticeSetModel.context_snapshot["learning_generation"]["fingerprint"].as_string()
+            == fingerprint
+        )
+        if owned_ids:
+            duplicate_query = duplicate_query.filter(
+                PracticeSetModel.owner_principal_id.in_(owned_ids)
+            )
+        if duplicate_query.first() is not None:
+            raise DuplicateLearningPracticeSetError(
+                "An equivalent learning-data practice set already exists"
+            )
+
+        context = PracticeContextV1(
+            source_session_id=f"learning-profile:{request.profile_id}",
+            knowledge_points=[
+                PracticeContextKnowledgePoint(name=name, source_ref=source_ref, mastery=mastery)
+                for name, source_ref, mastery in points
+            ],
+            objective="Practice the weakest confirmed learning points.",
+            notes_summary="Generated from persisted learning mastery and review gaps.",
+        )
+        generated_request = PracticeSetGenerateRequest(
+            kind=request.kind,
+            count=request.count,
+            difficulty=request.difficulty,
+            context=context,
+            profile_id=request.profile_id,
+        )
+        if request.kind == "code_practice" and self._is_structure_topic(points[0][0]):
+            generated_request.topic = points[0][0]
+        practice_set = self.generate(
+            generated_request,
+            db,
+            owner_principal_id=owner_principal_id,
+            owned_ids=owned_ids,
+            strict_model=self._provider_name() != "mock",
+        )
+        set_model = db.get(PracticeSetModel, practice_set.set_id)
+        if set_model is None:  # pragma: no cover - generate commits the archive above.
+            raise PracticeSetNotFoundError(f"Practice set {practice_set.set_id} not found")
+        snapshot = dict(set_model.context_snapshot or {})
+        snapshot["learning_generation"] = {
+            "version": "learning-data.v1",
+            "fingerprint": fingerprint,
+            "selected_knowledge_points": [name for name, _, _ in points],
+            "question_bank_gaps": question_bank_gaps,
+            "source": "learning_profile_and_knowledge_gaps",
+        }
+        set_model.context_snapshot = snapshot
+        set_model.local_profile_id = request.local_profile_id
+        db.commit()
+        return LearningDataPracticeGenerateResponse(
+            practice_set=practice_set,
+            generation_version="learning-data.v1",
+            selected_knowledge_points=[name for name, _, _ in points],
+            question_bank_gaps=question_bank_gaps,
+        )
+
+    @staticmethod
+    def _select_learning_points(
+        profile: ProfileResponse,
+        gaps: list[KnowledgeGapItem],
+        requested_points: list[str],
+    ) -> list[tuple[str, str, float | None]]:
+        """Rank server-derived weak points without fabricating mastery values."""
+        mastery = {item.knowledge_point: item.mastery for item in profile.mastery}
+        candidates: list[tuple[str, str, float | None]] = [
+            (name, f"request:{name}", mastery.get(name)) for name in requested_points
+        ]
+        for item in sorted(
+            profile.mastery,
+            key=lambda value: value.mastery if value.mastery is not None else 1.0,
+        ):
+            if item.knowledge_point in profile.weaknesses:
+                candidates.append(
+                    (item.knowledge_point, f"profile:{profile.profile_id}", item.mastery)
+                )
+        for item in profile.confusion:
+            candidates.append(
+                (
+                    item.knowledge_point,
+                    f"confusion:{item.knowledge_point}",
+                    mastery.get(item.knowledge_point),
+                )
+            )
+        for item in gaps:
+            candidates.append((item.topic, f"gap:{item.source_id}", mastery.get(item.topic)))
+
+        selected: list[tuple[str, str, float | None]] = []
+        seen: set[str] = set()
+        for name, source_ref, mastery_value in candidates:
+            normalized = name.strip().casefold()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            selected.append((name.strip(), source_ref[:256], mastery_value))
+            if len(selected) == 4:
+                break
+        return selected
+
+    @staticmethod
+    def _is_structure_topic(topic: str) -> bool:
+        normalized = topic.strip().lower().replace(" ", "-")
+        return topic_by_id(topic) is not None or topic_by_id(normalized) is not None or any(
+            item.title == topic for item in STRUCTURE_TOPICS
+        )
+
+    @staticmethod
+    def _question_bank_gaps(
+        points: list[tuple[str, str, float | None]],
+        db: Session,
+        *,
+        owned_ids: list[str] | None,
+    ) -> list[str]:
+        query = db.query(PracticeSetModel.context_snapshot)
+        if owned_ids:
+            query = query.filter(PracticeSetModel.owner_principal_id.in_(owned_ids))
+        covered = {
+            value.casefold()
+            for snapshot, in query.all()
+            for value in _knowledge_points_from_snapshot(snapshot or {})
+        }
+        return [name for name, _, _ in points if name.casefold() not in covered]
+
+    @staticmethod
+    def _learning_generation_fingerprint(
+        request: LearningDataPracticeGenerateRequest,
+        points: list[tuple[str, str, float | None]],
+    ) -> str:
+        payload = {
+            "profile_id": request.profile_id,
+            "kind": request.kind,
+            "count": request.count,
+            "difficulty": request.difficulty,
+            "points": [name.casefold() for name, _, _ in points],
+            "version": "learning-data.v1",
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     @staticmethod
     def _validate_upload_ids(
@@ -496,6 +671,8 @@ class PracticeSetService:
     def _generate_code_fill_specs(
         self,
         request: PracticeSetGenerateRequest,
+        *,
+        strict_model: bool = False,
     ) -> tuple[list[tuple[dict, dict | None]], str, bool]:
         """Generate code-fill items from a provider, falling back to mock rules."""
         provider_name = self._provider_name()
@@ -523,12 +700,24 @@ class PracticeSetService:
                 session_id=f"practice-code-fill-{uuid4()}",
             )
             items = self._parse_code_fill_items(result.output_text or "", count, topic)
-        except Exception:
+        except Exception as exc:
+            if strict_model:
+                raise PracticeModelGenerationError(
+                    "The AI practice generator is unavailable or returned invalid output"
+                ) from exc
             items = None
             provider_name = "rules"
         if items is None:
+            if strict_model:
+                raise PracticeModelGenerationError(
+                    "The AI practice generator returned no valid code-fill items"
+                )
             items = [self._mock_code_fill_dict(topic, position) for position in range(1, count + 1)]
             return items, "rules", False
+        if strict_model and len(items) < count:
+            raise PracticeModelGenerationError(
+                "The AI practice generator returned too few valid code-fill items"
+            )
         return items, provider_name, True
 
     def _parse_code_fill_items(
@@ -544,6 +733,8 @@ class PracticeSetService:
         parsed: list[tuple[dict, dict | None]] = []
         for raw_item in data["items"][:count]:
             if not isinstance(raw_item, dict):
+                continue
+            if _contains_sensitive_generated_content(raw_item):
                 continue
             reference_code = str(raw_item.get("reference_code") or "").strip()
             if not reference_code:
@@ -1738,6 +1929,19 @@ def _judging_channel(item_kind: str) -> str:
     if item_kind == "coding_problem":
         return "server_tests"
     return "llm_static"
+
+
+def _contains_sensitive_generated_content(item: dict) -> bool:
+    """Reject model items that appear to embed credentials or private keys."""
+    serialized = json.dumps(item, ensure_ascii=False)
+    patterns = (
+        r"sk-[A-Za-z0-9_-]{16,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        r"(?i)authorization\\s*[:=]\\s*bearer\\s+[A-Za-z0-9._-]{12,}",
+        r"(?i)(password|api[_-]?key|secret)\\s*[:=]\\s*['\"][^'\"]{8,}['\"]",
+    )
+    return any(re.search(pattern, serialized) is not None for pattern in patterns)
 
 
 def _strip_model_fence(raw: str) -> str:
