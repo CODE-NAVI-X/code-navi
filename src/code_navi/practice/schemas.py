@@ -305,6 +305,38 @@ class CodeProjectFileResponse(BaseModel):
     symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
 
 
+class ProjectExplainRequest(BaseModel):
+    """Optional file/symbol scope for an uploaded-project explanation."""
+
+    path: str | None = Field(default=None, min_length=1, max_length=255)
+    symbol: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ProjectExplanationEntry(BaseModel):
+    """One explainable project unit, with claims labelled by certainty."""
+
+    path: str
+    symbol: str | None = None
+    fact: list[str] = Field(default_factory=list, max_length=6)
+    inference: list[str] = Field(default_factory=list, max_length=4)
+    to_verify: list[str] = Field(default_factory=list, max_length=4)
+
+
+class ProjectExplainResponse(BaseModel):
+    project_id: str
+    entries: list[ProjectExplanationEntry] = Field(default_factory=list, max_length=50)
+    source: Literal["model", "rules"]
+
+
+class ProjectCodeFillRequest(BaseModel):
+    """Generate project-derived ``code_fill`` items for a Python source file."""
+
+    path: str = Field(..., min_length=1, max_length=255)
+    symbol: str | None = Field(default=None, min_length=1, max_length=128)
+    count: int = Field(default=3, ge=1, le=6)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
 class ExplainSymbol(BaseModel):
     """A symbol to explain (contract §1.6).
 
@@ -382,6 +414,10 @@ __all__ = [
     "CodeProjectUploadRequest",
     "CodeProjectResponse",
     "CodeProjectFileResponse",
+    "ProjectExplainRequest",
+    "ProjectExplanationEntry",
+    "ProjectExplainResponse",
+    "ProjectCodeFillRequest",
     "ExplainSymbol",
     "ExplainSymbolRequest",
     "ExplainSymbolResponse",

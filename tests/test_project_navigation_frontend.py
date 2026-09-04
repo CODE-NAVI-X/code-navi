@@ -20,6 +20,8 @@ def test_project_page_uses_api_client_and_handles_offline_states() -> None:
     assert "uploadCodeProject" in source
     assert "fetchCodeProject" in source
     assert "fetchCodeProjectFile" in source
+    assert "explainCodeProject" in source
+    assert "generateProjectCodeFill" in source
     assert "PracticeApiError" in source
     assert "项目总大小不能超过 2 MB" in source
     assert 'role="alert"' in source
@@ -33,4 +35,6 @@ def test_project_api_keeps_upload_tree_and_file_reading_separate() -> None:
     assert '"/api/v1/practice/projects"' in source
     assert "fetchCodeProject" in source
     assert "fetchCodeProjectFile" in source
+    assert "explainCodeProject" in source
+    assert "generateProjectCodeFill" in source
     assert "content_base64" in source

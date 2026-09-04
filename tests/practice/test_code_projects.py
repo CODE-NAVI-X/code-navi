@@ -171,3 +171,90 @@ def test_project_read_is_isolated_by_authenticated_owner() -> None:
     assert (
         other.get(f"/api/v1/practice/projects/{project_id}/files/src/model.py").status_code == 404
     )
+
+
+def _logic_project_payload() -> dict[str, object]:
+    return _project_payload(
+        [
+            {
+                "path": "src/logic.py",
+                "content_base64": _encoded(
+                    "def normalize(values):\n"
+                    "    total = sum(values)\n"
+                    "    if total <= 0:\n"
+                    "        return [0 for _ in values]\n"
+                    "    return [value / total for value in values]\n"
+                ),
+            }
+        ]
+    )
+
+
+def test_project_explanation_labels_rule_claims(client: TestClient) -> None:
+    project_id = client.post("/api/v1/practice/projects", json=_logic_project_payload()).json()[
+        "project_id"
+    ]
+
+    response = client.post(
+        f"/api/v1/practice/projects/{project_id}/explain",
+        json={"path": "src/logic.py", "symbol": "normalize"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"] == "rules"
+    assert body["entries"][0]["symbol"] == "normalize"
+    assert body["entries"][0]["fact"]
+    assert body["entries"][0]["inference"]
+    assert body["entries"][0]["to_verify"]
+
+
+def test_project_code_fill_is_judgeable_without_answer_leak(client: TestClient) -> None:
+    project_id = client.post("/api/v1/practice/projects", json=_logic_project_payload()).json()[
+        "project_id"
+    ]
+    response = client.post(
+        f"/api/v1/practice/projects/{project_id}/code-fill",
+        json={"path": "src/logic.py", "symbol": "normalize"},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["item_kind"] == "code_fill"
+    assert item["payload"]["source"] == "upload_derived"
+    assert "sum(values)" not in str(item)
+    assert "answer" not in str(item["payload"])
+
+    graded = client.post(
+        "/api/v1/practice/code-fill/grade",
+        json={
+            "set_id": response.json()["set_id"],
+            "item_id": item["item_id"],
+            "attempt_id": "0d75c9a8-b681-4bc0-9f5a-60541872d8dd",
+            "blank_answers": [
+                {"blank_id": blank["blank_id"], "value": "incorrect"}
+                for blank in item["payload"]["blanks"]
+            ],
+        },
+    )
+    assert graded.status_code == 200, graded.text
+    assert graded.json()["graded"] is True
+
+
+def test_project_explain_and_generation_are_owner_isolated() -> None:
+    owner = TestClient(app)
+    other = TestClient(app)
+    _login(owner, "project-ai-owner@example.com")
+    _login(other, "project-ai-other@example.com")
+    project_id = owner.post("/api/v1/practice/projects", json=_logic_project_payload()).json()[
+        "project_id"
+    ]
+
+    assert other.post(f"/api/v1/practice/projects/{project_id}/explain", json={}).status_code == 404
+    assert (
+        other.post(
+            f"/api/v1/practice/projects/{project_id}/code-fill",
+            json={"path": "src/logic.py"},
+        ).status_code
+        == 404
+    )
