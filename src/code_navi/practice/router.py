@@ -23,11 +23,11 @@ from ..online_compiler.provider_setup import create_ai_service
 from .schemas import (
     CodeFillGradeRequest,
     CodeFillGradeResponse,
-    CodeUploadAnalysisResponse,
-    CodeUploadAnalyzeRequest,
     CodeProjectFileResponse,
     CodeProjectResponse,
     CodeProjectUploadRequest,
+    CodeUploadAnalysisResponse,
+    CodeUploadAnalyzeRequest,
     ExplainSymbolRequest,
     ExplainSymbolResponse,
     PracticeSetGenerateRequest,

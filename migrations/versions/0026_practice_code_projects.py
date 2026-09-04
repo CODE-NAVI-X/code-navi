@@ -21,9 +21,15 @@ def upgrade() -> None:
         sa.Column("owner_principal_id", sa.String(36), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
-    op.create_index("ix_practice_code_projects_owner_principal_id", "practice_code_projects", ["owner_principal_id"])
+    op.create_index(
+        "ix_practice_code_projects_owner_principal_id",
+        "practice_code_projects",
+        ["owner_principal_id"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_practice_code_projects_owner_principal_id", table_name="practice_code_projects")
+    op.drop_index(
+        "ix_practice_code_projects_owner_principal_id", table_name="practice_code_projects"
+    )
     op.drop_table("practice_code_projects")

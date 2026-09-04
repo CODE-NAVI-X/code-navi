@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Clock3,
   FileUp,
+  FolderTree,
   Import,
   List,
   Loader2,
@@ -1017,6 +1018,14 @@ function PracticeContent() {
                 <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
                 生成练习集
               </a>
+              <button
+                type="button"
+                onClick={() => router.push("/learning/projects")}
+                className="app-button-secondary inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-sm transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+              >
+                <FolderTree className="h-3.5 w-3.5" strokeWidth={1.5} />
+                浏览项目代码
+              </button>
               {(["all", "easy", "medium", "hard"] as const).map((item) => (
                 <button
                   key={item}

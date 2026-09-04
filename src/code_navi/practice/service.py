@@ -32,8 +32,8 @@ from ..learning.models import NotebookItemModel
 from ..learning.quiz.schemas import QuizQuestion
 from ..providers import ProviderSettings, create_provider
 from .models import (
-    CodeProjectModel,
     CodeFillAttemptModel,
+    CodeProjectModel,
     CodeUploadAnalysisModel,
     PracticeSetItemModel,
     PracticeSetModel,
@@ -47,13 +47,13 @@ from .prompts import (
     static_grade_user_prompt,
 )
 from .schemas import (
+    CodeFillGradeRequest,
+    CodeFillGradeResponse,
+    CodeFillGradeResultItem,
     CodeProjectFile,
     CodeProjectFileResponse,
     CodeProjectResponse,
     CodeProjectUploadRequest,
-    CodeFillGradeRequest,
-    CodeFillGradeResponse,
-    CodeFillGradeResultItem,
     CodeUploadAnalysisResponse,
     CodeUploadAnalyzeRequest,
     CodeUploadSymbol,
@@ -211,9 +211,7 @@ class PracticeSetService:
                 "model"
                 if code_fill_index and code_fill_used_model
                 else (
-                    "rules_fallback"
-                    if code_fill_index and code_fill_provider != "mock"
-                    else "mock"
+                    "rules_fallback" if code_fill_index and code_fill_provider != "mock" else "mock"
                 )
             ),
             provider_name=(
@@ -258,9 +256,7 @@ class PracticeSetService:
                 "model"
                 if code_fill_index and code_fill_used_model
                 else (
-                    "rules_fallback"
-                    if code_fill_index and code_fill_provider != "mock"
-                    else "mock"
+                    "rules_fallback" if code_fill_index and code_fill_provider != "mock" else "mock"
                 )
             ),
             provider_name=(
@@ -292,9 +288,7 @@ class PracticeSetService:
         found = {row[0] for row in query.all()}
         missing = [upload_id for upload_id in upload_ids if upload_id not in found]
         if missing:
-            raise UploadNotFoundError(
-                f"upload_id 不存在或不属于当前用户：{', '.join(missing)}"
-            )
+            raise UploadNotFoundError(f"upload_id 不存在或不属于当前用户：{', '.join(missing)}")
 
     @staticmethod
     def _double_write_concept_quizzes(
@@ -457,8 +451,7 @@ class PracticeSetService:
             "judge_mode": "llm_static",
             "code_masked": exercise.code_masked,
             "blanks": [
-                {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS}
-                for blank in blanks
+                {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS} for blank in blanks
             ],
             "steps": [
                 {
@@ -512,10 +505,7 @@ class PracticeSetService:
         topic = self._bound_knowledge_points(request)[0]
         if provider_name == "mock":
             return (
-                [
-                    self._mock_code_fill_dict(topic, position)
-                    for position in range(1, count + 1)
-                ],
+                [self._mock_code_fill_dict(topic, position) for position in range(1, count + 1)],
                 "mock",
                 False,
             )
@@ -594,14 +584,11 @@ class PracticeSetService:
                 "judge_mode": judge_mode,
                 "code_masked": str(raw_item.get("code_masked") or "")[:16000],
                 "blanks": [
-                    {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS}
-                    for blank in blanks
+                    {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS} for blank in blanks
                 ],
                 "steps": steps,
                 "source": "generated",
-                "reference_code_hash": hashlib.sha256(
-                    reference_code.encode("utf-8")
-                ).hexdigest(),
+                "reference_code_hash": hashlib.sha256(reference_code.encode("utf-8")).hexdigest(),
             }
             parsed.append((payload, {"blanks": blanks, "reference_code": reference_code}))
         return parsed or None
@@ -627,9 +614,7 @@ class PracticeSetService:
             return ProviderSettings("mock")
         return ProviderSettings(
             name,
-            os.getenv("CODE_NAVI_MODEL") or (
-                "deepseek-chat" if name == "deepseek" else None
-            ),
+            os.getenv("CODE_NAVI_MODEL") or ("deepseek-chat" if name == "deepseek" else None),
             None,
             max_tokens=_DEFAULT_MAX_TOKENS,
             timeout=_DEFAULT_MODEL_TIMEOUT,
@@ -773,7 +758,11 @@ class PracticeSetService:
         return response
 
     def upload_code_project(
-        self, request: CodeProjectUploadRequest, db: Session, *, owner_principal_id: str | None = None
+        self,
+        request: CodeProjectUploadRequest,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
     ) -> CodeProjectResponse:
         """Validate and archive a small project, retaining only allowed text files."""
         import posixpath
@@ -795,43 +784,82 @@ class PracticeSetService:
             try:
                 content = base64.b64decode(item.content_base64, validate=True).decode("utf-8")
             except Exception as exc:
-                raise UploadValidationError("文件内容不是有效的 base64 文本", status_code=400) from exc
+                raise UploadValidationError(
+                    "文件内容不是有效的 base64 文本", status_code=400
+                ) from exc
             size = len(content.encode("utf-8"))
             total += size
             if total > _MAX_PROJECT_BYTES:
                 raise UploadValidationError("项目超过 2MB 限制", status_code=413)
             if _looks_like_dataset_content(content):
-                raise UploadValidationError("仅支持核心代码或文档文件，不支持数据集文件", status_code=400)
+                raise UploadValidationError(
+                    "仅支持核心代码或文档文件，不支持数据集文件", status_code=400
+                )
             if lower.endswith(".py"):
                 analysis = self._analyze_python_upload(path, content, "", "tmp")
             else:
                 analysis = self._analyze_markdown_upload(path, content, "", "tmp")
-            files.append({"path": path, "content": content, "kind": analysis.kind,
-                          "size": size, "symbols": [s.model_dump(mode="json") for s in analysis.symbols]})
+            files.append(
+                {
+                    "path": path,
+                    "content": content,
+                    "kind": analysis.kind,
+                    "size": size,
+                    "symbols": [s.model_dump(mode="json") for s in analysis.symbols],
+                }
+            )
             seen.add(path)
         project_id = str(uuid4())
-        metrics = {"files": len(files), "bytes": total,
-                   "lines": sum(len(f["content"].splitlines()) for f in files)}
-        db.add(CodeProjectModel(project_id=project_id, name=request.name.strip(), files=files,
-                                metrics=metrics, owner_principal_id=owner_principal_id))
+        metrics = {
+            "files": len(files),
+            "bytes": total,
+            "lines": sum(len(f["content"].splitlines()) for f in files),
+        }
+        db.add(
+            CodeProjectModel(
+                project_id=project_id,
+                name=request.name.strip(),
+                files=files,
+                metrics=metrics,
+                owner_principal_id=owner_principal_id,
+            )
+        )
         db.commit()
-        return CodeProjectResponse(project_id=project_id, name=request.name.strip(),
-                                   files=[CodeProjectFile(**{k: f[k] for k in ("path", "kind", "size", "symbols")}) for f in files],
-                                   metrics=metrics)
+        return CodeProjectResponse(
+            project_id=project_id,
+            name=request.name.strip(),
+            files=[
+                CodeProjectFile(**{k: f[k] for k in ("path", "kind", "size", "symbols")})
+                for f in files
+            ],
+            metrics=metrics,
+        )
 
     @staticmethod
-    def get_code_project(project_id: str, db: Session, *, owned_ids: list[str] | None = None) -> CodeProjectResponse:
+    def get_code_project(
+        project_id: str, db: Session, *, owned_ids: list[str] | None = None
+    ) -> CodeProjectResponse:
         query = db.query(CodeProjectModel).filter(CodeProjectModel.project_id == project_id)
         if owned_ids:
             query = query.filter(CodeProjectModel.owner_principal_id.in_(owned_ids))
         project = query.first()
         if project is None:
             raise UploadNotFoundError(f"project {project_id} not found")
-        files = [CodeProjectFile(**{k: f[k] for k in ("path", "kind", "size", "symbols")}) for f in (project.files or [])]
-        return CodeProjectResponse(project_id=project.project_id, name=project.name, files=files, metrics=project.metrics or {})
+        files = [
+            CodeProjectFile(**{k: f[k] for k in ("path", "kind", "size", "symbols")})
+            for f in (project.files or [])
+        ]
+        return CodeProjectResponse(
+            project_id=project.project_id,
+            name=project.name,
+            files=files,
+            metrics=project.metrics or {},
+        )
 
     @staticmethod
-    def get_code_project_file(project_id: str, file_path: str, db: Session, *, owned_ids: list[str] | None = None) -> CodeProjectFileResponse:
+    def get_code_project_file(
+        project_id: str, file_path: str, db: Session, *, owned_ids: list[str] | None = None
+    ) -> CodeProjectFileResponse:
         query = db.query(CodeProjectModel).filter(CodeProjectModel.project_id == project_id)
         if owned_ids:
             query = query.filter(CodeProjectModel.owner_principal_id.in_(owned_ids))
@@ -841,8 +869,12 @@ class PracticeSetService:
         normalized = file_path.replace("\\", "/").strip("/")
         for item in project.files or []:
             if item.get("path") == normalized:
-                return CodeProjectFileResponse(project_id=project_id, path=normalized,
-                                               content=item.get("content", ""), symbols=item.get("symbols", []))
+                return CodeProjectFileResponse(
+                    project_id=project_id,
+                    path=normalized,
+                    content=item.get("content", ""),
+                    symbols=item.get("symbols", []),
+                )
         raise UploadNotFoundError(f"project file {normalized} not found")
 
     @staticmethod
@@ -867,18 +899,35 @@ class PracticeSetService:
                 imports.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.append(node.module)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                symbols.append(
-                    CodeUploadSymbol(
-                        kind="class" if isinstance(node, ast.ClassDef) else "function",
-                        name=node.name,
-                        line=node.lineno,
-                        signature=_python_signature(node),
-                        docstring_summary=_docstring_summary(node),
-                    )
-                )
+
+        def collect_symbols(nodes: list[ast.stmt], class_name: str | None = None) -> None:
+            for node in nodes:
                 if len(symbols) >= 50:
-                    break
+                    return
+                if isinstance(node, ast.ClassDef):
+                    symbols.append(
+                        CodeUploadSymbol(
+                            kind="class",
+                            name=node.name,
+                            line=node.lineno,
+                            signature=_python_signature(node),
+                            docstring_summary=_docstring_summary(node),
+                        )
+                    )
+                    collect_symbols(node.body, class_name=node.name)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    is_method = class_name is not None
+                    symbols.append(
+                        CodeUploadSymbol(
+                            kind="method" if is_method else "function",
+                            name=f"{class_name}.{node.name}" if is_method else node.name,
+                            line=node.lineno,
+                            signature=_python_signature(node),
+                            docstring_summary=_docstring_summary(node),
+                        )
+                    )
+
+        collect_symbols(tree.body)
 
         return CodeUploadAnalysisResponse(
             upload_id=upload_id,
@@ -890,8 +939,9 @@ class PracticeSetService:
             framework_hints=_framework_hints(content, imports)[:8],
             metrics={
                 "lines": len(content.splitlines()),
-                "functions": sum(symbol.kind == "function" for symbol in symbols),
+                "functions": sum(symbol.kind in {"function", "method"} for symbol in symbols),
                 "classes": sum(symbol.kind == "class" for symbol in symbols),
+                "methods": sum(symbol.kind == "method" for symbol in symbols),
             },
             explanation_source="rules",
         )
@@ -903,11 +953,7 @@ class PracticeSetService:
         content_hash: str,
         upload_id: str,
     ) -> CodeUploadAnalysisResponse:
-        headings = [
-            line.strip()
-            for line in content.splitlines()
-            if line.startswith("#")
-        ][:50]
+        headings = [line.strip() for line in content.splitlines() if line.startswith("#")][:50]
         code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", content, flags=re.DOTALL)
         symbols = [
             CodeUploadSymbol(
@@ -1066,9 +1112,7 @@ class PracticeSetService:
             PracticeSetItemModel.item_id == request.item_id,
         )
         if owned_ids:
-            item_query = item_query.filter(
-                PracticeSetItemModel.owner_principal_id.in_(owned_ids)
-            )
+            item_query = item_query.filter(PracticeSetItemModel.owner_principal_id.in_(owned_ids))
         item = item_query.first()
         if item is None or item.item_kind != "code_fill":
             raise PracticeSetNotFoundError("code-fill item not found")
@@ -1085,9 +1129,7 @@ class PracticeSetService:
         blank_map: dict[str, dict] = {
             str(blank["blank_id"]): blank for blank in blank_specs if isinstance(blank, dict)
         }
-        submitted_map = {
-            answer.blank_id: answer.value for answer in request.blank_answers
-        }
+        submitted_map = {answer.blank_id: answer.value for answer in request.blank_answers}
         results: list[CodeFillGradeResultItem] = []
         unmatched: list[tuple[str, str, dict]] = []
         total_score = 0
@@ -1172,9 +1214,7 @@ class PracticeSetService:
             request=request,
             response=response,
             graded_by=(
-                "model"
-                if any(result.graded_by == "model" for result in results)
-                else "rules"
+                "model" if any(result.graded_by == "model" for result in results) else "rules"
             ),
             owner_principal_id=owner_principal_id,
             owned_ids=owned_ids,
@@ -1199,9 +1239,7 @@ class PracticeSetService:
         if owned_ids:
             query = query.filter(CodeFillAttemptModel.owner_principal_id.in_(owned_ids))
         attempt = query.first()
-        blank_answers = [
-            answer.model_dump(mode="json") for answer in request.blank_answers
-        ]
+        blank_answers = [answer.model_dump(mode="json") for answer in request.blank_answers]
         if attempt is None:
             attempt = CodeFillAttemptModel(
                 attempt_id=request.attempt_id,
@@ -1275,10 +1313,7 @@ class PracticeSetService:
                         }
                         for blank_id, _, blank in unmatched
                     ],
-                    [
-                        {"blank_id": blank_id, "value": value}
-                        for blank_id, value, _ in unmatched
-                    ],
+                    [{"blank_id": blank_id, "value": value} for blank_id, value, _ in unmatched],
                 ),
                 session_id=f"practice-grade-{request.attempt_id}",
             )
@@ -1332,9 +1367,7 @@ class PracticeSetService:
         has_context = request.context is not None
         has_uploads = bool(request.upload_ids)
         if not (has_topic or has_context or has_uploads):
-            raise MissingGenerationBasis(
-                "缺少生成依据：topic、context、upload_ids 至少需要一项"
-            )
+            raise MissingGenerationBasis("缺少生成依据：topic、context、upload_ids 至少需要一项")
         if request.kind in ("concept_quiz", "mixed"):
             knowledge_point = (
                 request.context.knowledge_points[0].name
@@ -1358,9 +1391,7 @@ class PracticeSetService:
         return [request.topic] if request.topic else ["未指定知识点"]
 
     @staticmethod
-    def _item_kind_for_position(
-        request: PracticeSetGenerateRequest, position: int
-    ) -> str:
+    def _item_kind_for_position(request: PracticeSetGenerateRequest, position: int) -> str:
         """Deterministic item composition for the mock (contract §1.1 kinds)."""
         if request.kind == "concept_quiz":
             return "concept_quiz_question"
@@ -1409,9 +1440,7 @@ class PracticeSetService:
             )
             secret = question.model_dump(mode="json")
             payload = {
-                key: value
-                for key, value in secret.items()
-                if key not in _CONCEPT_SECRET_KEYS
+                key: value for key, value in secret.items() if key not in _CONCEPT_SECRET_KEYS
             }
             payload.pop("comment_prompt", None)
             return payload, {
@@ -1475,8 +1504,7 @@ class PracticeSetService:
             "judge_mode": "llm_static",
             "code_masked": code_masked,
             "blanks": [
-                {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS}
-                for blank in blanks
+                {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS} for blank in blanks
             ],
             "steps": [
                 {

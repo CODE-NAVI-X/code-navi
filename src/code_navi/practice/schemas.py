@@ -251,9 +251,9 @@ class CodeUploadAnalyzeRequest(BaseModel):
 
 
 class CodeUploadSymbol(BaseModel):
-    """One extracted class or function symbol."""
+    """One extracted class, function, or class method symbol."""
 
-    kind: Literal["class", "function"]
+    kind: Literal["class", "function", "method"]
     name: str = Field(..., min_length=1)
     line: int = Field(..., ge=1)
     signature: str = Field(default="", max_length=300)
