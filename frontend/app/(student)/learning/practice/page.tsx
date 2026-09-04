@@ -54,6 +54,12 @@ import {
   type PracticeGatewaySetResponse,
 } from "@/lib/api/practice";
 import { isPracticeContextV1, type PracticeContextV1 } from "@/lib/practice-context";
+import {
+  canAdvanceContextStructureItem,
+  createDirectEntryRequestCache,
+  directEntryRequestKey,
+  shouldShowDirectStructureView,
+} from "@/lib/practice-direct-entry.mjs";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 
@@ -407,6 +413,9 @@ function PracticeContent() {
     ? practiceContextCandidate
     : null;
   const practiceContext = directPracticeContext;
+  const directEntryKey = directPracticeContext
+    ? directEntryRequestKey(directPracticeContext, learnerId)
+    : null;
 
   const [view, setView] = useState<PracticeView>("start");
   const [structureExercises, setStructureExercises] = useState<CompilerStructureExercise[]>([]);
@@ -470,6 +479,7 @@ function PracticeContent() {
   const [timelineNotice, setTimelineNotice] = useState<TimelineNoticeState | null>(null);
   const operationSequenceRef = useRef(0);
   const activePracticeKeyRef = useRef(activePracticeKey);
+  const directEntryRequestCacheRef = useRef(createDirectEntryRequestCache());
   const pythonFileInputRef = useRef<HTMLInputElement>(null);
   const problemFileInputRef = useRef<HTMLInputElement>(null);
   const effectiveFreeRunLaunchState =
@@ -544,34 +554,39 @@ function PracticeContent() {
 
   useEffect(() => {
     let active = true;
-    void Promise.resolve().then(() => {
-      if (!active) return;
-      if (directPracticeContext) {
-        setDirectStructureState({
-          status: "loading",
-          message: "正在按学习上下文生成核心结构练习。",
-        });
-        setDirectStructureSet(null);
-        setActiveStructureExercise(null);
-        setDirectEntryDismissed(false);
-      } else {
+    if (!directPracticeContext || !directEntryKey) {
+      void Promise.resolve().then(() => {
+        if (!active) return;
         setDirectStructureState({ status: "idle", message: "" });
         setDirectStructureSet(null);
-      }
-    });
+      });
+      return () => {
+        active = false;
+      };
+    }
 
-    const catalogRequest = directPracticeContext
-      ? fetchStructureExercises()
-      : Promise.resolve({ schemaVersion: "", topics: [], exercises: [] });
-    const gatewayRequest = directPracticeContext
-      ? generatePracticeSetWithContext({
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setDirectStructureState({
+        status: "loading",
+        message: "正在按学习上下文生成核心结构练习。",
+      });
+      setDirectStructureSet(null);
+      setActiveStructureExercise(null);
+      setDirectEntryDismissed(false);
+    });
+    const load = directEntryRequestCacheRef.current.getOrCreate(directEntryKey, () =>
+      Promise.allSettled([
+        fetchStructureExercises(),
+        generatePracticeSetWithContext({
           context: directPracticeContext,
           count: 5,
           profileId: learnerId,
-        })
-      : Promise.resolve(null);
+        }),
+      ]),
+    );
 
-    void Promise.allSettled([catalogRequest, gatewayRequest]).then(
+    void load.then(
       ([catalogResult, gatewayResult]) => {
         if (!active) return;
 
@@ -650,7 +665,7 @@ function PracticeContent() {
     return () => {
       active = false;
     };
-  }, [directPracticeContext, learnerId]);
+  }, [directEntryKey, directPracticeContext, learnerId]);
 
   const exercises = useMemo(
     () => [...importedExercises, ...EXERCISES],
@@ -1148,12 +1163,16 @@ function PracticeContent() {
     invalidateActiveOperation();
     setDirectStructureSet(null);
     setActiveStructureExercise(null);
+    setDirectEntryDismissed(true);
     setView("start");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  const isDirectStructureView =
-    view === "structure" || (directPracticeContext !== null && !directEntryDismissed);
+  const isDirectStructureView = shouldShowDirectStructureView({
+    view,
+    hasDirectContext: directPracticeContext !== null,
+    directEntryDismissed,
+  });
 
   if (isDirectStructureView) {
     if (directStructureSet) {
@@ -1541,8 +1560,7 @@ function PracticeContent() {
         <button
           type="button"
           onClick={() => {
-            invalidateActiveOperation();
-            setView("start");
+            returnToPracticeStart();
           }}
           className="app-button-secondary inline-flex h-10 w-10 items-center justify-center rounded-xl transition hover:bg-slate-50 dark:hover:bg-zinc-800"
           aria-label="返回练习选择"
@@ -2118,6 +2136,12 @@ function ContextStructureItem({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const explainOnly = item.payload.judge_mode === "explain_only";
+  const canAdvance = canAdvanceContextStructureItem({
+    hasNext,
+    explainOnly,
+    graded: result?.graded === true,
+  });
+  const isComplete = !hasNext && (explainOnly || result?.graded === true);
 
   async function submit() {
     if (explainOnly) return;
@@ -2212,16 +2236,16 @@ function ContextStructureItem({
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} /> : <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
           {busy ? "检查中" : "提交检查"}
         </button>
-        {result?.graded && hasNext ? (
+        {canAdvance ? (
           <button
             type="button"
             onClick={onNext}
             className="app-button-secondary rounded-xl px-4 py-2.5 text-xs font-semibold"
           >
-            下一道核心结构题
+            {explainOnly ? "继续下一道核心结构题" : "下一道核心结构题"}
           </button>
         ) : null}
-        {result?.graded && !hasNext ? (
+        {isComplete ? (
           <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
             本组核心结构练习已完成。
           </span>
