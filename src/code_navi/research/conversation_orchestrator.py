@@ -212,7 +212,7 @@ _HESITATION_PATTERNS = [
 ]
 
 _DIRECTION_CHANGE_PATTERNS = [
-    r"换个?方向",
+    r"换(?:个)?(?:研究)?方向",
     r"重新选方向",
     r"换做别的",
     r"做别的方向",
@@ -286,6 +286,10 @@ def detect_confirmation_intent(message: str) -> bool:
     for pattern in _HESITATION_PATTERNS:
         if re.search(pattern, message):
             return False
+    # Words such as "无法确认", "待确认", or "请确认" describe uncertainty or
+    # request clarification; they must not be interpreted as the user's approval.
+    if re.search(r"(?:无法|不能|未|尚未|待|需|需要|请|如何|什么)[^。！？!?\n]{0,8}确认", message):
+        return False
     for pattern in _CONFIRMATION_PATTERNS:
         if re.search(pattern, message):
             return True
@@ -322,6 +326,9 @@ def detect_passive_tool_intent(message: str) -> list[str]:
 _OPENING_GREETING_PATTERNS = [
     r"^(?:你好|您好|hello|hi|嗨|哈喽|姜姜你好|姜姜好|你好姜姜|初次见面)"
     r"(?:[，,\s]*.*?(?:姜姜|开始科研|进入科研|开启科研|我想开始做科研|我想做科研|想开始做科研|做科研|科研|开始|进入))?[!！~。.\s]*$",
+    r"^(?:你好|您好|hello|hi|嗨|哈喽|姜姜你好|姜姜好)[，,\s]*"
+    r"[^。！？!?\n]{0,80}(?:回来|再次|继续)(?:做|进入|开始)?(?:科研|研究)"
+    r"[^。！？!?\n]*[!！~。.\s]*$",
     r"^(?:开始|开始科研|进入科研|开启科研|进入|我想开始做科研|我想做科研|想开始做科研)[!！~。.\s]*$",
 ]
 
@@ -780,11 +787,18 @@ class ResearchConversationOrchestrator:
     ) -> LearningContextState:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         now_dt = datetime.now(UTC)
+        previous_ctx = state_model.learning_context or {}
         ctx = {
             "learned_content": request.learned_content,
             "learning_progress": request.learning_progress,
             "updated_at": now_dt.isoformat(),
         }
+        if previous_ctx and (
+            previous_ctx.get("learned_content") != request.learned_content
+            or previous_ctx.get("learning_progress") != request.learning_progress
+        ):
+            ctx["previous_learned_content"] = previous_ctx.get("learned_content")
+            ctx["previous_learning_progress"] = previous_ctx.get("learning_progress")
         state_model.learning_context = ctx
         db.commit()
         return LearningContextState(
@@ -1208,7 +1222,15 @@ class ResearchConversationOrchestrator:
 
         reply_content = outcome.reply_text.strip()
         template_name = prompt_data.get("template_name", "")
-        if template_name in ("welcome_and_bridge", "need_clarification", "stage_transition"):
+        if template_name in {
+            "welcome_and_bridge",
+            "need_clarification",
+            "stage_transition",
+            "search_guidance",
+            "paper_intro",
+            "experiment_design",
+            "result_analysis",
+        }:
             # Deterministically ensure source_scope is the very first paragraph.
             # Do NOT use a conditional guard — even if the model self-inserted a scope phrase
             # somewhere in the middle, that does NOT protect the first paragraph.
@@ -1311,6 +1333,9 @@ class ResearchConversationOrchestrator:
     ) -> dict[str, str]:
         """Select and assemble one of the 8 Prompt templates with confirmed context."""
         learning_ctx = self.get_learning_context(conversation_id, db, owned_ids=owned_ids)
+        raw_learning_ctx = self.get_state_model(
+            conversation_id, db, owned_ids=owned_ids
+        ).learning_context or {}
         cards_resp = self.get_direction_cards(conversation_id, db, owned_ids=owned_ids)
         profiles_resp = self.get_learner_profiles(conversation_id, db, owned_ids=owned_ids)
         papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
@@ -1326,9 +1351,23 @@ class ResearchConversationOrchestrator:
             elif not subtasks.get("need_defined") and (
                 not user_message or is_opening_greeting_intent(user_message)
             ):
+                extra_note = None
+                previous_content = raw_learning_ctx.get("previous_learned_content")
+                previous_progress = raw_learning_ctx.get("previous_learning_progress")
+                if previous_content is not None or previous_progress is not None:
+                    extra_note = (
+                        "新增学习内容（与上次输入对比，来源为学习端记录）：\n"
+                        f"- 上次已学内容：{previous_content or '暂无'}\n"
+                        f"- 本次已学内容：{learning_ctx.learned_content or '暂无'}\n"
+                        f"- 上次进度记录：{previous_progress or '暂无'}\n"
+                        f"- 本次进度记录：{learning_ctx.learning_progress or '暂无'}\n"
+                        "请只说明新增记录与当前研究方向的可能关联，并标注仍需用户确认；"
+                        "不得据此推断掌握度、实验能力或研究结论。"
+                    )
                 tmpl = build_welcome_prompt(
                     learning_context=learning_ctx,
                     direction_cards=cards_resp.cards,
+                    extra_note=extra_note,
                 )
             else:
                 tmpl = build_need_clarification_prompt(

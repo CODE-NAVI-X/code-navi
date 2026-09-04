@@ -78,6 +78,7 @@ def test_build_profile_and_plan_prompt() -> None:
     assert "RTX 4060" in prompt["context"]
     assert "8GB 显存" in prompt["context"]
     assert "计划" in prompt["task"]
+    assert "不得保证设备一定可行" in prompt["rules"]
 
 
 def test_build_search_guidance_prompt() -> None:
@@ -114,6 +115,8 @@ def test_build_paper_intro_prompt() -> None:
     prompt = build_paper_intro_prompt(paper=paper, profile=profile, research_goal="复现 GCN")
     assert "Semi-Supervised Classification with Graph Convolutional Networks" in prompt["context"]
     assert "研究问题" in prompt["rules"] and "创新点" in prompt["rules"]
+    assert "不得评价用户的能力" in prompt["rules"]
+    assert "不得保证设备可行" in prompt["rules"]
 
 
 def test_build_experiment_design_prompt() -> None:
@@ -942,3 +945,46 @@ def test_get_source_scope_prefix_dispatch() -> None:
         == RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION
     )
     assert get_source_scope_prefix("stage_transition") == RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
+    assert "已确认的研究方向" in get_source_scope_prefix("paper_intro")
+    assert "尚未执行正式检索" in get_source_scope_prefix("experiment_design")
+
+
+def test_validator_rejects_absolute_hardware_feasibility_claim() -> None:
+    text = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "你的 8GB 显存和每周 5 小时投入其实完全够用，直接训练即可。"
+    )
+    is_valid, reason = validate_jiangjiang_output(text)
+    assert not is_valid
+    assert reason is not None
+
+    qualified_but_unverified = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "RTX 4060 Laptop 8GB 显存做小规模验证是够用的。"
+    )
+    is_valid_qualified, reason_qualified = validate_jiangjiang_output(qualified_but_unverified)
+    assert not is_valid_qualified
+    assert reason_qualified is not None
+
+    contextual_absolute = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "这个条件不算宽裕，但绝对可以做小规模验证。"
+    )
+    is_valid_contextual, reason_contextual = validate_jiangjiang_output(contextual_absolute)
+    assert not is_valid_contextual
+    assert reason_contextual is not None
+
+
+def test_validator_allows_process_validation_language_without_reproduction_claim() -> None:
+    safe_cases = [
+        "目标不是‘复现成功’，而是‘运行验证通过’，即代码能跑、损失能下降。",
+        "配置一个小型基线模型，跑通训练与评估流程。",
+        "我不会替你保证任何‘完成’或‘跑通’，所有结论都要以你实际运行验证为准。",
+    ]
+    for text in safe_cases:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"Process-validation language was falsely rejected: {text} ({reason})"
+        assert reason is None

@@ -12,8 +12,10 @@ from code_navi.research.conversation_orchestrator import (
     detect_confirmation_intent,
     detect_direction_change_intent,
     is_history_inquiry,
+    is_opening_greeting_intent,
 )
 from code_navi.research.conversation_orchestrator_schemas import (
+    LearningContextInput,
     SendOrchestratorMessageRequest,
 )
 from code_navi.research.models import (
@@ -49,10 +51,13 @@ def test_intent_detection_confirmation() -> None:
     assert not detect_confirmation_intent("不太对，需要改改")
     assert not detect_confirmation_intent("等等，不确定")
     assert not detect_confirmation_intent("好像不行")
+    assert not detect_confirmation_intent("无法确认的内容请标记为待核验")
+    assert not detect_confirmation_intent("请确认需要哪些检索词")
 
 
 def test_intent_detection_direction_change() -> None:
     assert detect_direction_change_intent("我想换个方向")
+    assert detect_direction_change_intent("我想换个研究方向，改做图对比学习")
     assert detect_direction_change_intent("重新选方向")
     assert detect_direction_change_intent("换方向做别的")
 
@@ -61,6 +66,47 @@ def test_intent_detection_direction_change() -> None:
     assert not detect_direction_change_intent("我们刚才讨论了哪个方向？")
     assert is_history_inquiry("之前说了什么？")
     assert is_history_inquiry("我们刚才讨论了哪个方向？")
+
+
+def test_reentry_learning_greeting_uses_welcome_intent() -> None:
+    assert is_opening_greeting_intent(
+        "你好姜姜，我回来继续做科研了，请结合我最近新增的学习内容帮我看看下一步。"
+    )
+
+
+def test_reentry_prompt_exposes_learning_delta(db_session) -> None:
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-learning-delta"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+    orchestrator.update_learning_context(
+        conv_id,
+        LearningContextInput(
+            learned_content="图卷积网络(GCN)数学推导",
+            learning_progress="完成理论推导",
+        ),
+        db_session,
+    )
+    orchestrator.update_learning_context(
+        conv_id,
+        LearningContextInput(
+            learned_content="图卷积网络(GCN)数学推导；GraphSAGE 邻居采样",
+            learning_progress="新增学习 GraphSAGE 邻居采样",
+        ),
+        db_session,
+    )
+    prompt = orchestrator._select_prompt_template(
+        conv_id,
+        current_stage="research_need",
+        subtasks={"need_defined": False},
+        user_message="你好姜姜，我回来继续做科研了，请结合我最近新增的学习内容帮我看看下一步。",
+        is_confirmed=False,
+        db=db_session,
+        owned_ids=None,
+    )
+    assert prompt["template_name"] == "welcome_and_bridge"
+    assert "新增学习内容" in prompt["user_prompt"]
+    assert "GraphSAGE 邻居采样" in prompt["user_prompt"]
 
 
 class FakeOrchestratorLlmGenerator:
