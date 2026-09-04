@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from code_navi.learning.models import NotebookItemModel
+from code_navi.learning_profile.models import QuizAttemptModel
+from code_navi.learning_profile.service import ProfileService
 from code_navi.research.conversation_schemas import ResearchConversationResponse
 from code_navi.research.conversation_service import ResearchConversationService
 
@@ -17,6 +19,7 @@ from .schemas import (
     ContextSourceObject,
     ContextTransferResponse,
     CreateContextTransferRequest,
+    LearningMasterySnapshot,
     SelectedContextContent,
     UpdateContextTransferRequest,
 )
@@ -155,6 +158,9 @@ class ContextTransferService:
             topic=request.topic,
             summary=request.summary,
             selected_content=request.selected_content,
+            learning_mastery_snapshot=self._build_mastery_snapshot(
+                transfer, request, db, owned_ids=owned_ids
+            ),
             confirmed_at=confirmed_at,
         )
         try:
@@ -177,6 +183,59 @@ class ContextTransferService:
             db.rollback()
             raise
         return conversation
+
+    @staticmethod
+    def _build_mastery_snapshot(
+        transfer: ContextTransferModel,
+        request: ConfirmContextTransferRequest,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> LearningMasterySnapshot | None:
+        """Rule-generate the §3.2 ``learning_mastery_snapshot`` when switched on.
+
+        The switch is the only client input: strong/weak lists are aggregated
+        from the source learning portrait (``learning_profile`` strengths /
+        weaknesses, capped at 5 each — the same rule as portraits
+        ``_aggregate_learning``), never from client values.
+
+        Snapshot resolution path: the transfer's ``source_scope_id`` is the
+        learning ``session_id``; ``quiz_attempts`` rows written by that session
+        carry the ``profile_id`` keying the cross-session portrait.  When the
+        switch is off, no profile is reachable from the session, or the portrait
+        has no sufficient mastery sample (insufficient_sample), the snapshot is
+        omitted (``None``) — readers treat that as the empty state.
+
+        Semantic boundary (contract §3.2): general knowledge content never
+        becomes research questions / methods / data / conclusions by itself —
+        the snapshot is only a capability-boundary hint for downstream guidance.
+        """
+        if not request.include_mastery_snapshot:
+            return None
+
+        attempt = (
+            db.query(QuizAttemptModel.profile_id)
+            .filter(
+                QuizAttemptModel.session_id == transfer.source_scope_id,
+                QuizAttemptModel.profile_id.isnot(None),
+            )
+            .order_by(QuizAttemptModel.created_at.asc())
+            .first()
+        )
+        if attempt is None or not attempt.profile_id:
+            return None
+        try:
+            profile = ProfileService().get_profile(
+                attempt.profile_id, db, owned_ids=owned_ids
+            )
+        except LookupError:
+            return None
+        if not any(item.status == "sufficient" for item in profile.mastery):
+            return None
+        return LearningMasterySnapshot(
+            strong=profile.strengths[:5],
+            weak=profile.weaknesses[:5],
+        )
 
     @staticmethod
     def _get_model(

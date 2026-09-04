@@ -41,6 +41,11 @@ import {
   submitPython,
 } from "@/lib/api/compiler";
 import { getLocalProfileId } from "@/lib/api/workspaces";
+import {
+  generatePracticeSetWithContext,
+  type PracticeGatewayItem,
+} from "@/lib/api/practice";
+import type { PracticeContextV1 } from "@/lib/practice-context";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 
@@ -243,6 +248,62 @@ function generatedProblemToExercise(
   };
 }
 
+/** Map a §1.1 gateway item (coding_problem payload) onto the page exercise shape. */
+function gatewayItemToExercise(
+  item: PracticeGatewayItem,
+  batchId: string,
+): PracticeExercise | null {
+  const itemPayload = item.payload ?? {};
+  const title = typeof itemPayload.title === "string" ? itemPayload.title : "";
+  const description =
+    typeof itemPayload.description === "string" ? itemPayload.description : "";
+  if (!title || !description) return null;
+  const difficulty: Difficulty =
+    itemPayload.difficulty === "easy" ||
+    itemPayload.difficulty === "medium" ||
+    itemPayload.difficulty === "hard"
+      ? itemPayload.difficulty
+      : "medium";
+  const tags = Array.isArray(itemPayload.tags)
+    ? itemPayload.tags.filter((tag): tag is string => typeof tag === "string")
+    : item.knowledge_points;
+  const sampleTests = Array.isArray(itemPayload.sampleTests)
+    ? itemPayload.sampleTests
+        .map((test) => ({
+          stdin: String(
+            (test as { input?: unknown; stdin?: unknown })?.input ??
+              (test as { stdin?: unknown })?.stdin ??
+              "",
+          ),
+          expectedOutput: String(
+            (test as { output?: unknown; expectedOutput?: unknown })?.output ??
+              (test as { expectedOutput?: unknown })?.expectedOutput ??
+              "",
+          ),
+        }))
+        .filter((test) => test.stdin || test.expectedOutput)
+    : [];
+  return {
+    id: `${batchId}-${item.item_id}`,
+    title,
+    summary: `${tags.join(" · ") || "综合"} · 上下文生成`,
+    difficulty,
+    tags: ["生成", ...tags],
+    description,
+    inputHint:
+      typeof itemPayload.inputHint === "string" ? itemPayload.inputHint : "按题目要求填写",
+    outputHint:
+      typeof itemPayload.outputHint === "string" ? itemPayload.outputHint : "按题目逻辑输出",
+    source: typeof itemPayload.starterCode === "string" ? itemPayload.starterCode : "",
+    stdin: sampleTests[0]?.stdin ?? "",
+    origin: "generated_problem",
+    judgeable: itemPayload.judgeable === true,
+    orderReason:
+      typeof itemPayload.generationReason === "string" ? itemPayload.generationReason : undefined,
+    sampleTests,
+  };
+}
+
 function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -279,6 +340,8 @@ function PracticeContent() {
   const freeRunLaunchKey = `${launchContextKey}:free_run`;
   const problemSubmitLaunchKey = `${launchContextKey}:problem_submit`;
   const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
+  const practiceContext: PracticeContextV1 | null =
+    payload?.practiceContext ?? persistedPayload?.practiceContext ?? null;
 
   const [view, setView] = useState<"start" | "workspace">("start");
   const [query, setQuery] = useState("");
@@ -294,11 +357,17 @@ function PracticeContent() {
   const [problemImportPreview, setProblemImportPreview] = useState<ImportedCompilerProblem[]>([]);
   const [problemImportBusy, setProblemImportBusy] = useState(false);
   const [problemImportMessage, setProblemImportMessage] = useState<string | null>(null);
-  const [setPrompt, setSetPrompt] = useState("围绕当前知识点生成 5 道递进练习");
+  const [setPrompt, setSetPrompt] = useState(() =>
+    // Prefill from a handed-over practice-context.v1: the objective is the
+    // user's own wording, not an inference.
+    practiceContext?.objective?.trim() ? practiceContext.objective : "围绕当前知识点生成 5 道递进练习",
+  );
   const [setTargetCount, setSetTargetCount] = useState(5);
   const [setDifficultyLow, setSetDifficultyLow] = useState<"easy" | "medium" | "hard">("easy");
   const [setDifficultyHigh, setSetDifficultyHigh] = useState<"easy" | "medium" | "hard">("hard");
-  const [setKnowledgeTags, setSetKnowledgeTags] = useState("");
+  const [setKnowledgeTags, setSetKnowledgeTags] = useState(() =>
+    practiceContext ? practiceContext.knowledge_points.map((point) => point.name).join(", ") : "",
+  );
   const [setIncludeUploaded, setSetIncludeUploaded] = useState(true);
   const [setBusy, setSetBusy] = useState(false);
   const [setMessage, setSetMessage] = useState<string | null>(null);
@@ -347,8 +416,7 @@ function PracticeContent() {
 
   useEffect(() => {
     let active = true;
-    const launchRequests: Array<{ mode: PracticeLaunchMode; key: string }> = [
-      { mode: "free_run", key: freeRunLaunchKey },
+    const launchRequests: Array<{ mode: PracticeLaunchMode; key: string }> = [      { mode: "free_run", key: freeRunLaunchKey },
       { mode: "problem_submit", key: problemSubmitLaunchKey },
     ];
     for (const { mode, key } of launchRequests) {
@@ -494,6 +562,39 @@ function PracticeContent() {
     setSetBusy(true);
     setSetMessage(null);
     try {
+      // §3.1 boundary: when a practice-context.v1 was handed over, its body is
+      // submitted through POST /api/v1/practice/sets/generate's `context` field.
+      // If the gateway yields nothing usable, generation falls back to the
+      // legacy compiler path — the page never blocks or errors on it.
+      if (practiceContext) {
+        const gatewayResponse = await generatePracticeSetWithContext({
+          context: practiceContext,
+          count: setTargetCount,
+        });
+        const batchId =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? `set-${crypto.randomUUID()}`
+            : `set-${Date.now()}`;
+        const generated = gatewayResponse.items
+          .map((item) => gatewayItemToExercise(item, batchId))
+          .filter((exercise): exercise is PracticeExercise => exercise !== null);
+        if (generated.length > 0) {
+          setImportedExercises((items) => [
+            ...generated,
+            ...items.filter((item) => !generated.some((next) => next.id === item.id)),
+          ]);
+          setSelectedExerciseId(generated[0].id);
+          setQuery("");
+          setDifficulty("all");
+          setSetMessage(
+            `已按学习上下文生成 ${generated.length} 道练习（${
+              gatewayResponse.generation_mode === "mock" ? "Mock 闭环" : gatewayResponse.generation_mode
+            }）；覆盖：${gatewayResponse.coverage.join("、") || "综合"}`,
+          );
+          return;
+        }
+        setSetMessage("上下文生成未返回可练题目，已改用通用生成。");
+      }
       const response = await generateProblemSet({
         prompt: setPrompt,
         learnerId,
@@ -831,7 +932,7 @@ function PracticeContent() {
               </h1>
               <div className="mt-4 flex flex-wrap items-center gap-2 text-sm leading-6 text-slate-500 dark:text-zinc-400">
                 <p>{knowledgeName ? <>当前主题：<strong className="text-slate-700 dark:text-zinc-200">{knowledgeName}</strong>。选择一道题继续巩固。</> : "自由练习：选择一道题、上传自己的题目，或者带上 Python 文件开始。"}</p>
-                {knowledgeName ? (
+                {knowledgeName || practiceContext ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -845,6 +946,20 @@ function PracticeContent() {
                   </button>
                 ) : null}
               </div>
+              {practiceContext ? (
+                <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+                  <p className="font-semibold text-slate-800 dark:text-zinc-100">
+                    已带入学习上下文（practice-context.v1）
+                  </p>
+                  <p className="mt-1">
+                    知识点：{practiceContext.knowledge_points.map((point) => point.name).join("、")}
+                  </p>
+                  <p className="mt-1">学习目标：{practiceContext.objective}</p>
+                  {practiceContext.notes_summary ? (
+                    <p className="mt-1">笔记摘要：{practiceContext.notes_summary}</p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <div className="app-card mt-7 grid min-h-17 overflow-hidden rounded-2xl md:grid-cols-[minmax(0,1fr)_160px]">
