@@ -35,7 +35,9 @@ import {
   fetchStructureExercises,
   GeneratedPracticeProblem,
   analyzeProblemImport,
+  askStructureTutor,
   createPracticeLaunch,
+  evaluateStructureExercise,
   evaluatePythonRun,
   executePython,
   fetchCompilerRecords,
@@ -1817,6 +1819,11 @@ function StructureExerciseWorkspace({
   const [result, setResult] = useState<CompilerStructureSubmissionResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiFeedback, setAiFeedback] = useState<CompilerAiFeedback | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
+  const [chat, setChat] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [chatQuestion, setChatQuestion] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
   const currentLevel = levels[levelIndex] ?? null;
   const options = currentLevel?.options ?? exercise.options;
   const currentAnswer = currentLevel ? levelAnswers[levelIndex] ?? [] : sequenceAnswer;
@@ -1863,10 +1870,58 @@ function StructureExerciseWorkspace({
         level: currentLevel?.level,
       });
       setResult(response);
+      setAiFeedback(null);
+      setEvaluating(true);
+      try {
+        const evaluated = await evaluateStructureExercise({
+          exerciseId: exercise.id,
+          answer: isSequence ? currentAnswer : source,
+          level: currentLevel?.level,
+        });
+        setAiFeedback(evaluated.ai);
+      } catch (evaluateError) {
+        setAiFeedback({
+          status: "unavailable",
+          message:
+            evaluateError instanceof Error ? evaluateError.message : "AI 评析暂不可用。",
+        } as CompilerAiFeedback);
+      } finally {
+        setEvaluating(false);
+      }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "结构练习提交失败。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function askStructureQuestion() {
+    const question = chatQuestion.trim();
+    if (!question) return;
+    setChat((items) => [...items, { role: "user", content: question }]);
+    setChatQuestion("");
+    setChatBusy(true);
+    try {
+      const response = await askStructureTutor({
+        exerciseId: exercise.id,
+        question,
+        history: chat,
+      });
+      setChat((items) => [
+        ...items,
+        { role: "assistant", content: response.ai.reply },
+      ]);
+    } catch (chatError) {
+      setChat((items) => [
+        ...items,
+        {
+          role: "assistant",
+          content:
+            chatError instanceof Error ? chatError.message : "AI 引导暂不可用。",
+        },
+      ]);
+    } finally {
+      setChatBusy(false);
     }
   }
 
@@ -2056,6 +2111,61 @@ function StructureExerciseWorkspace({
               ) : null}
             </div>
           ) : null}
+
+          {evaluating ? (
+            <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+              正在生成结构评析…
+            </p>
+          ) : aiFeedback ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-zinc-700 dark:bg-zinc-900">
+              <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                AI 结构评析
+              </p>
+              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-zinc-300">
+                {aiFeedback.explanation ?? aiFeedback.message ?? "暂无 AI 反馈。"}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+            <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+              AI 追问
+            </p>
+            {chat.length > 0 ? (
+              <div className="mt-2 space-y-2">
+                {chat.map((message, index) => (
+                  <p
+                    key={`${message.role}-${index}`}
+                    className="rounded-lg px-3 py-2 text-xs leading-5 text-slate-600 dark:text-zinc-300"
+                  >
+                    <strong>{message.role === "user" ? "你" : "AI"}：</strong>
+                    {message.content}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            <form
+              className="mt-3 flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void askStructureQuestion();
+              }}
+            >
+              <input
+                value={chatQuestion}
+                onChange={(event) => setChatQuestion(event.target.value)}
+                placeholder="对这个结构题还有什么疑问？"
+                className="app-input min-w-0 flex-1 rounded-xl px-3 py-2 text-xs"
+              />
+              <button
+                type="submit"
+                disabled={chatBusy || !chatQuestion.trim()}
+                className="app-button-secondary rounded-xl px-3 py-2 text-xs font-semibold disabled:opacity-40"
+              >
+                {chatBusy ? "思考中" : "提问"}
+              </button>
+            </form>
+          </div>
         </section>
       </div>
     </main>
