@@ -208,6 +208,19 @@ CodeFillSpec {
 - `code_fill` **不做容器执行**（评审要求），Piston 不参与本模块；
 - AI 解析/评语是独立建议，永不改写判分事实（沿用 evaluate/guidance 原则）。
 
+### 1.8 项目代码上传与导航（Issue #82）
+
+`POST /api/v1/practice/projects` 接收 JSON `{name, files[]}`，每个文件为
+`{path, content_base64}`。服务端仅接受 `.py`/`.md`，排除 `data` 目录、路径穿越、
+数据集痕迹，并限制项目总大小 ≤2MB、文件数 ≤50。响应返回 `project_id`、项目文件树
+（路径、类型、大小、Python 符号）及统计信息；原始文件仅在项目 owner 隔离的归档中使用，
+不得跨 owner 读取。
+
+`GET /api/v1/practice/projects/{project_id}` 返回同一项目的文件树；
+`GET /api/v1/practice/projects/{project_id}/files/{path}` 返回允许文件的 UTF-8 文本和
+规则解析出的符号。项目不存在、越权或文件不存在统一返回 404。该能力只提供规则解析与
+代码读取，不调用模型、不执行上传代码，AI 讲解和挖空出题另见后续 Issue。
+
 ## 2. 科研引导 `/api/v1/research/conversations/{conversation_id}/...`
 
 全部端点挂现有 research router，沿用会话 404、准备度 409 语义。破坏性字段变更一律 additive：新增字段 + 旧字段投影保留，前端迁移完成后下线旧字段。两处例外：§2.5 论文蓝图（唯一非 additive 变更，豁免理由见该节）；§2.6 复现评估（已落库，改用 payload `schema_version` 版本化共存）。

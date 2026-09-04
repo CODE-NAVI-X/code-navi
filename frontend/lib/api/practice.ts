@@ -40,6 +40,35 @@ export interface PracticeGatewaySetResponse {
   effective_topic: string | null;
 }
 
+export interface CodeProjectSymbol {
+  kind: "class" | "function" | "method";
+  name: string;
+  line: number;
+  signature: string;
+  docstring_summary: string;
+}
+
+export interface CodeProjectFile {
+  path: string;
+  kind: "python" | "markdown";
+  size: number;
+  symbols: CodeProjectSymbol[];
+}
+
+export interface CodeProject {
+  project_id: string;
+  name: string;
+  files: CodeProjectFile[];
+  metrics: Record<string, number>;
+}
+
+export interface CodeProjectFileContent {
+  project_id: string;
+  path: string;
+  content: string;
+  symbols: CodeProjectSymbol[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
@@ -96,4 +125,28 @@ export async function generatePracticeSetWithContext(payload: {
       context: payload.context,
     }),
   });
+}
+
+export async function uploadCodeProject(payload: {
+  name: string;
+  files: Array<{ path: string; content_base64: string }>;
+}): Promise<CodeProject> {
+  return request<CodeProject>("/api/v1/practice/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCodeProject(projectId: string): Promise<CodeProject> {
+  return request<CodeProject>(`/api/v1/practice/projects/${encodeURIComponent(projectId)}`);
+}
+
+export async function fetchCodeProjectFile(
+  projectId: string,
+  path: string,
+): Promise<CodeProjectFileContent> {
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return request<CodeProjectFileContent>(
+    `/api/v1/practice/projects/${encodeURIComponent(projectId)}/files/${encodedPath}`,
+  );
 }
