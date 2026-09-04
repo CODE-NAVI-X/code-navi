@@ -296,6 +296,52 @@ function generatedProblemToExercise(
   };
 }
 
+function gatewayItemToExercise(
+  item: PracticeGatewayItem,
+  batchId: string,
+): PracticeExercise | null {
+  if (item.item_kind !== "coding_problem") return null;
+  const payload = item.payload;
+  const title = typeof payload.title === "string" ? payload.title : "";
+  const description = typeof payload.description === "string" ? payload.description : "";
+  if (!title || !description) return null;
+  const difficulty: Difficulty =
+    payload.difficulty === "easy" || payload.difficulty === "medium" || payload.difficulty === "hard"
+      ? payload.difficulty
+      : "medium";
+  const tags = Array.isArray(payload.tags)
+    ? payload.tags.filter((tag): tag is string => typeof tag === "string")
+    : item.knowledge_points;
+  const sampleTests = Array.isArray(payload.sampleTests)
+    ? payload.sampleTests
+        .map((test) => {
+          const value = isRecord(test) ? test : {};
+          return {
+            stdin: String(value.input ?? value.stdin ?? ""),
+            expectedOutput: String(value.output ?? value.expectedOutput ?? ""),
+          };
+        })
+        .filter((test) => test.stdin || test.expectedOutput)
+    : [];
+  return {
+    id: `${batchId}-${item.item_id}`,
+    title,
+    summary: `${tags.join(" / ") || "综合"} / 学习数据生成`,
+    difficulty,
+    tags: ["生成", ...tags],
+    description,
+    inputHint: typeof payload.inputHint === "string" ? payload.inputHint : "按题目要求填写",
+    outputHint: typeof payload.outputHint === "string" ? payload.outputHint : "按题目逻辑输出",
+    source: typeof payload.starterCode === "string" ? payload.starterCode : "",
+    stdin: sampleTests[0]?.stdin ?? "",
+    origin: "generated_problem",
+    judgeable: payload.judgeable === true,
+    orderReason:
+      typeof payload.generationReason === "string" ? payload.generationReason : undefined,
+    sampleTests,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
