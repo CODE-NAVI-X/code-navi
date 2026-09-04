@@ -10,6 +10,9 @@ from code_navi.research.conversation_orchestrator_schemas import (
 )
 from code_navi.research.conversation_prompt_templates import (
     JIANGJIANG_SYSTEM_PERSONA,
+    RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION,
+    RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION,
+    RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME,
     build_experiment_design_prompt,
     build_need_clarification_prompt,
     build_paper_intro_prompt,
@@ -18,6 +21,7 @@ from code_navi.research.conversation_prompt_templates import (
     build_search_guidance_prompt,
     build_stage_transition_prompt,
     build_welcome_prompt,
+    get_source_scope_prefix,
     validate_jiangjiang_output,
 )
 
@@ -670,3 +674,271 @@ def test_validate_jiangjiang_output_p1_reproduction_boundary_cases() -> None:
         )
         assert not is_valid_av, f"Affirmative completion text was falsely accepted: {text}"
         assert reason_av is not None
+
+    # S1-Target-C: Strict learning record mode evaluations
+    strict_violations = [
+        "你当前能力够得着这个方向。",
+        "又往前迈了一步呢。",
+        "你在归纳式学习方向开始有意识地拓展了。",
+        "这个选择很有科研潜力。",
+        "你的基础足以开始深入研究。",
+        "你已经形成了系统的理解。",
+    ]
+    for text in strict_violations:
+        is_valid_sv, reason_sv = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+            learning_record_mode=True,
+        )
+        assert not is_valid_sv, f"Strict mode falsely accepted: {text}"
+        assert reason_sv is not None
+
+    strict_compliant_cases = [
+        "学习端记录显示：已学习 GCN 数学推导与节点分类。",
+        "当前进度记录为：新增学习 GraphSAGE 邻居采样与大规模图训练。",
+        (
+            "学习端记录显示：已学习 GCN 数学推导与节点分类；"
+            "当前进度记录为完成理论推导，准备开展真实实验。"
+        ),
+        "这些学习记录不代表已掌握或具备研究能力，实际理解与代码经验仍需你确认。",
+        "你提到想把 GraphSAGE 应用到研究中。",
+        "这些学习记录不等于实践经验、掌握程度或研究能力，仍需你确认。",
+        "如果你愿意，可以先确认是否运行过 GraphSAGE 的训练流程。",
+    ]
+    for text in strict_compliant_cases:
+        is_valid_sc, reason_sc = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+            learning_record_mode=True,
+        )
+        assert is_valid_sc, f"Strict mode falsely rejected: {text} ({reason_sc})"
+        assert reason_sc is None
+
+    # Red Phase: Natural language source_scope boundaries
+    # Technical statements without source_scope in learning record mode must be rejected
+    technical_without_scope = [
+        "GraphSAGE 可以泛化到新节点，邻居采样能够降低大规模图训练成本。",
+        "下面是为你准备的 5 个研究方向卡片：卡片一：图拓扑结构节点分类。",
+        "探索自注意力在图邻居聚合中的作用与异质图泛化性。",
+    ]
+    for text in technical_without_scope:
+        is_valid_tws, reason_tws = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+            learning_record_mode=True,
+        )
+        assert not is_valid_tws, (
+            f"Technical output without source_scope was falsely accepted: {text}"
+        )
+        assert reason_tws is not None
+        assert "source_scope" in reason_tws
+
+    # Technical statements with valid natural language source_scope must pass
+    valid_scope_statement = (
+        "说明：下面是基于学习记录生成的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "下面是为你准备的 5 个研究方向卡片：卡片一：图拓扑结构节点分类。"
+    )
+    is_valid_vss, reason_vss = validate_jiangjiang_output(
+        valid_scope_statement,
+        evidence_context=learning_evidence,
+        learning_record_mode=True,
+    )
+    assert is_valid_vss, (
+        f"Technical output with valid source_scope was falsely rejected: {reason_vss}"
+    )
+    assert reason_vss is None
+
+
+def test_validate_jiangjiang_output_stage_transition_source_scope() -> None:
+    """Stage transition with technical overview/equipment impact requires natural source_scope."""
+    # Without source_scope: MUST FAIL even if learning_record_mode=False
+    invalid_stage_transition_text = (
+        "# 阶段跃迁确认 (＾▽＾)\n\n"
+        "收到你的确认，我们正式从「研究需求确定」进入「研究计划生成」阶段。\n\n"
+        "**已完成的工作**\n"
+        "- 确定核心研究主题：图卷积神经网络在生物分子图性质预测上的应用\n"
+        "- 明确研究问题框架：分子图表示 + 图卷积消息传递 + 整图读出 + 性质预测\n\n"
+        "做图神经网络训练，设备配置直接影响实验方案设计。\n\n"
+        "**问题一：你的计算设备是什么？**\n"
+        "请如实填写你的 GPU 型号与显存 (｡･ω･｡)"
+    )
+    is_valid, reason = validate_jiangjiang_output(
+        invalid_stage_transition_text,
+        learning_record_mode=False,
+    )
+    assert not is_valid, (
+        "Stage transition with technical overview without source_scope must be rejected"
+    )
+    assert reason is not None
+    assert "source_scope" in reason
+
+    # With valid natural language source_scope: MUST PASS
+    valid_stage_transition_text = (
+        "# 阶段跃迁确认 (＾▽＾)\n\n"
+        "收到你的确认，我们正式从「研究需求确定」进入「研究计划生成」阶段。\n\n"
+        "说明：以下计划框架基于你刚确认的研究方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节、设备需求和实验结论仍需在你确认后核验。\n\n"
+        "**已完成的工作**\n"
+        "- 确定核心研究主题：图卷积神经网络在生物分子图性质预测上的应用\n"
+        "- 明确研究问题框架：分子图表示 + 图卷积消息传递 + 整图读出 + 性质预测\n\n"
+        "做图神经网络训练，设备配置直接影响实验方案设计。\n\n"
+        "**问题一：你的计算设备是什么？**\n"
+        "请如实填写你的 GPU 型号与显存 (｡･ω･｡)"
+    )
+    is_valid_ok, reason_ok = validate_jiangjiang_output(
+        valid_stage_transition_text,
+        learning_record_mode=False,
+    )
+    assert is_valid_ok, (
+        f"Stage transition with valid source_scope was falsely rejected: {reason_ok}"
+    )
+    assert reason_ok is None
+
+
+def test_validate_jiangjiang_output_source_scope_position() -> None:
+    """Source scope must protect the entire text, occurring before any technical claims."""
+    # Text where technical claims appear first, scope appears later:
+    # Uses terms from _TECHNICAL_TOPIC_PATTERN: 分子图表示, 消息传递机制, 整图读出, 性质预测头
+    scope_in_middle_text = (
+        "# 收到，方向锁定 (＾▽＾)\n\n"
+        "核心流程：分子图表示 → 消息传递机制 → 整图读出 → 性质预测头。\n\n"
+        "说明：下面是基于学习记录生成的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "请问你的计算设备是什么？"
+    )
+    is_valid, reason = validate_jiangjiang_output(
+        scope_in_middle_text,
+        learning_record_mode=False,
+    )
+    assert not is_valid, (
+        "Technical statements appearing before source_scope must be rejected"
+    )
+    assert reason is not None
+    assert "source_scope" in reason
+
+
+def test_validate_jiangjiang_output_unsupported_user_attribution() -> None:
+    """Attributing choices/decisions to the user that they never confirmed must be rejected."""
+    # User message history only contains generic direction (no A/B/C reply, no "小分子药物"):
+    evidence = ["我想做图卷积神经网络在生物分子图性质预测上的应用"]
+
+    # Model asserts that user chose "小分子药物": MUST FAIL
+    # Has scope at start so scope check passes; only attribution drives the failure
+    unsupported_text = (
+        "说明：以下计划框架基于你刚确认的研究方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节、设备需求和实验结论仍需在你确认后核验。\n\n"
+        "根据你上一轮的选择（小分子药物），我为你准备了 3 个候选问题：\n"
+        "问题 A：ESOL 溶解度预测"
+    )
+    is_valid, reason = validate_jiangjiang_output(
+        unsupported_text,
+        evidence_context=evidence,
+        learning_record_mode=False,
+    )
+    assert not is_valid, (
+        "Attributing unconfirmed choice '小分子药物' to user must be rejected"
+    )
+    assert reason is not None
+    assert "user attribution" in reason or "unconfirmed choice" in reason
+
+    # If user DID say "小分子药物", it should pass:
+    supported_evidence = [
+        "我想做图卷积神经网络在生物分子图性质预测上的应用",
+        "我选 A 小分子药物",
+    ]
+    is_valid_ok, reason_ok = validate_jiangjiang_output(
+        unsupported_text,
+        evidence_context=supported_evidence,
+        learning_record_mode=False,
+    )
+    assert is_valid_ok, f"Supported attribution was falsely rejected: {reason_ok}"
+    assert reason_ok is None
+
+
+def test_validate_jiangjiang_output_learning_record_mastery_and_capability_claims() -> None:
+    """Verify that ungrounded mastery, capability, and progression claims are strictly rejected."""
+    learning_evidence = [
+        "你好姜姜，我刚学完图神经网络，想开始做科研",
+        "已学内容：图卷积网络(GCN)数学推导与节点分类",
+        "学习进度：完成理论推导，准备开展真实实验",
+    ]
+
+    violations = [
+        "你已经完成了GCN数学推导和节点分类的理论学习，打下了扎实的基础。",
+        "根据学习记录，你已经掌握了GCN的数学推导与节点分类。",
+        "你从理论学习进阶到真实实验，具备了开展科研的能力。",
+        "你已经对图神经网络有了系统深入的理解。",
+        "你已经完成了从理论到实验的学习跨度。",
+        "这表明你已经具备了开展课题研究的充分准备。",
+        "你已经具备了很好的科研起点与科研能力。",
+        "学习端记录显示你已经打下了扎实的图神经网络基础。",
+    ]
+    for text in violations:
+        full_text = (
+            "说明：下面是基于学习记录生成的探索方向与通用技术概览，尚未执行正式检索；"
+            "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+            f"{text}"
+        )
+        is_valid, reason = validate_jiangjiang_output(
+            full_text,
+            evidence_context=learning_evidence,
+            learning_record_mode=True,
+        )
+        assert not is_valid, f"Mastery claim was falsely accepted: {text}"
+        assert reason is not None
+
+    compliant_cases = [
+        (
+            "说明：下面是基于学习记录生成的探索方向与通用技术概览，尚未执行正式检索；"
+            "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+            "学习端记录显示你已学习「图卷积网络(GCN)数学推导与节点分类」，"
+            "当前进度记录为「完成理论推导，准备开展真实实验」。"
+            "这些学习记录不代表已掌握或具备研究能力，实际理解与代码经验仍需确认。"
+        ),
+        (
+            "说明：下面是基于学习记录生成的探索方向与通用技术概览，尚未执行正式检索；"
+            "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+            "学习端记录显示你学习过 GCN 数学推导与节点分类。"
+            "这些记录不代表已掌握或具备科研能力，实际理解和代码经验仍需确认。"
+        ),
+    ]
+    for text in compliant_cases:
+        is_valid, reason = validate_jiangjiang_output(
+            text,
+            evidence_context=learning_evidence,
+            learning_record_mode=True,
+        )
+        assert is_valid, f"Compliant learning record text was falsely rejected: {text} ({reason})"
+        assert reason is None
+
+
+def test_source_scope_prefix_welcome_no_confirmed_direction() -> None:
+    """Verify S1 welcome scope prefix does not claim confirmed direction
+    and specifies learning records.
+    """
+    assert "已确认方向" not in RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME
+    assert "学习端记录与通用技术概览" in RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME
+    assert "尚未执行正式检索" in RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME
+
+
+def test_source_scope_prefix_clarification() -> None:
+    """Verify S2 clarification scope prefix specifies explored direction."""
+    assert "探索方向" in RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION
+    assert "尚未执行正式检索" in RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION
+
+
+def test_source_scope_prefix_transition() -> None:
+    """Verify S3 transition scope prefix specifies confirmed direction."""
+    assert "你刚确认的研究方向与通用技术概览" in RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
+    assert "尚未执行正式检索" in RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
+
+
+def test_get_source_scope_prefix_dispatch() -> None:
+    """Verify get_source_scope_prefix dispatches appropriate prefix per template."""
+    assert get_source_scope_prefix("welcome_and_bridge") == RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME
+    assert (
+        get_source_scope_prefix("need_clarification")
+        == RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION
+    )
+    assert get_source_scope_prefix("stage_transition") == RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION

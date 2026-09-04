@@ -53,6 +53,7 @@ from .conversation_prompt_templates import (
     build_search_guidance_prompt,
     build_stage_transition_prompt,
     build_welcome_prompt,
+    get_source_scope_prefix,
     validate_jiangjiang_output,
 )
 from .conversation_service import (
@@ -319,9 +320,9 @@ def detect_passive_tool_intent(message: str) -> list[str]:
 
 
 _OPENING_GREETING_PATTERNS = [
-    r"^(?:你好|您好|hello|hi|嗨|哈喽|姜姜你好|姜姜好|初次见面)"
-    r"(?:[，,\s]+(?:姜姜|开始科研|进入科研|开启科研|我想开始做科研|我想做科研|开始|进入|做科研))?[!！~。.\s]*$",
-    r"^(?:开始|开始科研|进入科研|开启科研|进入|我想开始做科研|我想做科研)[!！~。.\s]*$",
+    r"^(?:你好|您好|hello|hi|嗨|哈喽|姜姜你好|姜姜好|你好姜姜|初次见面)"
+    r"(?:[，,\s]*.*?(?:姜姜|开始科研|进入科研|开启科研|我想开始做科研|我想做科研|想开始做科研|做科研|科研|开始|进入))?[!！~。.\s]*$",
+    r"^(?:开始|开始科研|进入科研|开启科研|进入|我想开始做科研|我想做科研|想开始做科研)[!！~。.\s]*$",
 ]
 
 
@@ -342,6 +343,8 @@ def _has_defined_need(
     if profile_topic and isinstance(profile_topic, str) and profile_topic.strip():
         return True
     if is_opening_greeting_intent(user_message):
+        return False
+    if detect_confirmation_intent(user_message):
         return False
     msg_cleaned = user_message.strip()
     for pat in _CONFIRMATION_PATTERNS + _HESITATION_PATTERNS:
@@ -1142,7 +1145,9 @@ class ResearchConversationOrchestrator:
             reply_content = outcome.reply_text.strip()
             evidence_ctx = self._collect_traceable_evidence_context(user_message, conv)
             valid, val_reason = validate_jiangjiang_output(
-                reply_content, evidence_context=evidence_ctx
+                reply_content,
+                evidence_context=evidence_ctx,
+                learning_record_mode=False,
             )
             if not valid:
                 err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
@@ -1202,10 +1207,20 @@ class ResearchConversationOrchestrator:
             )
 
         reply_content = outcome.reply_text.strip()
-        # Persona validation: if contains emoji or forbidden phrases, reject!
+        template_name = prompt_data.get("template_name", "")
+        if template_name in ("welcome_and_bridge", "need_clarification", "stage_transition"):
+            # Deterministically ensure source_scope is the very first paragraph.
+            # Do NOT use a conditional guard — even if the model self-inserted a scope phrase
+            # somewhere in the middle, that does NOT protect the first paragraph.
+            scope_prefix = get_source_scope_prefix(template_name)
+            if not reply_content.startswith(scope_prefix):
+                reply_content = f"{scope_prefix}\n\n{reply_content}"
         evidence_ctx = self._collect_traceable_evidence_context(user_message, conv)
+        is_learning_mode = bool(prompt_data.get("is_learning_record_mode", False))
         valid, val_reason = validate_jiangjiang_output(
-            reply_content, evidence_context=evidence_ctx
+            reply_content,
+            evidence_context=evidence_ctx,
+            learning_record_mode=is_learning_mode,
         )
         if not valid:
             err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
@@ -1223,12 +1238,14 @@ class ResearchConversationOrchestrator:
 
         # ONLY when model output is successfully generated & validated: advance state machine
         if current_stage == "research_need":
+            prior_need_defined = bool(subtasks.get("need_defined"))
             has_need = _has_defined_need(user_message, conv, subtasks)
             if has_need:
                 subtasks["need_defined"] = True
                 state_model.subtasks = subtasks
 
-            if is_confirmed and subtasks.get("need_defined"):
+            # Must have prior verified need_defined plus explicit confirmation to advance
+            if is_confirmed and prior_need_defined:
                 state_model.current_stage = "research_plan"
                 if "research_need" not in completed_stages:
                     completed_stages.append("research_need")
@@ -1388,7 +1405,26 @@ class ResearchConversationOrchestrator:
             f"【规则与指引】\n{tmpl['rules']}"
         )
         user_str = f"{tmpl['context']}\n\n【当前用户输入】\n{user_message}"
-        return {"system_prompt": system_str, "user_prompt": user_str}
+        template_name = tmpl.get("template_name", "")
+        # Only the welcome template consumes learning-context records.  Direction
+        # clarification must rely on the user's current message, avoiding mastery
+        # or capability inferences from a stored learning snapshot.
+        has_learning_record_input = bool(
+            learning_ctx
+            and (
+                learning_ctx.learned_content
+                or learning_ctx.learning_progress
+            )
+        )
+        is_learning_record_mode = (
+            template_name == "welcome_and_bridge" and has_learning_record_input
+        )
+        return {
+            "system_prompt": system_str,
+            "user_prompt": user_str,
+            "template_name": template_name,
+            "is_learning_record_mode": is_learning_record_mode,
+        }
 
     def _fetch_passive_tool_material(
         self,
