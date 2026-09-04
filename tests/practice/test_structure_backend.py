@@ -66,6 +66,36 @@ def test_structure_topic_generates_code_fill_set(client: TestClient) -> None:
     assert len(payload["items"]) == min(3, len(exercises_for_topic(topic.id)))
 
 
+def test_context_code_practice_binds_every_item_to_learning_knowledge_points(
+    client: TestClient,
+) -> None:
+    context = {
+        "source_session_id": "sess-direct-structure",
+        "knowledge_points": [
+            {"name": "卷积", "source_ref": "notebook-conv", "mastery": 0.2},
+            {"name": "池化", "source_ref": "notebook-pool", "mastery": None},
+        ],
+        "objective": "理解卷积与池化在图像特征提取中的作用",
+        "notes_summary": "先掌握主干结构。",
+    }
+
+    generated = client.post(
+        "/api/v1/practice/sets/generate",
+        json={"kind": "code_practice", "context": context, "count": 5},
+    )
+
+    assert generated.status_code == 200, generated.text
+    payload = generated.json()
+    assert payload["effective_context"] == context
+    assert payload["coverage"] == ["卷积", "池化"]
+    assert payload["items"]
+    assert {item["item_kind"] for item in payload["items"]} == {
+        "code_fill",
+        "coding_problem",
+    }
+    assert all(item["knowledge_points"] == ["卷积", "池化"] for item in payload["items"])
+
+
 def test_structure_topic_set_can_grade_with_code_fill_grade(
     client: TestClient,
 ) -> None:

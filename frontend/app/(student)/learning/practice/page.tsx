@@ -29,6 +29,9 @@ import {
   CompilerPracticeLaunch,
   CompilerRuntimeStatus,
   CompilerJudgeResult,
+  CompilerStructureExercise,
+  CompilerStructureSubmissionResult,
+  fetchStructureExercises,
   GeneratedPracticeProblem,
   analyzeProblemImport,
   createPracticeLaunch,
@@ -38,14 +41,19 @@ import {
   fetchCompilerRuntime,
   generateProblemSet,
   requestCompilerGuidance,
+  submitStructureExercise,
   submitPython,
 } from "@/lib/api/compiler";
 import { getLocalProfileId } from "@/lib/api/workspaces";
 import {
+  gradePracticeCodeFill,
   generatePracticeSetWithContext,
+  type PracticeCodeFillPayload,
+  type PracticeCodeFillGradeResponse,
   type PracticeGatewayItem,
+  type PracticeGatewaySetResponse,
 } from "@/lib/api/practice";
-import type { PracticeContextV1 } from "@/lib/practice-context";
+import { isPracticeContextV1, type PracticeContextV1 } from "@/lib/practice-context";
 import { clearFlowPayload, getPersistedFlowPayload, useFlowStore } from "@/lib/store/flow-store";
 import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 
@@ -70,6 +78,36 @@ interface PracticeExercise {
   warnings?: string[];
   sampleTests?: Array<{ stdin: string; expectedOutput: string }>;
 }
+
+type PracticeView = "start" | "workspace" | "structure";
+
+type StructureCatalogState =
+  | { status: "loading"; message: string }
+  | { status: "ready"; message: string }
+  | { status: "error"; message: string };
+
+type DirectStructureState =
+  | { status: "idle"; message: string }
+  | { status: "loading"; message: string }
+  | { status: "ready"; message: string }
+  | { status: "fallback"; message: string }
+  | { status: "empty"; message: string }
+  | { status: "error"; message: string };
+
+interface ContextStructureItem {
+  item: PracticeGatewayItem;
+  payload: PracticeCodeFillPayload;
+}
+
+interface ContextStructureSet {
+  response: PracticeGatewaySetResponse;
+  items: ContextStructureItem[];
+}
+
+const STRUCTURE_KIND_LABELS: Record<"structure_sequence" | "framework_fill", string> = {
+  structure_sequence: "结构排序",
+  framework_fill: "代码挖空",
+};
 
 type PracticeLaunchMode = "free_run" | "problem_submit";
 
@@ -248,60 +286,83 @@ function generatedProblemToExercise(
   };
 }
 
-/** Map a §1.1 gateway item (coding_problem payload) onto the page exercise shape. */
-function gatewayItemToExercise(
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function gatewayItemToContextStructureItem(
   item: PracticeGatewayItem,
-  batchId: string,
-): PracticeExercise | null {
-  const itemPayload = item.payload ?? {};
-  const title = typeof itemPayload.title === "string" ? itemPayload.title : "";
-  const description =
-    typeof itemPayload.description === "string" ? itemPayload.description : "";
-  if (!title || !description) return null;
-  const difficulty: Difficulty =
-    itemPayload.difficulty === "easy" ||
-    itemPayload.difficulty === "medium" ||
-    itemPayload.difficulty === "hard"
-      ? itemPayload.difficulty
-      : "medium";
-  const tags = Array.isArray(itemPayload.tags)
-    ? itemPayload.tags.filter((tag): tag is string => typeof tag === "string")
-    : item.knowledge_points;
-  const sampleTests = Array.isArray(itemPayload.sampleTests)
-    ? itemPayload.sampleTests
-        .map((test) => ({
-          stdin: String(
-            (test as { input?: unknown; stdin?: unknown })?.input ??
-              (test as { stdin?: unknown })?.stdin ??
-              "",
-          ),
-          expectedOutput: String(
-            (test as { output?: unknown; expectedOutput?: unknown })?.output ??
-              (test as { expectedOutput?: unknown })?.expectedOutput ??
-              "",
-          ),
-        }))
-        .filter((test) => test.stdin || test.expectedOutput)
-    : [];
+): ContextStructureItem | null {
+  if (
+    item.item_kind !== "code_fill" ||
+    !Array.isArray(item.knowledge_points) ||
+    item.knowledge_points.length === 0
+  ) {
+    return null;
+  }
+  const payload = item.payload;
+  if (
+    typeof payload.title !== "string" ||
+    payload.title.length === 0 ||
+    payload.language !== "python" ||
+    (payload.complexity !== "light" && payload.complexity !== "heavy") ||
+    (payload.judge_mode !== "llm_static" && payload.judge_mode !== "explain_only") ||
+    typeof payload.code_masked !== "string" ||
+    !Array.isArray(payload.blanks) ||
+    !Array.isArray(payload.steps)
+  ) {
+    return null;
+  }
+  const blanks = payload.blanks;
+  const steps = payload.steps;
+  if (
+    blanks.length < 2 ||
+    !blanks.every(
+      (blank) =>
+        isRecord(blank) &&
+        typeof blank.blank_id === "string" &&
+        typeof blank.hint === "string" &&
+        typeof blank.step_no === "number",
+    ) ||
+    steps.length < 1 ||
+    !steps.every(
+      (step) =>
+        isRecord(step) &&
+        typeof step.step_no === "number" &&
+        typeof step.title === "string" &&
+        typeof step.reason === "string" &&
+        Array.isArray(step.sub_steps) &&
+        step.sub_steps.every((subStep) => typeof subStep === "string"),
+    )
+  ) {
+    return null;
+  }
   return {
-    id: `${batchId}-${item.item_id}`,
-    title,
-    summary: `${tags.join(" · ") || "综合"} · 上下文生成`,
-    difficulty,
-    tags: ["生成", ...tags],
-    description,
-    inputHint:
-      typeof itemPayload.inputHint === "string" ? itemPayload.inputHint : "按题目要求填写",
-    outputHint:
-      typeof itemPayload.outputHint === "string" ? itemPayload.outputHint : "按题目逻辑输出",
-    source: typeof itemPayload.starterCode === "string" ? itemPayload.starterCode : "",
-    stdin: sampleTests[0]?.stdin ?? "",
-    origin: "generated_problem",
-    judgeable: itemPayload.judgeable === true,
-    orderReason:
-      typeof itemPayload.generationReason === "string" ? itemPayload.generationReason : undefined,
-    sampleTests,
+    item,
+    payload: payload as unknown as PracticeCodeFillPayload,
   };
+}
+
+function selectStructureFallback(
+  exercises: CompilerStructureExercise[],
+  context: PracticeContextV1,
+): CompilerStructureExercise | null {
+  const names = context.knowledge_points.map((point) => point.name.trim().toLowerCase());
+  return (
+    exercises.find((exercise) => {
+      const searchable = [
+        exercise.domain,
+        exercise.title,
+        exercise.objective,
+        exercise.instruction,
+        exercise.prompt,
+        ...exercise.hints,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return names.some((name) => name && (searchable.includes(name) || name.includes(exercise.domain)));
+    }) ?? exercises[0] ?? null
+  );
 }
 
 function PracticeContent() {
@@ -340,10 +401,28 @@ function PracticeContent() {
   const freeRunLaunchKey = `${launchContextKey}:free_run`;
   const problemSubmitLaunchKey = `${launchContextKey}:problem_submit`;
   const recommendedIds = payload?.payloadData.exerciseIds ?? persistedPayload?.payloadData.exerciseIds ?? [];
-  const practiceContext: PracticeContextV1 | null =
+  const practiceContextCandidate: unknown =
     payload?.practiceContext ?? persistedPayload?.practiceContext ?? null;
+  const directPracticeContext = isPracticeContextV1(practiceContextCandidate)
+    ? practiceContextCandidate
+    : null;
+  const practiceContext = directPracticeContext;
 
-  const [view, setView] = useState<"start" | "workspace">("start");
+  const [view, setView] = useState<PracticeView>("start");
+  const [structureExercises, setStructureExercises] = useState<CompilerStructureExercise[]>([]);
+  const [structureCatalogState, setStructureCatalogState] = useState<StructureCatalogState>({
+    status: "loading",
+    message: "正在加载核心结构练习。",
+  });
+  const [directStructureState, setDirectStructureState] = useState<DirectStructureState>(
+    directPracticeContext
+      ? { status: "loading", message: "正在按学习上下文生成核心结构练习。" }
+      : { status: "idle", message: "" },
+  );
+  const [directStructureSet, setDirectStructureSet] = useState<ContextStructureSet | null>(null);
+  const [activeStructureExercise, setActiveStructureExercise] =
+    useState<CompilerStructureExercise | null>(null);
+  const [directEntryDismissed, setDirectEntryDismissed] = useState(false);
   const [query, setQuery] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty | "all">("all");
   const [selectedExerciseId, setSelectedExerciseId] = useState(EXERCISES[0].id);
@@ -416,7 +495,13 @@ function PracticeContent() {
 
   useEffect(() => {
     let active = true;
-    const launchRequests: Array<{ mode: PracticeLaunchMode; key: string }> = [      { mode: "free_run", key: freeRunLaunchKey },
+    if (directPracticeContext && !directEntryDismissed) {
+      return () => {
+        active = false;
+      };
+    }
+    const launchRequests: Array<{ mode: PracticeLaunchMode; key: string }> = [
+      { mode: "free_run", key: freeRunLaunchKey },
       { mode: "problem_submit", key: problemSubmitLaunchKey },
     ];
     for (const { mode, key } of launchRequests) {
@@ -446,7 +531,126 @@ function PracticeContent() {
     return () => {
       active = false;
     };
-  }, [freeRunLaunchKey, learnerId, practiceFocus, problemSubmitLaunchKey, taskId, workspaceId]);
+  }, [
+    directEntryDismissed,
+    directPracticeContext,
+    freeRunLaunchKey,
+    learnerId,
+    practiceFocus,
+    problemSubmitLaunchKey,
+    taskId,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      if (directPracticeContext) {
+        setDirectStructureState({
+          status: "loading",
+          message: "正在按学习上下文生成核心结构练习。",
+        });
+        setDirectStructureSet(null);
+        setActiveStructureExercise(null);
+        setDirectEntryDismissed(false);
+      } else {
+        setDirectStructureState({ status: "idle", message: "" });
+        setDirectStructureSet(null);
+      }
+    });
+
+    const catalogRequest = directPracticeContext
+      ? fetchStructureExercises()
+      : Promise.resolve({ schemaVersion: "", topics: [], exercises: [] });
+    const gatewayRequest = directPracticeContext
+      ? generatePracticeSetWithContext({
+          context: directPracticeContext,
+          count: 5,
+          profileId: learnerId,
+        })
+      : Promise.resolve(null);
+
+    void Promise.allSettled([catalogRequest, gatewayRequest]).then(
+      ([catalogResult, gatewayResult]) => {
+        if (!active) return;
+
+        const catalogExercises =
+          catalogResult.status === "fulfilled" && Array.isArray(catalogResult.value.exercises)
+            ? catalogResult.value.exercises
+            : [];
+        setStructureExercises(catalogExercises);
+        if (catalogResult.status === "fulfilled") {
+          setStructureCatalogState({
+            status: "ready",
+            message: catalogExercises.length
+              ? "核心结构练习已加载。"
+              : "结构练习目录为空。",
+          });
+        } else {
+          setStructureCatalogState({
+            status: "error",
+            message: "核心结构练习目录加载失败，请稍后重试。",
+          });
+        }
+
+        if (!directPracticeContext) return;
+
+        const generatedResponse =
+          gatewayResult.status === "fulfilled" ? gatewayResult.value : null;
+        const generatedItems =
+          generatedResponse && Array.isArray(generatedResponse.items)
+            ? generatedResponse.items
+                .map(gatewayItemToContextStructureItem)
+                .filter((item): item is ContextStructureItem => item !== null)
+            : [];
+        if (generatedResponse && generatedItems.length) {
+          setDirectStructureSet({
+            response: generatedResponse,
+            items: generatedItems,
+          });
+          setDirectStructureState({
+            status: "ready",
+            message: `已按学习上下文生成 ${generatedItems.length} 道核心结构练习；题目绑定：${
+              Array.isArray(generatedResponse.coverage)
+                ? generatedResponse.coverage.join("、") || "当前知识点"
+                : "当前知识点"
+            }。`,
+          });
+          return;
+        }
+
+        const fallback = selectStructureFallback(catalogExercises, directPracticeContext);
+        if (fallback) {
+          setActiveStructureExercise(fallback);
+          setDirectStructureState({
+            status: "fallback",
+            message:
+              "上下文练习集暂未返回可练题目，已切换到现有静态结构题；学习上下文仍保留在本页。",
+          });
+          return;
+        }
+
+        const gatewayUnavailable = gatewayResult.status === "rejected";
+        const catalogUnavailable = catalogResult.status === "rejected";
+        setDirectStructureState({
+          status: gatewayUnavailable || catalogUnavailable ? "error" : "empty",
+          message:
+            gatewayUnavailable && catalogUnavailable
+              ? "上下文练习集和结构练习目录都加载失败，请稍后重试。"
+              : gatewayUnavailable
+                ? "上下文练习集生成失败，结构练习目录也没有可用题目。"
+                : catalogUnavailable
+                  ? "结构练习目录加载失败，暂时没有可用的核心结构题。"
+                  : "上下文练习集未返回可练结构题，结构练习目录为空。",
+        });
+      },
+    );
+
+    return () => {
+      active = false;
+    };
+  }, [directPracticeContext, learnerId]);
 
   const exercises = useMemo(
     () => [...importedExercises, ...EXERCISES],
@@ -466,6 +670,11 @@ function PracticeContent() {
 
   useEffect(() => {
     let active = true;
+    if (directPracticeContext && !directEntryDismissed) {
+      return () => {
+        active = false;
+      };
+    }
     void fetchCompilerRuntime()
       .then((status) => {
         if (!active) return;
@@ -501,7 +710,7 @@ function PracticeContent() {
     return () => {
       active = false;
     };
-  }, [learnerId]);
+  }, [directEntryDismissed, directPracticeContext, learnerId]);
 
   function invalidateActiveOperation() {
     setPracticeSelectionVersion((version) => version + 1);
@@ -564,36 +773,47 @@ function PracticeContent() {
     try {
       // §3.1 boundary: when a practice-context.v1 was handed over, its body is
       // submitted through POST /api/v1/practice/sets/generate's `context` field.
-      // If the gateway yields nothing usable, generation falls back to the
-      // legacy compiler path — the page never blocks or errors on it.
-      if (practiceContext) {
+      // The direct path stays in core structure practice; only an ordinary
+      // entry uses the legacy compiler generation flow below.
+      if (directPracticeContext) {
         const gatewayResponse = await generatePracticeSetWithContext({
-          context: practiceContext,
+          context: directPracticeContext,
           count: setTargetCount,
+          profileId: learnerId,
         });
-        const batchId =
-          typeof crypto !== "undefined" && "randomUUID" in crypto
-            ? `set-${crypto.randomUUID()}`
-            : `set-${Date.now()}`;
-        const generated = gatewayResponse.items
-          .map((item) => gatewayItemToExercise(item, batchId))
-          .filter((exercise): exercise is PracticeExercise => exercise !== null);
-        if (generated.length > 0) {
-          setImportedExercises((items) => [
-            ...generated,
-            ...items.filter((item) => !generated.some((next) => next.id === item.id)),
-          ]);
-          setSelectedExerciseId(generated[0].id);
-          setQuery("");
-          setDifficulty("all");
+        const contextStructureItems = gatewayResponse.items
+          .map(gatewayItemToContextStructureItem)
+          .filter((item): item is ContextStructureItem => item !== null);
+        if (contextStructureItems.length > 0) {
+          setDirectStructureSet({
+            response: gatewayResponse,
+            items: contextStructureItems,
+          });
+          setActiveStructureExercise(null);
           setSetMessage(
-            `已按学习上下文生成 ${generated.length} 道练习（${
-              gatewayResponse.generation_mode === "mock" ? "Mock 闭环" : gatewayResponse.generation_mode
-            }）；覆盖：${gatewayResponse.coverage.join("、") || "综合"}`,
+            `已按学习上下文生成 ${contextStructureItems.length} 道核心结构练习；覆盖：${
+              gatewayResponse.coverage.join("、") || "当前知识点"
+            }`,
           );
+          setView("structure");
           return;
         }
-        setSetMessage("上下文生成未返回可练题目，已改用通用生成。");
+        const fallback = selectStructureFallback(structureExercises, directPracticeContext);
+        if (fallback) {
+          setActiveStructureExercise(fallback);
+          setDirectStructureState({
+            status: "fallback",
+            message: "上下文练习集未返回可练结构题，已切换到现有静态结构题。",
+          });
+          setSetMessage("上下文练习集未返回可练结构题，已切换到现有静态结构题。");
+          setView("structure");
+          return;
+        }
+        setDirectStructureState({
+          status: "empty",
+          message: "上下文练习集未返回可练结构题，结构练习目录也为空。",
+        });
+        return;
       }
       const response = await generateProblemSet({
         prompt: setPrompt,
@@ -642,6 +862,24 @@ function PracticeContent() {
         } 道练习；覆盖：${response.coverage.join("、") || "综合"}`,
       );
     } catch (generationError) {
+      if (directPracticeContext) {
+        const fallback = selectStructureFallback(structureExercises, directPracticeContext);
+        if (fallback) {
+          setActiveStructureExercise(fallback);
+          setDirectStructureState({
+            status: "fallback",
+            message: "上下文练习集生成失败，已切换到现有静态结构题。",
+          });
+          setSetMessage("上下文练习集生成失败，已切换到现有静态结构题。");
+          setView("structure");
+        } else {
+          setDirectStructureState({
+            status: "error",
+            message: generationError instanceof Error ? generationError.message : "练习集生成失败。",
+          });
+        }
+        return;
+      }
       setSetMessage(generationError instanceof Error ? generationError.message : "练习集生成失败。");
     } finally {
       setSetBusy(false);
@@ -905,6 +1143,49 @@ function PracticeContent() {
     runtime?.ready === true &&
     activeExercise.origin === "built_in" &&
     effectiveProblemSubmitLaunchState.status !== "loading";
+
+  function returnToPracticeStart() {
+    invalidateActiveOperation();
+    setDirectStructureSet(null);
+    setActiveStructureExercise(null);
+    setView("start");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  const isDirectStructureView =
+    view === "structure" || (directPracticeContext !== null && !directEntryDismissed);
+
+  if (isDirectStructureView) {
+    if (directStructureSet) {
+      return (
+        <ContextStructureWorkspace
+          structureSet={directStructureSet}
+          profileId={learnerId}
+          onBack={returnToPracticeStart}
+        />
+      );
+    }
+    if (activeStructureExercise) {
+      return (
+        <StructureExerciseWorkspace
+          exercise={activeStructureExercise}
+          onBack={returnToPracticeStart}
+          notice={
+            directStructureState.status === "fallback" ? directStructureState.message : undefined
+          }
+        />
+      );
+    }
+    const entryState: DirectStructureState =
+      directStructureState.status !== "idle"
+        ? directStructureState
+        : structureCatalogState.status === "loading"
+          ? { status: "loading", message: structureCatalogState.message }
+          : structureCatalogState.status === "error"
+            ? { status: "error", message: structureCatalogState.message }
+            : { status: "empty", message: structureCatalogState.message };
+    return <StructurePracticeState state={entryState} onBack={returnToPracticeStart} />;
+  }
 
   if (view === "start") {
     return (
@@ -1446,6 +1727,519 @@ function PracticeContent() {
         </section>
       </div>
     </main>
+  );
+}
+
+function StructurePracticeState({
+  state,
+  onBack,
+}: {
+  state: DirectStructureState;
+  onBack: () => void;
+}) {
+  const isError = state.status === "error";
+  const isLoading = state.status === "loading";
+  return (
+    <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
+      <div className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-4 py-5 sm:px-6 lg:px-8">
+        <button
+          type="button"
+          onClick={onBack}
+          className="app-button-secondary inline-flex w-fit items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+        >
+          <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
+          返回练习选择
+        </button>
+        <section className="app-card mt-10 rounded-2xl p-6 sm:p-8">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-normal text-slate-400 dark:text-zinc-500">
+            Core Structure Practice
+          </p>
+          <h1 className="mt-2 text-3xl font-bold">核心结构练习</h1>
+          <p
+            role={isError ? "alert" : "status"}
+            aria-live="polite"
+            className="mt-4 max-w-2xl text-sm leading-6 text-slate-600 dark:text-zinc-300"
+          >
+            {isLoading ? "正在准备练习，请稍候。" : state.message}
+          </p>
+          {state.status === "empty" ? (
+            <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+              当前没有可用的核心结构题目；返回后可以继续使用普通练习入口。
+            </p>
+          ) : null}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function StructureExerciseWorkspace({
+  exercise,
+  onBack,
+  notice,
+}: {
+  exercise: CompilerStructureExercise;
+  onBack: () => void;
+  notice?: string;
+}) {
+  const levels = exercise.levels ?? [];
+  const [levelIndex, setLevelIndex] = useState(0);
+  const [sequenceAnswer, setSequenceAnswer] = useState<string[]>([]);
+  const [levelAnswers, setLevelAnswers] = useState<string[][]>(() => levels.map(() => []));
+  const [source, setSource] = useState(exercise.starterCode ?? "");
+  const [result, setResult] = useState<CompilerStructureSubmissionResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const currentLevel = levels[levelIndex] ?? null;
+  const options = currentLevel?.options ?? exercise.options;
+  const currentAnswer = currentLevel ? levelAnswers[levelIndex] ?? [] : sequenceAnswer;
+  const isSequence = exercise.kind === "structure_sequence";
+
+  function updateCurrentAnswer(next: string[]) {
+    if (!currentLevel) {
+      setSequenceAnswer(next);
+      return;
+    }
+    setLevelAnswers((answers) =>
+      answers.map((answer, index) => (index === levelIndex ? next : answer)),
+    );
+  }
+
+  function selectOption(option: string) {
+    if (!isSequence || currentAnswer.includes(option)) return;
+    updateCurrentAnswer([...currentAnswer, option]);
+    setResult(null);
+    setError(null);
+  }
+
+  function removeOption(option: string) {
+    updateCurrentAnswer(currentAnswer.filter((item) => item !== option));
+    setResult(null);
+    setError(null);
+  }
+
+  async function submit() {
+    if (isSequence && currentAnswer.length !== options.length) {
+      setError("请先把所有步骤排列完成，再检查答案。");
+      return;
+    }
+    if (!isSequence && !source.trim()) {
+      setError("请先补全代码，再检查答案。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await submitStructureExercise({
+        exerciseId: exercise.id,
+        answer: isSequence ? currentAnswer : source,
+        level: currentLevel?.level,
+      });
+      setResult(response);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "结构练习提交失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasNextLevel = isSequence && levelIndex < levels.length - 1;
+
+  return (
+    <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
+      <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={onBack}
+            className="app-button-secondary inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+          >
+            <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
+            返回练习选择
+          </button>
+          <span className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-500 dark:border-zinc-700 dark:text-zinc-400">
+            {STRUCTURE_KIND_LABELS[exercise.kind]}
+          </span>
+        </div>
+
+        <section className="app-card mt-6 rounded-2xl p-5 sm:p-7">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-normal text-slate-400 dark:text-zinc-500">
+            {exercise.domain}
+          </p>
+          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">{exercise.title}</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-300">
+            {exercise.objective}
+          </p>
+          {notice ? (
+            <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+              {notice}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="app-card mt-4 rounded-2xl p-5 sm:p-7">
+          <p className="text-sm font-semibold text-slate-950 dark:text-zinc-50">{exercise.prompt}</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+            {currentLevel?.instruction ?? exercise.instruction}
+          </p>
+          {currentLevel ? (
+            <p className="mt-3 text-xs font-semibold text-slate-700 dark:text-zinc-200">
+              第 {currentLevel.level} 级：{currentLevel.title}
+            </p>
+          ) : null}
+
+          {isSequence ? (
+            <div className="mt-5 grid gap-5 md:grid-cols-2">
+              <div>
+                <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200">可选步骤</p>
+                <div className="mt-2 space-y-2">
+                  {options.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => selectOption(option)}
+                      disabled={currentAnswer.includes(option)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-700 transition hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-500"
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200">你的排列</p>
+                <div className="mt-2 min-h-32 space-y-2 rounded-xl border border-dashed border-slate-300 p-3 dark:border-zinc-700">
+                  {currentAnswer.length === 0 ? (
+                    <p className="text-xs leading-5 text-slate-400 dark:text-zinc-500">
+                      点击左侧步骤加入排列。
+                    </p>
+                  ) : (
+                    currentAnswer.map((option, index) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => removeOption(option)}
+                        className="flex w-full items-start gap-2 rounded-lg bg-slate-100 px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                      >
+                        <span className="font-mono text-xs text-slate-400 dark:text-zinc-500">
+                          {index + 1}.
+                        </span>
+                        <span>{option}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5">
+              <label
+                htmlFor="structure-framework-answer"
+                className="text-xs font-semibold text-slate-700 dark:text-zinc-200"
+              >
+                补全代码
+              </label>
+              <textarea
+                id="structure-framework-answer"
+                value={source}
+                onChange={(event) => {
+                  setSource(event.target.value);
+                  setResult(null);
+                  setError(null);
+                }}
+                spellCheck={false}
+                className="app-input mt-2 min-h-72 w-full resize-y rounded-xl p-4 font-mono text-xs leading-5"
+              />
+              <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+                这是静态结构练习，不会执行代码；提交时只检查结构关键字。
+              </p>
+            </div>
+          )}
+
+          {exercise.hints.length > 0 ? (
+            <details className="mt-5 rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-zinc-900">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-700 dark:text-zinc-200">
+                查看提示
+              </summary>
+              <div className="mt-2 space-y-1 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+                {exercise.hints.map((hint) => (
+                  <p key={hint}>{hint}</p>
+                ))}
+              </div>
+            </details>
+          ) : null}
+
+          {error ? (
+            <p role="alert" className="mt-4 text-xs leading-5 text-rose-700 dark:text-rose-300">
+              {error}
+            </p>
+          ) : null}
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={busy}
+              className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} /> : <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
+              {busy ? "检查中" : "检查答案"}
+            </button>
+            {result?.verdict === "accepted" && hasNextLevel ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setLevelIndex((index) => index + 1);
+                  setResult(null);
+                  setError(null);
+                }}
+                className="app-button-secondary rounded-xl px-4 py-2.5 text-xs font-semibold"
+              >
+                进入下一级
+              </button>
+            ) : null}
+          </div>
+
+          {result ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className={`mt-5 rounded-xl border px-4 py-3 ${
+                result.verdict === "accepted"
+                  ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/30"
+                  : "border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30"
+              }`}
+            >
+              <p className="text-sm font-semibold">
+                {result.verdict === "accepted" ? "答案正确" : "再检查一下步骤"} · {result.score} 分
+              </p>
+              <div className="mt-2 space-y-1 text-xs leading-5 text-slate-600 dark:text-zinc-300">
+                {result.feedback.map((item, index) => (
+                  <p key={`${item.token ?? item.index ?? item.level ?? "feedback"}-${index}`}>
+                    {item.status === "passed" ? "✓" : "!"} {item.message}
+                  </p>
+                ))}
+              </div>
+              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-zinc-300">
+                {result.explanation}
+              </p>
+              {result.verdict === "accepted" && !hasNextLevel ? (
+                <p className="mt-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                  本题结构练习已完成。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ContextStructureWorkspace({
+  structureSet,
+  profileId,
+  onBack,
+}: {
+  structureSet: ContextStructureSet;
+  profileId: string;
+  onBack: () => void;
+}) {
+  const [itemIndex, setItemIndex] = useState(0);
+  const current = structureSet.items[itemIndex];
+
+  if (!current) {
+    return (
+      <StructurePracticeState
+        state={{ status: "empty", message: "上下文练习集没有可用的核心结构题目。" }}
+        onBack={onBack}
+      />
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
+      <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={onBack}
+            className="app-button-secondary inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+          >
+            <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
+            返回练习选择
+          </button>
+          <span className="font-mono text-[11px] text-slate-400 dark:text-zinc-500">
+            Core Structure Practice · {itemIndex + 1}/{structureSet.items.length}
+          </span>
+        </div>
+        <section className="app-card mt-6 rounded-2xl p-5 sm:p-7">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-normal text-slate-400 dark:text-zinc-500">
+            Learning Context → Practice
+          </p>
+          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">核心结构练习</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-300">
+            已跳过基础引导和语法测试，练习集直接来自学习上下文。
+          </p>
+          <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 dark:bg-zinc-900 dark:text-zinc-300">
+            题目绑定知识点：{current.item.knowledge_points.join("、") || "当前知识点"}
+          </p>
+          <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+            本组覆盖：{structureSet.response.coverage.join("、") || "当前知识点"}
+          </p>
+        </section>
+        <ContextStructureItem
+          key={current.item.item_id}
+          item={current}
+          setId={structureSet.response.set_id}
+          profileId={profileId}
+          onNext={() => setItemIndex((index) => Math.min(index + 1, structureSet.items.length - 1))}
+          hasNext={itemIndex < structureSet.items.length - 1}
+        />
+      </div>
+    </main>
+  );
+}
+
+function ContextStructureItem({
+  item,
+  setId,
+  profileId,
+  hasNext,
+  onNext,
+}: {
+  item: ContextStructureItem;
+  setId: string;
+  profileId: string;
+  hasNext: boolean;
+  onNext: () => void;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [result, setResult] = useState<PracticeCodeFillGradeResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const explainOnly = item.payload.judge_mode === "explain_only";
+
+  async function submit() {
+    if (explainOnly) return;
+    if (item.payload.blanks.some((blank) => !answers[blank.blank_id]?.trim())) {
+      setError("请先完成所有代码挖空，再提交检查。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await gradePracticeCodeFill({
+        setId,
+        itemId: item.item.item_id,
+        attemptId: newUuidV4(),
+        blankAnswers: item.payload.blanks.map((blank) => ({
+          blankId: blank.blank_id,
+          value: answers[blank.blank_id] ?? "",
+        })),
+        profileId,
+      });
+      setResult(response);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "代码挖空提交失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="app-card mt-4 rounded-2xl p-5 sm:p-7">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400">代码挖空</p>
+          <h2 className="mt-1 text-xl font-bold">{item.payload.title}</h2>
+        </div>
+        <span className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-500 dark:border-zinc-700 dark:text-zinc-400">
+          {item.payload.complexity === "heavy" ? "讲解型" : "静态检查"}
+        </span>
+      </div>
+      <pre className="mt-5 overflow-x-auto rounded-xl bg-[#111814] p-4 font-mono text-xs leading-6 text-[#f6fbf4]">
+        {item.payload.code_masked}
+      </pre>
+      <div className="mt-5 grid gap-3 md:grid-cols-2">
+        {item.payload.blanks.map((blank) => (
+          <label key={blank.blank_id} className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
+            {blank.blank_id}
+            <input
+              value={answers[blank.blank_id] ?? ""}
+              onChange={(event) => {
+                setAnswers((current) => ({ ...current, [blank.blank_id]: event.target.value }));
+                setResult(null);
+                setError(null);
+              }}
+              placeholder={blank.hint}
+              className="app-input mt-1 h-11 w-full rounded-xl px-3 font-mono text-xs font-normal"
+              aria-label={`${blank.blank_id} 答案`}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="mt-5 rounded-xl bg-slate-50 px-4 py-3 dark:bg-zinc-900">
+        <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200">实现步骤</p>
+        <div className="mt-2 space-y-3">
+          {item.payload.steps.map((step) => (
+            <div key={step.step_no} className="text-xs leading-5 text-slate-600 dark:text-zinc-300">
+              <p className="font-semibold">步骤 {step.step_no}：{step.title}</p>
+              <p className="mt-1">{step.reason}</p>
+              {step.sub_steps.length > 0 ? (
+                <p className="mt-1 text-slate-500 dark:text-zinc-400">{step.sub_steps.join(" · ")}</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-zinc-400">
+        {explainOnly
+          ? "该题只提供结构讲解，当前不会发送判题请求。"
+          : "提交只进行静态代码挖空检查，不执行模型代码。"}
+      </p>
+      {error ? (
+        <p role="alert" className="mt-3 text-xs leading-5 text-rose-700 dark:text-rose-300">
+          {error}
+        </p>
+      ) : null}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={busy || explainOnly}
+          className="app-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} /> : <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
+          {busy ? "检查中" : "提交检查"}
+        </button>
+        {result?.graded && hasNext ? (
+          <button
+            type="button"
+            onClick={onNext}
+            className="app-button-secondary rounded-xl px-4 py-2.5 text-xs font-semibold"
+          >
+            下一道核心结构题
+          </button>
+        ) : null}
+        {result?.graded && !hasNext ? (
+          <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+            本组核心结构练习已完成。
+          </span>
+        ) : null}
+      </div>
+      {result ? (
+        <div role="status" aria-live="polite" className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-zinc-700 dark:bg-zinc-900">
+          <p className="text-sm font-semibold">得分：{result.total_score}/{result.total_max_score}</p>
+          <div className="mt-2 space-y-1 text-xs leading-5 text-slate-600 dark:text-zinc-300">
+            {result.results.map((grade) => (
+              <p key={grade.blank_id}>
+                {grade.correct ? "✓" : "!"} {grade.blank_id}：{grade.comment ?? (grade.correct ? "正确" : "需要调整")}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

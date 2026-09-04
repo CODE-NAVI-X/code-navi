@@ -184,6 +184,50 @@ export interface GeneratedPracticeProblem {
   problemVersion?: number;
 }
 
+export type StructureExerciseKind = "structure_sequence" | "framework_fill";
+
+export interface CompilerStructureLevel {
+  level: number;
+  title: string;
+  instruction: string;
+  options: string[];
+}
+
+export interface CompilerStructureExercise {
+  id: string;
+  title: string;
+  kind: StructureExerciseKind;
+  domain: string;
+  objective: string;
+  instruction: string;
+  prompt: string;
+  options: string[];
+  starterCode?: string;
+  hints: string[];
+  levels?: CompilerStructureLevel[];
+}
+
+export interface CompilerStructureTopic {
+  id: string;
+  title: string;
+  count: number;
+}
+
+export interface CompilerStructureFeedbackItem {
+  token?: string;
+  index?: number;
+  level?: number;
+  status: "passed" | "failed";
+  message: string;
+}
+
+export interface CompilerStructureSubmissionResult {
+  verdict: "accepted" | "wrong_answer";
+  score: number;
+  feedback: CompilerStructureFeedbackItem[];
+  explanation: string;
+}
+
 export class CompilerApiError extends Error {
   constructor(
     public readonly status: number,
@@ -328,6 +372,32 @@ export async function fetchCompilerRecords(
     `/api/v1/compiler/records?learnerId=${encodeURIComponent(learnerId)}`,
   );
   return response.records;
+}
+
+export async function fetchStructureExercises(): Promise<{
+  schemaVersion: string;
+  topics: CompilerStructureTopic[];
+  exercises: CompilerStructureExercise[];
+}> {
+  return request<{
+    schemaVersion: string;
+    topics: CompilerStructureTopic[];
+    exercises: CompilerStructureExercise[];
+  }>("/api/v1/practice/structure-exercises");
+}
+
+export async function submitStructureExercise(payload: {
+  exerciseId: string;
+  answer: string | string[] | string[][];
+  level?: number;
+}): Promise<CompilerStructureSubmissionResult> {
+  return request<CompilerStructureSubmissionResult>(
+    `/api/v1/practice/structure-exercises/${encodeURIComponent(payload.exerciseId)}/submit`,
+    {
+      method: "POST",
+      body: JSON.stringify({ answer: payload.answer, level: payload.level }),
+    },
+  );
 }
 
 import { getStoredCsrfToken } from "@/lib/api/auth";

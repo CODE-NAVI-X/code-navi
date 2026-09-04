@@ -79,6 +79,18 @@ def test_context_body_is_submitted_through_the_generate_gateway() -> None:
     assert "已带入学习上下文" in page
 
 
+def test_learning_direct_entry_starts_core_structure_practice() -> None:
+    page = PRACTICE_PAGE.read_text(encoding="utf-8")
+
+    assert 'useState<PracticeView>("start")' in page
+    assert "isPracticeContextV1(practiceContextCandidate)" in page
+    assert 'setView("structure")' in page
+    assert "fetchStructureExercises" in page
+    assert "ContextStructureWorkspace" in page
+    assert "gatewayItemToContextStructureItem" in page
+    assert "题目绑定知识点" in page
+
+
 def test_no_third_entry_point_assembles_the_structure() -> None:
     frontend_dir = Path("frontend")
     allowed = {
