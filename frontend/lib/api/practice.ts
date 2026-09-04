@@ -129,6 +129,13 @@ export interface ProjectExplanationResponse {
   source: "model" | "rules";
 }
 
+export interface LearningDataPracticeSetResponse {
+  practice_set: PracticeGatewaySetResponse;
+  generation_version: "learning-data.v1";
+  selected_knowledge_points: string[];
+  question_bank_gaps: string[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
@@ -252,5 +259,34 @@ export async function generateProjectCodeFill(
   return request<PracticeGatewaySetResponse>(
     `/api/v1/practice/projects/${encodeURIComponent(projectId)}/code-fill`,
     { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+/**
+ * Generate executable practice from the current browser's learning facts.
+ * The server owns portrait reads, gap ranking, duplicate detection and secrets.
+ */
+export async function generatePracticeSetFromLearning(payload: {
+  localProfileId: string;
+  profileId: string;
+  count?: number;
+  difficulty?: "easy" | "medium" | "hard";
+  knowledgePoints?: string[];
+}): Promise<LearningDataPracticeSetResponse> {
+  return request<LearningDataPracticeSetResponse>(
+    "/api/v1/practice/sets/generate-from-learning",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        local_profile_id: payload.localProfileId,
+        profile_id: payload.profileId,
+        // The current workspace can execute and submit coding_problem items.
+        // Other archived kinds retain their server-side judging contracts.
+        kind: "code_practice",
+        count: Math.max(3, Math.min(8, payload.count ?? 5)),
+        difficulty: payload.difficulty ?? "medium",
+        knowledge_points: payload.knowledgePoints ?? [],
+      }),
+    },
   );
 }
