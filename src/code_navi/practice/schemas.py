@@ -251,9 +251,9 @@ class CodeUploadAnalyzeRequest(BaseModel):
 
 
 class CodeUploadSymbol(BaseModel):
-    """One extracted class or function symbol."""
+    """One extracted class, function, or class method symbol."""
 
-    kind: Literal["class", "function"]
+    kind: Literal["class", "function", "method"]
     name: str = Field(..., min_length=1)
     line: int = Field(..., ge=1)
     signature: str = Field(default="", max_length=300)
@@ -272,6 +272,69 @@ class CodeUploadAnalysisResponse(BaseModel):
     framework_hints: list[str] = Field(default_factory=list, max_length=8)
     metrics: dict[str, int]
     explanation_source: Literal["rules"]
+
+
+class CodeProjectFile(BaseModel):
+    path: str = Field(..., min_length=1, max_length=255)
+    kind: Literal["python", "markdown"]
+    size: int = Field(..., ge=0)
+    symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
+
+
+class CodeProjectFileInput(BaseModel):
+    path: str = Field(..., min_length=1, max_length=255)
+    content_base64: str = Field(..., min_length=1)
+
+
+class CodeProjectUploadRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    files: list[CodeProjectFileInput] = Field(..., min_length=1, max_length=50)
+
+
+class CodeProjectResponse(BaseModel):
+    project_id: str
+    name: str
+    files: list[CodeProjectFile]
+    metrics: dict[str, int]
+
+
+class CodeProjectFileResponse(BaseModel):
+    project_id: str
+    path: str
+    content: str
+    symbols: list[CodeUploadSymbol] = Field(default_factory=list, max_length=50)
+
+
+class ProjectExplainRequest(BaseModel):
+    """Optional file/symbol scope for an uploaded-project explanation."""
+
+    path: str | None = Field(default=None, min_length=1, max_length=255)
+    symbol: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ProjectExplanationEntry(BaseModel):
+    """One explainable project unit, with claims labelled by certainty."""
+
+    path: str
+    symbol: str | None = None
+    fact: list[str] = Field(default_factory=list, max_length=6)
+    inference: list[str] = Field(default_factory=list, max_length=4)
+    to_verify: list[str] = Field(default_factory=list, max_length=4)
+
+
+class ProjectExplainResponse(BaseModel):
+    project_id: str
+    entries: list[ProjectExplanationEntry] = Field(default_factory=list, max_length=50)
+    source: Literal["model", "rules"]
+
+
+class ProjectCodeFillRequest(BaseModel):
+    """Generate project-derived ``code_fill`` items for a Python source file."""
+
+    path: str = Field(..., min_length=1, max_length=255)
+    symbol: str | None = Field(default=None, min_length=1, max_length=128)
+    count: int = Field(default=3, ge=1, le=6)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 
 class ExplainSymbol(BaseModel):
@@ -346,6 +409,15 @@ __all__ = [
     "CodeUploadAnalysisResponse",
     "CodeUploadAnalyzeRequest",
     "CodeUploadSymbol",
+    "CodeProjectFile",
+    "CodeProjectFileInput",
+    "CodeProjectUploadRequest",
+    "CodeProjectResponse",
+    "CodeProjectFileResponse",
+    "ProjectExplainRequest",
+    "ProjectExplanationEntry",
+    "ProjectExplainResponse",
+    "ProjectCodeFillRequest",
     "ExplainSymbol",
     "ExplainSymbolRequest",
     "ExplainSymbolResponse",

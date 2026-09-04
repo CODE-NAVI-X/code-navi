@@ -143,3 +143,18 @@ class CodeUploadAnalysisModel(Base):
         String(36), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class CodeProjectModel(Base):
+    """A bounded, owner-scoped project upload for code navigation."""
+
+    __tablename__ = "practice_code_projects"
+
+    project_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    files: Mapped[list] = mapped_column(JSON, nullable=False)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False)
+    owner_principal_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)

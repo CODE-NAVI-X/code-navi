@@ -4,10 +4,12 @@ failure recovery, and thinking lifecycle.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from code_navi.db import Base, get_db
 from code_navi.research.conversation_orchestrator import (
@@ -15,7 +17,12 @@ from code_navi.research.conversation_orchestrator import (
     ResearchConversationOrchestrator,
 )
 from code_navi.research.conversation_orchestrator_schemas import (
+    LearningContextInput,
     SendOrchestratorMessageRequest,
+)
+from code_navi.research.conversation_prompt_templates import (
+    RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION,
+    RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME,
 )
 from code_navi.research.models import (
     ResearchConversationModel,
@@ -733,3 +740,997 @@ def test_opening_greeting_vs_concrete_topic_in_research_need_stage(db_session) -
     assert "需求澄清" in call_2["system_prompt"]
     assert "欢迎同学并介绍研究方向" not in call_2["system_prompt"]
     assert "【基于学习内容动态生成的推荐研究方向】" not in call_2["user_prompt"]
+
+
+def test_orchestrator_allows_compliant_reproduction_negation_and_rejects_affirmative_claim(
+    db_session,
+) -> None:
+    """C. Orchestrator: allow compliant negations, reject ungrounded reproduction claims."""
+    # 1. Compliant negation from Provider -> status completed
+    fake_gen_ok = FakeOrchestratorLlmGenerator(
+        responses=[
+            "目前还不能下“复现成功”的结论，仍需核验数据划分、训练动态与论文基线 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orchestrator_ok = ResearchConversationOrchestrator(llm_generator=fake_gen_ok)
+    conv_ok = ResearchConversationModel(id="conv-repro-ok", profile_data={}, messages_data=[])
+    db_session.add(conv_ok)
+    db_session.commit()
+
+    resp_ok = orchestrator_ok.process_message(
+        "conv-repro-ok",
+        SendOrchestratorMessageRequest(message="在 Cora 上测得 Accuracy 80.8%"),
+        db_session,
+    )
+    assert resp_ok.status == "completed"
+    assert resp_ok.reply_message is not None
+    assert "目前还不能下“复现成功”的结论" in resp_ok.reply_message.content
+
+    # 2. Affirmative claim "视为复现成功" from Provider -> status failed
+    fake_gen_bad1 = FakeOrchestratorLlmGenerator(
+        responses=[
+            "若 Accuracy 落在 80.0% - 82.5%，即可视为复现成功 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orchestrator_bad1 = ResearchConversationOrchestrator(llm_generator=fake_gen_bad1)
+    conv_bad1 = ResearchConversationModel(id="conv-repro-bad1", profile_data={}, messages_data=[])
+    db_session.add(conv_bad1)
+    db_session.commit()
+
+    resp_bad1 = orchestrator_bad1.process_message(
+        "conv-repro-bad1",
+        SendOrchestratorMessageRequest(message="我们来设计实验评估标准"),
+        db_session,
+    )
+    assert resp_bad1.status == "failed"
+    assert resp_bad1.reply_message is None
+    assert resp_bad1.state.last_status == "failed"
+    assert "validation failure" in resp_bad1.error
+
+    # 3. Affirmative claim "本次实验已复现成功" -> status failed
+    fake_gen_bad2 = FakeOrchestratorLlmGenerator(
+        responses=[
+            "本次实验已复现成功 (•̀ᴗ•́)و ̑̑！"
+        ]
+    )
+    orchestrator_bad2 = ResearchConversationOrchestrator(llm_generator=fake_gen_bad2)
+    conv_bad2 = ResearchConversationModel(id="conv-repro-bad2", profile_data={}, messages_data=[])
+    db_session.add(conv_bad2)
+    db_session.commit()
+
+    resp_bad2 = orchestrator_bad2.process_message(
+        "conv-repro-bad2",
+        SendOrchestratorMessageRequest(message="结果出来了"),
+        db_session,
+    )
+    assert resp_bad2.status == "failed"
+    assert resp_bad2.reply_message is None
+    assert resp_bad2.state.last_status == "failed"
+
+    # 4. Mixed clause: negation in first half + positive claim in second half -> failed
+    fake_gen_mixed = FakeOrchestratorLlmGenerator(
+        responses=[
+            "尚未确认复现成功，但本次实验已复现成功 (•̀ᴗ•́)و ̑̑！"
+        ]
+    )
+    orchestrator_mixed = ResearchConversationOrchestrator(llm_generator=fake_gen_mixed)
+    conv_mixed = ResearchConversationModel(id="conv-repro-mixed", profile_data={}, messages_data=[])
+    db_session.add(conv_mixed)
+    db_session.commit()
+
+    resp_mixed = orchestrator_mixed.process_message(
+        "conv-repro-mixed",
+        SendOrchestratorMessageRequest(message="看一下整体状态"),
+        db_session,
+    )
+    assert resp_mixed.status == "failed"
+    assert resp_mixed.reply_message is None
+    assert resp_mixed.state.last_status == "failed"
+
+    # 5. Semantic violation: "本次已成功复现 GCN。" -> failed, no state advance
+    fake_gen_v1 = FakeOrchestratorLlmGenerator(
+        responses=["本次已成功复现 GCN (•̀ᴗ•́)و ̑̑！"]
+    )
+    orchestrator_v1 = ResearchConversationOrchestrator(llm_generator=fake_gen_v1)
+    conv_v1 = ResearchConversationModel(id="conv-repro-v1", profile_data={}, messages_data=[])
+    db_session.add(conv_v1)
+    db_session.commit()
+
+    resp_v1 = orchestrator_v1.process_message(
+        "conv-repro-v1",
+        SendOrchestratorMessageRequest(message="看一下结果"),
+        db_session,
+    )
+    assert resp_v1.status == "failed"
+    assert resp_v1.reply_message is None
+    assert resp_v1.state.last_status == "failed"
+    assert resp_v1.state.current_stage == "research_need"
+    assert resp_v1.state.subtasks.need_defined is False
+
+    # 6. Semantic violation: "Accuracy 超过 81% 即算复现通过。" -> failed
+    fake_gen_v2 = FakeOrchestratorLlmGenerator(
+        responses=["Accuracy 超过 81% 即算复现通过 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v2 = ResearchConversationOrchestrator(llm_generator=fake_gen_v2)
+    conv_v2 = ResearchConversationModel(id="conv-repro-v2", profile_data={}, messages_data=[])
+    db_session.add(conv_v2)
+    db_session.commit()
+
+    resp_v2 = orchestrator_v2.process_message(
+        "conv-repro-v2",
+        SendOrchestratorMessageRequest(message="设计评估指标"),
+        db_session,
+    )
+    assert resp_v2.status == "failed"
+    assert resp_v2.reply_message is None
+    assert resp_v2.state.last_status == "failed"
+
+    # 7. Safe boundary case: "复现成功不代表论文结论正确，仍需人工核验。" -> completed
+    fake_gen_safe = FakeOrchestratorLlmGenerator(
+        responses=["复现成功不代表论文结论正确，仍需人工核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe = ResearchConversationOrchestrator(llm_generator=fake_gen_safe)
+    conv_safe = ResearchConversationModel(id="conv-repro-safe", profile_data={}, messages_data=[])
+    db_session.add(conv_safe)
+    db_session.commit()
+
+    resp_safe = orchestrator_safe.process_message(
+        "conv-repro-safe",
+        SendOrchestratorMessageRequest(message="指标核验进展"),
+        db_session,
+    )
+    assert resp_safe.status == "completed"
+    assert resp_safe.reply_message is not None
+    assert "复现成功不代表论文结论正确" in resp_safe.reply_message.content
+
+    # 8. Unrelated negation in first half + positive claim in second half -> failed
+    fake_gen_v3 = FakeOrchestratorLlmGenerator(
+        responses=["实验不稳定且已复现成功 (•̀ᴗ•́)و ̑̑！"]
+    )
+    orchestrator_v3 = ResearchConversationOrchestrator(llm_generator=fake_gen_v3)
+    conv_v3 = ResearchConversationModel(id="conv-repro-v3", profile_data={}, messages_data=[])
+    db_session.add(conv_v3)
+    db_session.commit()
+
+    resp_v3 = orchestrator_v3.process_message(
+        "conv-repro-v3",
+        SendOrchestratorMessageRequest(message="评估实验状态"),
+        db_session,
+    )
+    assert resp_v3.status == "failed"
+    assert resp_v3.reply_message is None
+    assert resp_v3.state.last_status == "failed"
+    assert resp_v3.state.current_stage == "research_need"
+    assert resp_v3.state.subtasks.need_defined is False
+
+    # 9. Extended reproduction term "模型已稳定重现论文结果。" -> failed
+    fake_gen_v4 = FakeOrchestratorLlmGenerator(
+        responses=["模型已稳定重现论文结果 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v4 = ResearchConversationOrchestrator(llm_generator=fake_gen_v4)
+    conv_v4 = ResearchConversationModel(id="conv-repro-v4", profile_data={}, messages_data=[])
+    db_session.add(conv_v4)
+    db_session.commit()
+
+    resp_v4 = orchestrator_v4.process_message(
+        "conv-repro-v4",
+        SendOrchestratorMessageRequest(message="看一下重现情况"),
+        db_session,
+    )
+    assert resp_v4.status == "failed"
+    assert resp_v4.reply_message is None
+    assert resp_v4.state.last_status == "failed"
+    assert resp_v4.state.current_stage == "research_need"
+    assert resp_v4.state.subtasks.need_defined is False
+
+    # 10. Positive reproduction synonym: "模型已经复现论文结果。" -> failed
+    fake_gen_v5 = FakeOrchestratorLlmGenerator(
+        responses=["模型已经复现论文结果 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v5 = ResearchConversationOrchestrator(llm_generator=fake_gen_v5)
+    conv_v5 = ResearchConversationModel(id="conv-repro-v5", profile_data={}, messages_data=[])
+    db_session.add(conv_v5)
+    db_session.commit()
+
+    resp_v5 = orchestrator_v5.process_message(
+        "conv-repro-v5",
+        SendOrchestratorMessageRequest(message="检查论文复现状态"),
+        db_session,
+    )
+    assert resp_v5.status == "failed"
+    assert resp_v5.reply_message is None
+    assert resp_v5.state.last_status == "failed"
+    assert resp_v5.state.current_stage == "research_need"
+    assert resp_v5.state.subtasks.need_defined is False
+
+    # 11. Contextual risk reminder: "严禁声称复现成功率，当前结果仍待核验。" -> completed
+    fake_gen_safe2 = FakeOrchestratorLlmGenerator(
+        responses=["严禁声称复现成功率，当前结果仍待核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe2 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe2)
+    conv_safe2 = ResearchConversationModel(id="conv-repro-safe2", profile_data={}, messages_data=[])
+    db_session.add(conv_safe2)
+    db_session.commit()
+
+    resp_safe2 = orchestrator_safe2.process_message(
+        "conv-repro-safe2",
+        SendOrchestratorMessageRequest(message="成功率如何评估"),
+        db_session,
+    )
+    assert resp_safe2.status == "completed"
+    assert resp_safe2.reply_message is not None
+    assert "严禁声称复现成功率" in resp_safe2.reply_message.content
+
+    # 12. Final R4 positive claim "模型成功跑通了论文复现实验。" -> failed
+    fake_gen_v6 = FakeOrchestratorLlmGenerator(
+        responses=["模型成功跑通了论文复现实验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v6 = ResearchConversationOrchestrator(llm_generator=fake_gen_v6)
+    conv_v6 = ResearchConversationModel(id="conv-repro-v6", profile_data={}, messages_data=[])
+    db_session.add(conv_v6)
+    db_session.commit()
+
+    resp_v6 = orchestrator_v6.process_message(
+        "conv-repro-v6",
+        SendOrchestratorMessageRequest(message="检查实验运行结果"),
+        db_session,
+    )
+    assert resp_v6.status == "failed"
+    assert resp_v6.reply_message is None
+    assert resp_v6.state.last_status == "failed"
+    assert resp_v6.state.current_stage == "research_need"
+    assert resp_v6.state.subtasks.need_defined is False
+
+    # 13. Evidence boundary violation "指标达到 81%，说明复现结果与论文一致。" -> failed
+    fake_gen_v7 = FakeOrchestratorLlmGenerator(
+        responses=["指标达到 81%，说明复现结果与论文一致 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v7 = ResearchConversationOrchestrator(llm_generator=fake_gen_v7)
+    conv_v7 = ResearchConversationModel(id="conv-repro-v7", profile_data={}, messages_data=[])
+    db_session.add(conv_v7)
+    db_session.commit()
+
+    resp_v7 = orchestrator_v7.process_message(
+        "conv-repro-v7",
+        SendOrchestratorMessageRequest(message="对比指标"),
+        db_session,
+    )
+    assert resp_v7.status == "failed"
+    assert resp_v7.reply_message is None
+    assert resp_v7.state.last_status == "failed"
+    assert resp_v7.state.current_stage == "research_need"
+    assert resp_v7.state.subtasks.need_defined is False
+
+    # 14. Evidence boundary safe case "实验完成率的计算口径仍待确认。" -> completed
+    fake_gen_safe3 = FakeOrchestratorLlmGenerator(
+        responses=["实验完成率的计算口径仍待确认 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe3 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe3)
+    conv_safe3 = ResearchConversationModel(id="conv-repro-safe3", profile_data={}, messages_data=[])
+    db_session.add(conv_safe3)
+    db_session.commit()
+
+    resp_safe3 = orchestrator_safe3.process_message(
+        "conv-repro-safe3",
+        SendOrchestratorMessageRequest(message="口径确认"),
+        db_session,
+    )
+    assert resp_safe3.status == "completed"
+    assert resp_safe3.reply_message is not None
+    assert "实验完成率的计算口径仍待确认" in resp_safe3.reply_message.content
+
+    # 15. P1-A violation "结果和原论文吻合，可以进入下一阶段。" -> failed
+    fake_gen_v8 = FakeOrchestratorLlmGenerator(
+        responses=["结果和原论文吻合，可以进入下一阶段 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v8 = ResearchConversationOrchestrator(llm_generator=fake_gen_v8)
+    conv_v8 = ResearchConversationModel(id="conv-repro-v8", profile_data={}, messages_data=[])
+    db_session.add(conv_v8)
+    db_session.commit()
+
+    resp_v8 = orchestrator_v8.process_message(
+        "conv-repro-v8",
+        SendOrchestratorMessageRequest(message="检查吻合度"),
+        db_session,
+    )
+    assert resp_v8.status == "failed"
+    assert resp_v8.reply_message is None
+    assert resp_v8.state.last_status == "failed"
+    assert resp_v8.state.current_stage == "research_need"
+    assert resp_v8.state.subtasks.need_defined is False
+
+    # 16. P1-B intra-clause safe case "实验完成率作为实验过程指标，而非复现结论。" -> completed
+    fake_gen_safe4 = FakeOrchestratorLlmGenerator(
+        responses=["实验完成率作为实验过程指标，而非复现结论 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe4 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe4)
+    conv_safe4 = ResearchConversationModel(id="conv-repro-safe4", profile_data={}, messages_data=[])
+    db_session.add(conv_safe4)
+    db_session.commit()
+
+    resp_safe4 = orchestrator_safe4.process_message(
+        "conv-repro-safe4",
+        SendOrchestratorMessageRequest(message="过程指标说明"),
+        db_session,
+    )
+    assert resp_safe4.status == "completed"
+    assert resp_safe4.reply_message is not None
+    assert "实验完成率作为实验过程指标" in resp_safe4.reply_message.content
+
+    # 17. Consistency violation "指标达到81%，复现指标与论文一致。" -> failed
+    fake_gen_v9 = FakeOrchestratorLlmGenerator(
+        responses=["指标达到81%，复现指标与论文一致 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_v9 = ResearchConversationOrchestrator(llm_generator=fake_gen_v9)
+    conv_v9 = ResearchConversationModel(id="conv-repro-v9", profile_data={}, messages_data=[])
+    db_session.add(conv_v9)
+    db_session.commit()
+
+    resp_v9 = orchestrator_v9.process_message(
+        "conv-repro-v9",
+        SendOrchestratorMessageRequest(message="检查指标一致性"),
+        db_session,
+    )
+    assert resp_v9.status == "failed"
+    assert resp_v9.reply_message is None
+    assert resp_v9.state.last_status == "failed"
+    assert resp_v9.state.current_stage == "research_need"
+    assert resp_v9.state.subtasks.need_defined is False
+
+    # 18. Compound coordination safe case "不应断言复现成功或复现实验完成。" -> completed
+    fake_gen_safe5 = FakeOrchestratorLlmGenerator(
+        responses=["不应断言复现成功或复现实验完成 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orchestrator_safe5 = ResearchConversationOrchestrator(llm_generator=fake_gen_safe5)
+    conv_safe5 = ResearchConversationModel(id="conv-repro-safe5", profile_data={}, messages_data=[])
+    db_session.add(conv_safe5)
+    db_session.commit()
+
+    resp_safe5 = orchestrator_safe5.process_message(
+        "conv-repro-safe5",
+        SendOrchestratorMessageRequest(message="复合边界说明"),
+        db_session,
+    )
+    assert resp_safe5.status == "completed"
+    assert resp_safe5.reply_message is not None
+    assert "不应断言复现成功或复现实验完成" in resp_safe5.reply_message.content
+
+
+def test_orchestrator_p1_reproduction_boundary_regressions(db_session) -> None:
+    """P1 Orchestrator regressions:
+    1. Provider affirmative completion violation -> failed, no advancement.
+    2. Provider compliant fact/to_verify and conditional boundary -> completed.
+    """
+    # 1. Provider outputs word-order variant completion claim -> status failed
+    fake_gen_bad = FakeOrchestratorLlmGenerator(
+        responses=["本轮实验已通过复现验证 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_bad = ResearchConversationOrchestrator(llm_generator=fake_gen_bad)
+    conv_bad = ResearchConversationModel(id="conv-p1-bad", profile_data={}, messages_data=[])
+    db_session.add(conv_bad)
+    db_session.commit()
+
+    resp_bad = orch_bad.process_message(
+        "conv-p1-bad",
+        SendOrchestratorMessageRequest(message="验证实验完成情况"),
+        db_session,
+    )
+    assert resp_bad.status == "failed"
+    assert resp_bad.reply_message is None
+    assert resp_bad.state.last_status == "failed"
+    assert "Jiang Jiang output boundary validation failure" in (resp_bad.error or "")
+    assert resp_bad.state.current_stage == "research_need"
+    assert resp_bad.state.subtasks.need_defined is False
+    state_in_db = orch_bad.get_state_model("conv-p1-bad", db_session)
+    assert state_in_db.current_plan is None
+    assert len(state_in_db.plan_history or []) == 0
+    profiles_bad = orch_bad.get_learner_profiles("conv-p1-bad", db_session)
+    assert len(profiles_bad.history) == 0
+
+    # 2. Unsubstantiated user report without source -> status failed, no advancement
+    fake_gen_unproven = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文一致；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_unproven = ResearchConversationOrchestrator(llm_generator=fake_gen_unproven)
+    conv_unproven = ResearchConversationModel(
+        id="conv-p1-unproven", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_unproven)
+    db_session.commit()
+
+    resp_unproven = orch_unproven.process_message(
+        "conv-p1-unproven",
+        SendOrchestratorMessageRequest(message="汇报当前事实边界"),
+        db_session,
+    )
+    assert resp_unproven.status == "failed"
+    assert resp_unproven.reply_message is None
+    assert resp_unproven.state.last_status == "failed"
+    assert "Jiang Jiang output boundary validation failure" in (resp_unproven.error or "")
+    assert resp_unproven.state.current_stage == "research_need"
+    assert resp_unproven.state.subtasks.need_defined is False
+    state_in_db2 = orch_unproven.get_state_model("conv-p1-unproven", db_session)
+    assert state_in_db2.current_plan is None
+    assert len(state_in_db2.plan_history or []) == 0
+    profiles_unproven = orch_unproven.get_learner_profiles("conv-p1-unproven", db_session)
+    assert len(profiles_unproven.history) == 0
+
+    # 3. Irrelevant to_verify without source -> status failed
+    fake_gen_irrelevant = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文一致；to_verify：确认显存容量 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_irrelevant = ResearchConversationOrchestrator(llm_generator=fake_gen_irrelevant)
+    conv_irrelevant = ResearchConversationModel(
+        id="conv-p1-irrel", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_irrelevant)
+    db_session.commit()
+
+    resp_irrelevant = orch_irrelevant.process_message(
+        "conv-p1-irrel",
+        SendOrchestratorMessageRequest(message="汇报当前事实边界"),
+        db_session,
+    )
+    assert resp_irrelevant.status == "failed"
+    assert resp_irrelevant.reply_message is None
+
+    # 4. User provides authentic fact in current message -> status completed
+    fake_gen_proven = FakeOrchestratorLlmGenerator(
+        responses=[
+            "fact：用户报告实验结果与论文一致；\n"
+            "to_verify：仍需核验数据划分、随机种子和指标计算口径 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orch_proven = ResearchConversationOrchestrator(llm_generator=fake_gen_proven)
+    conv_proven = ResearchConversationModel(
+        id="conv-p1-proven", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_proven)
+    db_session.commit()
+
+    resp_proven = orch_proven.process_message(
+        "conv-p1-proven",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_proven.status == "completed"
+    assert resp_proven.reply_message is not None
+    assert "fact：用户报告实验结果与论文一致" in resp_proven.reply_message.content
+
+    # 5. Persisted historical evidence enables subsequent compliant restatement
+    fake_gen_hist = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文一致；to_verify：仍需核验数据划分 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_hist = ResearchConversationOrchestrator(llm_generator=fake_gen_hist)
+    conv_hist = ResearchConversationModel(
+        id="conv-p1-hist",
+        profile_data={},
+        messages_data=[
+            {
+                "sender": "user",
+                "role": "user",
+                "content": "我观察到本次实验结果与论文结果一致，但还没有完成核验。",
+            }
+        ],
+    )
+    db_session.add(conv_hist)
+    db_session.commit()
+
+    resp_hist = orch_hist.process_message(
+        "conv-p1-hist",
+        SendOrchestratorMessageRequest(message="汇报当前事实边界"),
+        db_session,
+    )
+    assert resp_hist.status == "completed"
+    assert resp_hist.reply_message is not None
+    assert "fact：用户报告实验结果与论文一致" in resp_hist.reply_message.content
+
+    # 6. User provides fact, but model claims ungrounded affirmative completion -> status failed
+    fake_gen_cross = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文一致；但姜姜确认已经复现成功 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_cross = ResearchConversationOrchestrator(llm_generator=fake_gen_cross)
+    conv_cross = ResearchConversationModel(
+        id="conv-p1-cross", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_cross)
+    db_session.commit()
+
+    resp_cross = orch_cross.process_message(
+        "conv-p1-cross",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_cross.status == "failed"
+    assert resp_cross.reply_message is None
+
+    # 7. Provider outputs compliant conditional boundary -> status completed
+    fake_gen_ok2 = FakeOrchestratorLlmGenerator(
+        responses=["即使实验结果与论文一致，也不能据此认定复现成功 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_ok2 = ResearchConversationOrchestrator(llm_generator=fake_gen_ok2)
+    conv_ok2 = ResearchConversationModel(id="conv-p1-ok2", profile_data={}, messages_data=[])
+    db_session.add(conv_ok2)
+    db_session.commit()
+
+    resp_ok2 = orch_ok2.process_message(
+        "conv-p1-ok2",
+        SendOrchestratorMessageRequest(message="说明基线一致与复现成功的边界"),
+        db_session,
+    )
+    assert resp_ok2.status == "completed"
+    assert resp_ok2.reply_message is not None
+    assert "即使实验结果与论文一致，也不能据此认定复现成功" in resp_ok2.reply_message.content
+
+    # 8. Category mismatch between user evidence and model claim -> status failed
+    fake_gen_mismatch = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告指标达到论文基线；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_mismatch = ResearchConversationOrchestrator(llm_generator=fake_gen_mismatch)
+    conv_mismatch = ResearchConversationModel(
+        id="conv-p1-mismatch", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_mismatch)
+    db_session.commit()
+
+    resp_mismatch = orch_mismatch.process_message(
+        "conv-p1-mismatch",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_mismatch.status == "failed"
+    assert resp_mismatch.reply_message is None
+
+    # 9. Source tag leakage to Jiang Jiang confirmation -> status failed
+    fake_gen_leak = FakeOrchestratorLlmGenerator(
+        responses=[
+            "用户报告实验结果与论文一致、姜姜确认实验结果与论文一致；"
+            "to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"
+        ]
+    )
+    orch_leak = ResearchConversationOrchestrator(llm_generator=fake_gen_leak)
+    conv_leak = ResearchConversationModel(
+        id="conv-p1-leak", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_leak)
+    db_session.commit()
+
+    resp_leak = orch_leak.process_message(
+        "conv-p1-leak",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_leak.status == "failed"
+    assert resp_leak.reply_message is None
+
+    # 10. Matching category 2 user evidence -> status completed
+    fake_gen_cat2 = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告指标达到论文基线；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_cat2 = ResearchConversationOrchestrator(llm_generator=fake_gen_cat2)
+    conv_cat2 = ResearchConversationModel(
+        id="conv-p1-cat2", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_cat2)
+    db_session.commit()
+
+    resp_cat2 = orch_cat2.process_message(
+        "conv-p1-cat2",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验指标达到论文基线，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_cat2.status == "completed"
+    assert resp_cat2.reply_message is not None
+    assert "fact：用户报告指标达到论文基线" in resp_cat2.reply_message.content
+
+    # 11. Fine-grained fingerprint mismatch in orchestrator -> status failed, no advancement
+    fake_gen_fp_mis = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告复现指标与论文指标一致；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_fp_mis = ResearchConversationOrchestrator(llm_generator=fake_gen_fp_mis)
+    conv_fp_mis = ResearchConversationModel(
+        id="conv-p1-fp-mis", profile_data={}, messages_data=[]
+    )
+    db_session.add(conv_fp_mis)
+    db_session.commit()
+
+    resp_fp_mis = orch_fp_mis.process_message(
+        "conv-p1-fp-mis",
+        SendOrchestratorMessageRequest(
+            message="我观察到本次实验结果与论文结果一致，但还没有完成核验。"
+        ),
+        db_session,
+    )
+    assert resp_fp_mis.status == "failed"
+    assert resp_fp_mis.reply_message is None
+    assert resp_fp_mis.state.last_status == "failed"
+    assert resp_fp_mis.state.current_stage == "research_need"
+    assert resp_fp_mis.state.subtasks.need_defined is False
+    state_in_db_fp = orch_fp_mis.get_state_model("conv-p1-fp-mis", db_session)
+    assert state_in_db_fp.current_plan is None
+    assert len(state_in_db_fp.plan_history or []) == 0
+    profiles_fp = orch_fp_mis.get_learner_profiles("conv-p1-fp-mis", db_session)
+    assert len(profiles_fp.history) == 0
+
+    # 12. Non-assertive user question in orchestrator -> status failed, no advancement
+    fake_gen_q = FakeOrchestratorLlmGenerator(
+        responses=["fact：用户报告实验结果与论文结果一致；to_verify：仍需核验 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_q = ResearchConversationOrchestrator(llm_generator=fake_gen_q)
+    conv_q = ResearchConversationModel(id="conv-p1-q", profile_data={}, messages_data=[])
+    db_session.add(conv_q)
+    db_session.commit()
+
+    resp_q = orch_q.process_message(
+        "conv-p1-q",
+        SendOrchestratorMessageRequest(message="实验结果是否与论文结果一致？"),
+        db_session,
+    )
+    assert resp_q.status == "failed"
+    assert resp_q.reply_message is None
+    assert resp_q.state.last_status == "failed"
+    assert resp_q.state.current_stage == "research_need"
+    assert resp_q.state.subtasks.need_defined is False
+    state_in_db_q = orch_q.get_state_model("conv-p1-q", db_session)
+    assert state_in_db_q.current_plan is None
+    assert len(state_in_db_q.plan_history or []) == 0
+    profiles_q = orch_q.get_learner_profiles("conv-p1-q", db_session)
+    assert len(profiles_q.history) == 0
+
+    # 13. Question containing '跑通过' in orchestrator -> status completed
+    fake_gen_q_run = FakeOrchestratorLlmGenerator(
+        responses=["你亲手用 PyTorch Geometric 跑通过 Cora 数据集吗？(｡･ω･｡)"]
+    )
+    orch_q_run = ResearchConversationOrchestrator(llm_generator=fake_gen_q_run)
+    conv_q_run = ResearchConversationModel(id="conv-p1-qrun", profile_data={}, messages_data=[])
+    db_session.add(conv_q_run)
+    db_session.commit()
+
+    resp_q_run = orch_q_run.process_message(
+        "conv-p1-qrun",
+        SendOrchestratorMessageRequest(message="你好姜姜，我想开始科研"),
+        db_session,
+    )
+    assert resp_q_run.status == "completed"
+    assert resp_q_run.reply_message is not None
+
+    # 14. Mastery assertion from learning context -> status failed, no advancement
+    fake_gen_mast = FakeOrchestratorLlmGenerator(
+        responses=["这说明你的线性代数和谱图论基本功已经很扎实了 (•̀ᴗ•́)و ̑̑。"]
+    )
+    orch_mast = ResearchConversationOrchestrator(llm_generator=fake_gen_mast)
+    conv_mast = ResearchConversationModel(id="conv-p1-mast", profile_data={}, messages_data=[])
+    db_session.add(conv_mast)
+    db_session.commit()
+
+    resp_mast = orch_mast.process_message(
+        "conv-p1-mast",
+        SendOrchestratorMessageRequest(message="你好姜姜，我想开始科研"),
+        db_session,
+    )
+    assert resp_mast.status == "failed"
+    assert resp_mast.reply_message is None
+    assert resp_mast.state.last_status == "failed"
+    assert resp_mast.state.current_stage == "research_need"
+    assert resp_mast.state.subtasks.need_defined is False
+
+    # 15. Capability/entrance inference from learning context -> status failed, no advancement
+    for raw_resp in [
+        "你已经有用 GCN 做节点分类的实践经验 (｡･ω･｡)。",
+        "这说明你已经具备做比较深入研究的入口了 (•̀ᴗ•́)و ̑̑。",
+    ]:
+        orch_cap = ResearchConversationOrchestrator(
+            llm_generator=FakeOrchestratorLlmGenerator(responses=[raw_resp])
+        )
+        cid = f"conv-cap-{abs(hash(raw_resp))}"
+        conv_cap = ResearchConversationModel(id=cid, profile_data={}, messages_data=[])
+        db_session.add(conv_cap)
+        db_session.commit()
+        resp_cap = orch_cap.process_message(
+            cid,
+            SendOrchestratorMessageRequest(message="你好姜姜，我想开始科研"),
+            db_session,
+        )
+        assert resp_cap.status == "failed"
+        assert resp_cap.reply_message is None
+        assert resp_cap.state.last_status == "failed"
+        assert resp_cap.state.current_stage == "research_need"
+        assert resp_cap.state.subtasks.need_defined is False
+        assert resp_cap.state.completed_stages == []
+
+
+def test_s3_stage_transition_mode_selection_and_safety_regression(db_session: Session) -> None:
+    """Regression test for R4 Gate 2 S3:
+    stage transition must not be forced into strict learning mode.
+    """
+    # 1. Mode selection regression: stage transition template has is_learning_record_mode=False
+    conv_id = "conv-s3-mode-sel"
+    conv = ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[])
+    db_session.add(conv)
+    db_session.commit()
+
+    orch = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    ctx = LearningContextInput(
+        learned_content="图卷积网络(GCN)数学推导与节点分类",
+        learning_progress="完成理论推导，准备开展真实实验",
+    )
+    orch.update_learning_context(conv_id, ctx, db_session)
+
+    state_model = db_session.get(ResearchOrchestratorStateModel, conv_id)
+    subtasks = dict(state_model.subtasks or {})
+    subtasks["need_defined"] = True
+    state_model.subtasks = subtasks
+    db_session.commit()
+
+    user_confirm = "好的，就这个方向，没问题，确认进入下一步！"
+    prompt_data = orch._select_prompt_template(
+        conv_id,
+        "research_need",
+        subtasks,
+        user_confirm,
+        is_confirmed=True,
+        db=db_session,
+        owned_ids=None,
+    )
+    assert prompt_data.get("template_name") == "stage_transition"
+    assert prompt_data.get("is_learning_record_mode") is False
+
+    # 2. Global safety does not regress: even with learning_record_mode=False
+    for forbidden_claim in [
+        "你具备良好的科研能力，可以放心进入下一阶段 (｡･ω･｡)。",
+        "你已经掌握了研究方法，因此研究计划已完成 (｡･ω･｡)。",
+        "实验结果与论文一致，所以已经复现成功 (｡･ω･｡)。",
+    ]:
+        fake_gen_unsafe = FakeOrchestratorLlmGenerator(responses=[forbidden_claim])
+        orch_unsafe = ResearchConversationOrchestrator(llm_generator=fake_gen_unsafe)
+        conv_unsafe_id = f"conv-unsafe-{abs(hash(forbidden_claim))}"
+        conv_unsafe = ResearchConversationModel(
+            id=conv_unsafe_id, profile_data={}, messages_data=[]
+        )
+        db_session.add(conv_unsafe)
+        db_session.commit()
+
+        state_u = ResearchOrchestratorStateModel(
+            conversation_id=conv_unsafe_id,
+            current_stage="research_need",
+            completed_stages=[],
+            subtasks={"need_defined": True, "profile_ready": False, "plan_generated": False},
+            direction_history=[],
+            plan_history=[],
+        )
+        db_session.add(state_u)
+        db_session.commit()
+
+        resp_u = orch_unsafe.process_message(
+            conv_unsafe_id,
+            SendOrchestratorMessageRequest(message=user_confirm),
+            db_session,
+        )
+        assert resp_u.status == "failed"
+        assert resp_u.reply_message is None
+        assert resp_u.state.current_stage == "research_need"
+        assert "research_need" not in resp_u.state.completed_stages
+
+
+def test_s3_stage_transition_source_scope_integration(db_session: Session) -> None:
+    """Integration: stage_transition completed reply must deterministically inject
+    source_scope prefix.
+
+    - Provider output containing technical framework gets source_scope prefix prepended.
+    - reply_message contains both the source_scope prefix and Provider original text.
+    - stage advances from research_need to research_plan.
+    - Provider failure or violation (capability / false reproduction) still fails immediately.
+    """
+    user_confirm = "好的，就这个方向，没问题，确认进入下一步！"
+
+    # Case A: Provider outputs technical framework -> Completed response must contain source_scope
+    resp_raw_provider = (
+        "# 阶段跃迁确认 (＾▽＾)\n\n"
+        "收到你的确认，我们正式从「研究需求确定」进入「研究计划生成」阶段。\n\n"
+        "**已完成的工作**\n"
+        "- 确定核心研究主题：图卷积神经网络在生物分子图性质预测上的应用\n"
+        "- 明确研究问题框架：分子图表示 + 图卷积消息传递 + 整图读出 + 性质预测\n\n"
+        "设备配置直接影响实验方案设计。很多分子数据集规模不大，CPU也能跑。\n\n"
+        "请告知你的显卡配置 (｡･ω･｡)"
+    )
+    fake_gen_succ = FakeOrchestratorLlmGenerator(responses=[resp_raw_provider])
+    orch_succ = ResearchConversationOrchestrator(llm_generator=fake_gen_succ)
+    conv_succ_id = "conv-s3-succ-scope"
+    conv_succ = ResearchConversationModel(id=conv_succ_id, profile_data={}, messages_data=[])
+    db_session.add(conv_succ)
+    db_session.commit()
+    state_s = ResearchOrchestratorStateModel(
+        conversation_id=conv_succ_id,
+        current_stage="research_need",
+        completed_stages=[],
+        subtasks={"need_defined": True, "profile_ready": False, "plan_generated": False},
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_s)
+    db_session.commit()
+
+    # Test via stream_message to check SSE thinking -> completed
+    events = list(
+        orch_succ.stream_message(
+            conv_succ_id,
+            SendOrchestratorMessageRequest(message=user_confirm),
+            db_session,
+        )
+    )
+    event_names = [
+        line.split(":", 1)[1].strip()
+        for ev in events
+        for line in ev.strip().split("\n")
+        if line.startswith("event:")
+    ]
+    assert event_names == ["thinking", "completed"]
+
+    state_after = orch_succ.get_or_create_state(conv_succ_id, db_session)
+    assert state_after.current_stage == "research_plan"
+    assert "research_need" in state_after.completed_stages
+
+    # Extract final reply content
+    completed_event_str = [ev for ev in events if "event: completed" in ev][0]
+    data_line = [ln for ln in completed_event_str.split("\n") if ln.startswith("data:")][0]
+    payload = json.loads(data_line.split(":", 1)[1].strip())
+    final_reply = payload["reply_message"]["content"]
+
+    # 1. source_scope prefix must appear before technical content
+    expected_scope_needle = "尚未执行正式检索"
+    assert expected_scope_needle in final_reply
+    scope_idx = final_reply.find(expected_scope_needle)
+    tech_idx = final_reply.find("设备配置直接影响实验方案设计")
+    assert scope_idx != -1
+    assert tech_idx != -1
+    assert scope_idx < tech_idx, "source_scope prefix must appear before technical text"
+
+    # 2. reply_message retains Provider original text
+    assert "很多分子数据集规模不大，CPU也能跑" in final_reply
+
+    # Case B: Provider fails or violates boundary rules -> MUST FAIL (no completed masking)
+    for bad_response in [
+        "你已经具备科研能力，可以直接推进 (｡･ω･｡)。",
+        "实验结果与论文一致，所以已经复现成功 (｡･ω･｡)。",
+    ]:
+        fake_gen_fail = FakeOrchestratorLlmGenerator(responses=[bad_response])
+        orch_fail = ResearchConversationOrchestrator(llm_generator=fake_gen_fail)
+        conv_fail_id = f"conv-s3-fail-{abs(hash(bad_response))}"
+        conv_fail = ResearchConversationModel(id=conv_fail_id, profile_data={}, messages_data=[])
+        db_session.add(conv_fail)
+        db_session.commit()
+        state_f = ResearchOrchestratorStateModel(
+            conversation_id=conv_fail_id,
+            current_stage="research_need",
+            completed_stages=[],
+            subtasks={"need_defined": True, "profile_ready": False, "plan_generated": False},
+            direction_history=[],
+            plan_history=[],
+        )
+        db_session.add(state_f)
+        db_session.commit()
+
+        stream_events = list(
+            orch_fail.stream_message(
+                conv_fail_id,
+                SendOrchestratorMessageRequest(message=user_confirm),
+                db_session,
+            )
+        )
+        stream_event_names = [
+            line.split(":", 1)[1].strip()
+            for ev in stream_events
+            for line in ev.strip().split("\n")
+            if line.startswith("event:")
+        ]
+        assert stream_event_names == ["thinking", "failed"]
+
+        state_f_after = orch_fail.get_or_create_state(conv_fail_id, db_session)
+        assert state_f_after.current_stage == "research_need"
+        assert "research_need" not in state_f_after.completed_stages
+
+
+def test_select_prompt_template_learning_record_mode_isolation(db_session: Session) -> None:
+    """Verify strict mode follows whether the selected template consumes records."""
+    fake_gen = FakeOrchestratorLlmGenerator()
+    orch = ResearchConversationOrchestrator(llm_generator=fake_gen)
+    conv_id = "conv-mode-isolation"
+    conv = ResearchConversationModel(
+        id=conv_id,
+        profile_data={},
+        messages_data=[],
+    )
+    db_session.add(conv)
+    db_session.commit()
+    orch.update_learning_context(
+        conv_id,
+        LearningContextInput(
+            learned_content="图卷积神经网络(GCN)",
+            learning_progress="已完成",
+        ),
+        db_session,
+    )
+
+    # 1. welcome_and_bridge -> is_learning_record_mode is True
+    tmpl_welcome = orch._select_prompt_template(
+        conv_id,
+        current_stage="research_need",
+        subtasks={},
+        user_message="你好姜姜",
+        is_confirmed=False,
+        db=db_session,
+        owned_ids=None,
+    )
+    assert tmpl_welcome["template_name"] == "welcome_and_bridge"
+    assert tmpl_welcome["is_learning_record_mode"] is True
+
+    # 2. need_clarification must not consume learning records; S1 owns that bridge.
+    tmpl_clarify = orch._select_prompt_template(
+        conv_id,
+        current_stage="research_need",
+        subtasks={},
+        user_message="我想做图卷积神经网络在生物分子图性质预测上的应用",
+        is_confirmed=False,
+        db=db_session,
+        owned_ids=None,
+    )
+    assert tmpl_clarify["template_name"] == "need_clarification"
+    assert tmpl_clarify["is_learning_record_mode"] is False
+    assert "图卷积神经网络(GCN)" not in tmpl_clarify["user_prompt"]
+
+
+def test_orchestrator_scope_prefix_injection_per_template(db_session: Session) -> None:
+    """Verify that orchestrator injects template-specific scope prefix deterministically."""
+    fake_gen = FakeOrchestratorLlmGenerator(
+        responses=[
+            "欢迎开启科研探索！这里有一些方向建议 (｡･ω･｡)。",
+            "这是关于分子图性质预测的技术细节 (｡･ω･｡)。",
+        ]
+    )
+    orch = ResearchConversationOrchestrator(llm_generator=fake_gen)
+    conv_id = "conv-scope-prefix-inject"
+    conv = ResearchConversationModel(
+        id=conv_id,
+        profile_data={},
+        messages_data=[],
+    )
+    db_session.add(conv)
+    db_session.commit()
+    orch.update_learning_context(
+        conv_id,
+        LearningContextInput(
+            learned_content="图卷积神经网络(GCN)",
+            learning_progress="已完成",
+        ),
+        db_session,
+    )
+
+    # S1: Welcome message
+    resp_s1 = orch.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="你好姜姜，我刚学完图神经网络，想开始做科研"),
+        db_session,
+    )
+    assert resp_s1.reply_message is not None
+    assert resp_s1.reply_message.content.startswith(RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME)
+    assert "已确认方向" not in resp_s1.reply_message.content
+
+    # S2: Clarification message
+    resp_s2 = orch.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="我想做图卷积神经网络在生物分子图性质预测上的应用"),
+        db_session,
+    )
+    assert resp_s2.reply_message is not None
+    assert resp_s2.reply_message.content.startswith(RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION)
+    assert "探索方向" in resp_s2.reply_message.content

@@ -86,6 +86,49 @@ export interface PracticeCodeFillGradeResponse {
   provider_name: string | null;
 }
 
+export interface CodeProjectSymbol {
+  kind: "class" | "function" | "method";
+  name: string;
+  line: number;
+  signature: string;
+  docstring_summary: string;
+}
+
+export interface CodeProjectFile {
+  path: string;
+  kind: "python" | "markdown";
+  size: number;
+  symbols: CodeProjectSymbol[];
+}
+
+export interface CodeProject {
+  project_id: string;
+  name: string;
+  files: CodeProjectFile[];
+  metrics: Record<string, number>;
+}
+
+export interface CodeProjectFileContent {
+  project_id: string;
+  path: string;
+  content: string;
+  symbols: CodeProjectSymbol[];
+}
+
+export interface ProjectExplanationEntry {
+  path: string;
+  symbol: string | null;
+  fact: string[];
+  inference: string[];
+  to_verify: string[];
+}
+
+export interface ProjectExplanationResponse {
+  project_id: string;
+  entries: ProjectExplanationEntry[];
+  source: "model" | "rules";
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
@@ -166,4 +209,48 @@ export async function gradePracticeCodeFill(payload: {
       profile_id: payload.profileId,
     }),
   });
+}
+
+export async function uploadCodeProject(payload: {
+  name: string;
+  files: Array<{ path: string; content_base64: string }>;
+}): Promise<CodeProject> {
+  return request<CodeProject>("/api/v1/practice/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCodeProject(projectId: string): Promise<CodeProject> {
+  return request<CodeProject>(`/api/v1/practice/projects/${encodeURIComponent(projectId)}`);
+}
+
+export async function fetchCodeProjectFile(
+  projectId: string,
+  path: string,
+): Promise<CodeProjectFileContent> {
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return request<CodeProjectFileContent>(
+    `/api/v1/practice/projects/${encodeURIComponent(projectId)}/files/${encodedPath}`,
+  );
+}
+
+export async function explainCodeProject(
+  projectId: string,
+  payload: { path?: string; symbol?: string } = {},
+): Promise<ProjectExplanationResponse> {
+  return request<ProjectExplanationResponse>(
+    `/api/v1/practice/projects/${encodeURIComponent(projectId)}/explain`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function generateProjectCodeFill(
+  projectId: string,
+  payload: { path: string; symbol?: string; count?: number },
+): Promise<PracticeGatewaySetResponse> {
+  return request<PracticeGatewaySetResponse>(
+    `/api/v1/practice/projects/${encodeURIComponent(projectId)}/code-fill`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
 }

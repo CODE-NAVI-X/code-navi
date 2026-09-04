@@ -31,6 +31,14 @@ EXPLAIN_SYMBOL_SYSTEM_PROMPT = (
     "只输出 JSON 对象：{'explanation':'...'}。"
 )
 
+PROJECT_EXPLAIN_SYSTEM_PROMPT = (
+    "你是项目代码讲解助手。只能根据用户提供的文件文本和符号结构解释，不执行代码，不推断运行结果。"
+    "每条结论必须分入 fact（文本直接可见）、inference（基于命名或调用关系的推测）"
+    "或 to_verify（需要用户确认的信息）。"
+    "只输出 JSON：{\"entries\":[{\"path\":\"...\",\"symbol\":null,\"fact\":[\"...\"],"
+    "\"inference\":[\"...\"],\"to_verify\":[\"...\"]}]}。"
+)
+
 
 def code_fill_user_prompt(topic: str, count: int, difficulty: str) -> str:
     """Build the user prompt for one code-fill generation request."""
@@ -70,3 +78,10 @@ def explain_symbol_user_prompt(name: str, kind: str, code_excerpt: str) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def project_explain_user_prompt(project_name: str, files: list[dict[str, str]]) -> str:
+    """Build a bounded project explanation request without execution claims."""
+    import json
+
+    return json.dumps({"project_name": project_name, "files": files}, ensure_ascii=False)
