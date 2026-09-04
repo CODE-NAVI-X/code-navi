@@ -58,6 +58,23 @@ _FORBIDDEN_PHRASES = [
     "完成度100%",
 ]
 
+_ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN = re.compile(
+    r"(?:显存|GPU|算力|设备|配置|CPU|RTX\s*\d+|这个条件|这个配置|当前条件|你的设备)"
+    r"[^。！？!?\n]{0,80}"
+    r"(?:完全够用|够用|完全可以|肯定可以|一定可以|绝对可以|毫无压力|直接训练即可|可行|能跑|可以运行)",
+    re.IGNORECASE,
+)
+
+_QUALIFIED_HARDWARE_CONTEXT_PATTERN = re.compile(
+    r"(?:很多|部分|某些)[^。！？!?\n]{0,40}(?:数据集|任务|场景)",
+    re.IGNORECASE,
+)
+
+_NEGATED_PROCESS_TERM_PATTERN = re.compile(
+    r"(?:不会|不应|不要|不能|严禁|不得|避免)[^。！？!?\n]{0,24}(?:完成|跑通)",
+    re.IGNORECASE,
+)
+
 RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME = (
     "说明：以下内容基于学习端记录与通用技术概览，尚未执行正式检索；"
     "具体论文、实现细节和实验结论仍需在你确认后核验。"
@@ -73,6 +90,11 @@ RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION = (
     "具体论文、实现细节、设备需求和实验结论仍需在你确认后核验。"
 )
 
+RESEARCH_SOURCE_SCOPE_PREFIX_EXECUTION = (
+    "说明：以下内容基于会话状态中已确认的研究方向、当前可用的论文/实验信息及通用技术概览，"
+    "尚未执行正式检索；具体论文细节、实现细节和实验结论仍需在你确认后核验。"
+)
+
 RESEARCH_SOURCE_SCOPE_PREFIX = RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME
 
 
@@ -84,6 +106,13 @@ def get_source_scope_prefix(template_name: str) -> str:
         return RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION
     if template_name == "stage_transition":
         return RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
+    if template_name in {
+        "search_guidance",
+        "paper_intro",
+        "experiment_design",
+        "result_analysis",
+    }:
+        return RESEARCH_SOURCE_SCOPE_PREFIX_EXECUTION
     return RESEARCH_SOURCE_SCOPE_PREFIX_WELCOME
 
 
@@ -260,7 +289,7 @@ _USER_SOURCE_PREFIX_PATTERN = re.compile(
     r"(?:由|据|根据|依据|基于)?"
     r"(?:用户|学生)"
     r"(?:报告|提供|反馈|表示|声称|称|输入|提交)"
-    r"[“\"'「『（(【\[\s]{0,5}$",
+    r"[“‘\"'’「『（(【\[\s]{0,5}$",
     re.IGNORECASE,
 )
 
@@ -291,10 +320,10 @@ _NEGATION_PREFIX_PATTERN = re.compile(
     r"不|并不|绝不|不代表|不等于|不等同于|不等同|不构成|并非|不是|不视为|不算作|不算|≠|!="
     r")"
     r")"
-    r"(?:[“\"'「『（(【\[\s*~_:\*、，,/]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|据此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|已确认的|已确认|已有的|所谓的|某种|一个|这项|这些|所谓|"
+    r"(?:[“‘\"'’「『（(【\[\s*~_:\*、，,/]|把|将|因为|因|由于|根据|依据|凭借|单凭|仅凭|由此|因此|据此|轻易|直接|盲目|贸然|简单|提前|就|而|去|来|前述|目前|当前|已有|现有|这些|上述|结果|指标|数据|已确认的|已确认|已有的|所谓的|某种|一个|这项|这些|所谓|"
     r"熟练|掌握|具备|拥有|实战|实操|实践|经验|实践经验|代码经验|程度|掌握程度|科研能力|研究能力|科研|研究|编程|编码|独立|已|已经|或|或者|和|以及|你|您|其|同学|用户|学生|"
     r"(?:急于|急着|轻易|直接|盲目|贸然|过早|过急|立刻|马上)?(?:判定为|认定为|追求|谈及|提及|轻信|盖章为|盖章|定性为|定论为|定论|定义为|断言为|视作|视为|说明|定义|宣称|断定|判为|判定|认定|认为|得出|下达|形成|确认|宣布|言说|轻言|妄下|妄言|给出|下|声称|断言|说)){0,30}"
-    r"[“\"'「『（(【\[\s*~_:\*、，,/]{0,4}$",
+    r"[“‘\"'’「『（(【\[\s*~_:\*、，,/]{0,4}$",
     re.IGNORECASE,
 )
 
@@ -515,6 +544,20 @@ def _contains_ungrounded_reproduction_success_claim(
         has_unbounded_claim = False
         for m in matches:
             local_prefix = clause_str[:m.start()]
+            local_suffix = clause_str[m.end():]
+            # Process-validation wording is not a reproduction-success claim when
+            # it explicitly refers to environment/runtime checks or a planned
+            # training/evaluation workflow without mentioning reproduction/papers.
+            if m.group() == "验证通过" and "运行验证通过" in clause_str:
+                continue
+            if (
+                m.group() == "跑通"
+                and "流程" in local_suffix
+                and not re.search(r"复现|重现|再现|复刻|论文|实验", clause_str)
+            ):
+                continue
+            if m.group() == "跑通" and _NEGATED_PROCESS_TERM_PATTERN.search(clause_str):
+                continue
             prefix_boundary = bool(
                 _NEGATION_PREFIX_PATTERN.search(local_prefix)
                 or _CONDITION_PREFIX_PATTERN.search(local_prefix)
@@ -522,7 +565,6 @@ def _contains_ungrounded_reproduction_success_claim(
             if prefix_boundary:
                 continue
 
-            local_suffix = clause_str[m.end():]
             suffix_boundary = bool(_SUFFIX_BOUNDARY_PATTERN.search(local_suffix))
             if suffix_boundary:
                 continue
@@ -840,6 +882,20 @@ def validate_jiangjiang_output(
     for phrase in _FORBIDDEN_PHRASES:
         if phrase in text:
             return False, f"Output contains forbidden phrase or unproven claim: {phrase}"
+    for hardware_match in _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN.finditer(text):
+        local_prefix = text[: hardware_match.start()]
+        if _NEGATION_PREFIX_PATTERN.search(local_prefix) or _CONDITION_PREFIX_PATTERN.search(
+            local_prefix
+        ):
+            continue
+        sentence_prefix = local_prefix.rsplit("\n", 1)[-1].rsplit("。", 1)[-1]
+        if _QUALIFIED_HARDWARE_CONTEXT_PATTERN.search(sentence_prefix):
+            continue
+        return (
+            False,
+            "Output makes an absolute hardware-feasibility claim without verified "
+            "experiment evidence",
+        )
     if _requires_natural_source_scope(text):
         if not _has_valid_natural_source_scope(text):
             return (
@@ -1047,7 +1103,8 @@ def build_profile_and_plan_prompt(
         "1. 结合学生实际的硬件、时间和经验，制定务实、可落地的小目标与总体执行计划；\n"
         "2. 若设备显存受限（如 ≤8GB），主动提出缩小 batch size、使用轻量数据集或租用算力；\n"
         "3. 严禁忽略硬件限制生成需要海量算力的方案；严禁编造虚假实验周期；\n"
-        "4. 事实边界与红线约束（绝对遵守）：\n"
+        "4. 不得保证设备一定可行或声称‘完全够用’；只能说明限制、条件与待验证的小规模替代方案；\n"
+        "5. 事实边界与红线约束（绝对遵守）：\n"
         "   - 严禁出现‘核心判断’、‘当前聚焦于’、‘完成百分比’等空泛违约词；\n"
         "   - 严禁由前置学习记录推断用户的实践经验、掌握度或动手能力；\n"
         "   - 严禁在当前阶段下任何‘复现成功’、‘已完成复现’、‘跑通’或‘通过’的断言结论；\n"
@@ -1121,7 +1178,11 @@ def build_paper_intro_prompt(
         "   ③ 核心方法：具体算法设计与技术要点（公式使用标准 LaTeX 书写）；\n"
         "   ④ 与用户目标的关系：这篇论文如何助力用户的研究需求；\n"
         "   ⑤ 复现难点与避坑提示：基于用户硬件与经验可能遇到的挑战。\n"
-        "2. 严禁臆测论文未提供的内容；公式必须规范；严禁使用 Emoji。\n"
+        "2. 严禁臆测论文未提供的内容；无法由标题、链接或摘要确认的细节必须标记为待核验；\n"
+        "3. 不得评价用户的能力、基础、眼光或研究潜力，不得把学习记录改写为掌握度或实践经验；\n"
+        "4. 不得保证设备可行或声称 CPU/GPU 一定能运行；只能说明条件、限制与待验证方案；\n"
+        "5. 不得声称复现成功、实验完成或流程已跑通；与用户目标的关系只能作为待确认建议；\n"
+        "6. 公式必须规范；严禁使用 Emoji。\n"
     )
     return {
         "template_name": "paper_intro",
