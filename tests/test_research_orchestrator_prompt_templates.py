@@ -79,6 +79,8 @@ def test_build_profile_and_plan_prompt() -> None:
     assert "8GB 显存" in prompt["context"]
     assert "计划" in prompt["task"]
     assert "不得保证设备一定可行" in prompt["rules"]
+    assert "不得使用‘能跑’" in prompt["rules"]
+    assert "最终文本不得出现‘复现成功’或‘成功复现’" in prompt["rules"]
 
 
 def test_build_search_guidance_prompt() -> None:
@@ -117,6 +119,10 @@ def test_build_paper_intro_prompt() -> None:
     assert "研究问题" in prompt["rules"] and "创新点" in prompt["rules"]
     assert "不得评价用户的能力" in prompt["rules"]
     assert "不得保证设备可行" in prompt["rules"]
+    assert "本轮只做论文信息解读，不是复现实验" in prompt["rules"]
+    assert "不能得出复现成功结论" in prompt["rules"]
+    assert "最终文本不得出现‘复现成功’或‘成功复现’" in prompt["rules"]
+    assert "不得使用‘掌握’‘基础’‘能力’‘经验’评价用户" in prompt["rules"]
 
 
 def test_build_experiment_design_prompt() -> None:
@@ -145,6 +151,10 @@ def test_build_result_analysis_prompt() -> None:
     )
     assert "80.5%" in prompt["context"]
     assert "结果分析" in prompt["task"]
+    assert "当前仅分析待核验观测" in prompt["rules"]
+    assert "不能得出复现成功结论" in prompt["rules"]
+    assert "最终文本不得出现‘复现成功’或‘成功复现’" in prompt["rules"]
+    assert "只写缺失字段、待核验项和下一步核对动作" in prompt["rules"]
 
 
 def test_build_stage_transition_prompt() -> None:
@@ -933,7 +943,7 @@ def test_source_scope_prefix_clarification() -> None:
 
 def test_source_scope_prefix_transition() -> None:
     """Verify S3 transition scope prefix specifies confirmed direction."""
-    assert "你刚确认的研究方向与通用技术概览" in RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
+    assert "会话状态中已确认的研究方向与通用技术概览" in RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
     assert "尚未执行正式检索" in RESEARCH_SOURCE_SCOPE_PREFIX_TRANSITION
 
 
@@ -976,6 +986,17 @@ def test_validator_rejects_absolute_hardware_feasibility_claim() -> None:
     is_valid_contextual, reason_contextual = validate_jiangjiang_output(contextual_absolute)
     assert not is_valid_contextual
     assert reason_contextual is not None
+
+    qualified_uncertainty = (
+        "我不能保证任何设备一定能运行，具体可行性需要结合你的实际环境测试才能确认。"
+    )
+    is_valid_uncertainty, reason_uncertainty = validate_jiangjiang_output(
+        qualified_uncertainty
+    )
+    assert is_valid_uncertainty, (
+        f"Qualified hardware uncertainty was falsely rejected: {reason_uncertainty}"
+    )
+    assert reason_uncertainty is None
 
 
 def test_validator_allows_process_validation_language_without_reproduction_claim() -> None:
