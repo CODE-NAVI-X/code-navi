@@ -90,6 +90,17 @@ export function ResearchConversation() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, []);
 
+  async function refreshSearchCandidates(conversationId: string) {
+    try {
+      const bundles = await listResearchEvidence(conversationId);
+      const withPapers = bundles.filter((bundle) => bundle.papers.length > 0);
+      const latest = withPapers[withPapers.length - 1];
+      setSearchCandidates(latest ? latest.papers.slice(0, 5) : []);
+    } catch {
+      setSearchCandidates([]);
+    }
+  }
+
   const restoreOrCreate = useCallback(async () => {
     setPhase("initializing");
     setError(null);
@@ -285,17 +296,6 @@ export function ResearchConversation() {
       setFailedTurnError(friendlyError(retryErr));
     } finally {
       setPhase("idle");
-    }
-  }
-
-  async function refreshSearchCandidates(conversationId: string) {
-    try {
-      const bundles = await listResearchEvidence(conversationId);
-      const withPapers = bundles.filter((bundle) => bundle.papers.length > 0);
-      const latest = withPapers[withPapers.length - 1];
-      setSearchCandidates(latest ? latest.papers.slice(0, 5) : []);
-    } catch {
-      setSearchCandidates([]);
     }
   }
 
