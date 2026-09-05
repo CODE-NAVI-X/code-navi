@@ -571,7 +571,9 @@ function PracticeContent() {
   );
   const [setIncludeUploaded, setSetIncludeUploaded] = useState(true);
   const [setGenerationSource, setSetGenerationSource] = useState<"goal" | "learning">(
-    "goal",
+    // Workbench Action Hub deep link (?source=learning) pre-selects the
+    // learning-data source; the POST itself stays user-triggered below.
+    searchParams.get("source") === "learning" ? "learning" : "goal",
   );
   const [setBusy, setSetBusy] = useState(false);
   const [setMessage, setSetMessage] = useState<string | null>(null);
