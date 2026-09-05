@@ -33,7 +33,7 @@ interface NavItem {
 
 // D5 Q1 拍板：学习闭环五入口，/learning/projects 为本次新增侧边栏入口。
 const learningSubItems: NavItem[] = [
-  { href: "/learning", label: "理解与检查", icon: BookOpen, exact: true },
+  { href: "/learning", label: "理解学习", icon: BookOpen, exact: true },
   { href: "/learning/practice", label: "动手实践", icon: Code2, matchPrefix: "/learning/practice" },
   { href: "/learning/projects", label: "项目代码", icon: FolderGit2, matchPrefix: "/learning/projects" },
   { href: "/learning/portrait", label: "知识复盘", icon: BarChart3, matchPrefix: "/learning/portrait" },
