@@ -311,10 +311,18 @@ class TestPortraitsOverviewContract:
         assert response.status_code == 422
 
     def test_invalid_local_profile_id_returns_422(self, client: TestClient) -> None:
-        response = client.get(
-            f"/api/v1/portraits/overview?profile_id={PROFILE_A}&local_profile_id=bad-uuid"
+        """Contract §4.1 note (2026-09): local_profile_id is the browser's
+        `profile-` key (1..64 chars), not a UUID — only length is validated."""
+        empty = client.get(
+            f"/api/v1/portraits/overview?profile_id={PROFILE_A}&local_profile_id="
         )
-        assert response.status_code == 422
+        assert empty.status_code == 422
+
+        overlong = client.get(
+            f"/api/v1/portraits/overview?profile_id={PROFILE_A}"
+            f"&local_profile_id={'x' * 65}"
+        )
+        assert overlong.status_code == 422
 
     def test_conversation_limit_boundary_validation(self, client: TestClient) -> None:
         low = client.get(
@@ -559,3 +567,30 @@ class TestPortraitsOverviewAuthIsolation:
         )
         assert res_b.status_code == 200
         assert len(res_b.json()["research"]["conversations"]) == 0
+
+
+def test_overview_accepts_browser_local_profile_key(client: TestClient) -> None:
+    """The browser mints `profile-`-prefixed local ids; the endpoint keys on them verbatim.
+
+    Regression: the router required a UUID v4 here, so the review page's
+    ``local_profile_id=profile-...`` query failed with 422.
+    """
+    response = client.get(
+        "/api/v1/portraits/overview",
+        params={
+            "profile_id": PROFILE_A,
+            "local_profile_id": "profile-a6f8ee6a1ffbc4156bc776e2",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["profile_id"] == PROFILE_A
+
+    overlong = client.get(
+        "/api/v1/portraits/overview",
+        params={
+            "profile_id": PROFILE_A,
+            "local_profile_id": "profile-" + "x" * 60,
+        },
+    )
+    assert overlong.status_code == 422
