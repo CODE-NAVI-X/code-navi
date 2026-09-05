@@ -1798,10 +1798,16 @@ class ResearchConversationService:
 
 
 def _messages(conversation: ResearchConversationModel) -> list[ResearchConversationMessage]:
-    return [
-        ResearchConversationMessage.model_validate(message)
-        for message in conversation.messages_data
-    ]
+    normalized: list[ResearchConversationMessage] = []
+    for message in conversation.messages_data:
+        payload = dict(message)
+        # The orchestrator chat flow historically persisted the identifier as
+        # `id`; the restore contract names it `message_id`.  Stored rows keep
+        # their original shape (历史不改写), so the reader accepts both.
+        if "message_id" not in payload and "id" in payload:
+            payload["message_id"] = payload.pop("id")
+        normalized.append(ResearchConversationMessage.model_validate(payload))
+    return normalized
 
 
 _StoredArtifactT = TypeVar("_StoredArtifactT", bound=BaseModel)

@@ -491,3 +491,56 @@ def test_learning_context_progress_and_content_roundtrip_and_direction_cards(
     assert cards_data["learned_content"] == "图神经网络与 GCN 消息传递机制"
     assert cards_data["learning_progress"] == "完成 80% 学习进度，已跑通基础练习"
     assert len(cards_data["cards"]) > 0
+
+
+def test_chat_roundtrip_restores_through_legacy_endpoint(client: TestClient) -> None:
+    """Messages persisted by the orchestrator chat flow must restore via
+    ``GET /conversations/{id}`` (message_id contract) instead of 500."""
+    conv = _create_conversation(client, id="conv-api-roundtrip")
+    sent = client.post(
+        f"/api/v1/research/conversations/{conv.id}/orchestrator/messages",
+        json={"message": "我想研究图神经网络在引文网络上的节点分类"},
+    )
+    assert sent.status_code == 200
+
+    restored = client.get(f"/api/v1/research/conversations/{conv.id}")
+    assert restored.status_code == 200
+    messages = restored.json()["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert all(message["message_id"] for message in messages)
+
+    # The writer persists the contract key, not the legacy `id` alias.
+    with client.db_session_factory() as db:
+        row = db.get(ResearchConversationModel, conv.id)
+        assert all(
+            "message_id" in message and "id" not in message for message in row.messages_data
+        )
+
+
+def test_restore_accepts_legacy_id_shaped_messages(client: TestClient) -> None:
+    """Rows written before the key fix (persisted with `id`) must restore 200."""
+    conv = _create_conversation(
+        client,
+        id="conv-api-legacy-msg",
+        messages_data=[
+            {
+                "id": "10af3005-e4f7-4dc7-89be-867622d66fac",
+                "role": "user",
+                "content": "旧版落库的用户消息",
+                "created_at": "2026-09-05T06:38:40+00:00",
+            },
+            {
+                "id": "b2c6e7a0-1111-4222-8333-444455556666",
+                "role": "assistant",
+                "content": "旧版落库的姜姜回复",
+                "triggered_tool": None,
+                "stage_at_time": "research_need",
+                "created_at": "2026-09-05T06:38:41+00:00",
+            },
+        ],
+    )
+    restored = client.get(f"/api/v1/research/conversations/{conv.id}")
+    assert restored.status_code == 200
+    messages = restored.json()["messages"]
+    assert messages[0]["message_id"] == "10af3005-e4f7-4dc7-89be-867622d66fac"
+    assert messages[1]["stage_at_time"] == "research_need"

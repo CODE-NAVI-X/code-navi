@@ -165,6 +165,9 @@ class ResearchConversationMessage(BaseModel):
     next_question: str | None = None
     suggested_answers: list[str] = Field(default_factory=list)
     candidate_questions: list[str] = Field(default_factory=list)
+    # Audit metadata written by the orchestrator chat flow.
+    triggered_tool: str | None = None
+    stage_at_time: str | None = None
     recommended_action: (
         Literal[
             "continue_dialogue",

@@ -1768,7 +1768,7 @@ class ResearchConversationOrchestrator:
 
         # User message
         msgs.append({
-            "id": str(uuid.uuid4()),
+            "message_id": str(uuid.uuid4()),
             "role": "user",
             "content": user_message,
             "created_at": now_dt.isoformat(),
@@ -1777,7 +1777,7 @@ class ResearchConversationOrchestrator:
         # Assistant message
         assistant_msg_id = str(uuid.uuid4())
         msgs.append({
-            "id": assistant_msg_id,
+            "message_id": assistant_msg_id,
             "role": "assistant",
             "content": reply_content,
             "triggered_tool": triggered_tool,
