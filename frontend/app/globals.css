@@ -11,6 +11,8 @@
   --app-border: #e2e8f0;
   --app-header: rgba(248, 250, 252, 0.95);
   --app-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --app-shadow-flat: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --app-shadow-lift: 0 8px 24px rgba(15, 23, 42, 0.08);
   --app-focus: #2563eb;
   /* System font stack (was next/font/google Geist) so `next build` runs
      fully offline — required for the Docker/NAS build, which cannot reach
@@ -27,6 +29,8 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --radius-card: 1rem;
+  --radius-control: 0.625rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,13 +38,15 @@
     --background: #09090b;
     --foreground: #f4f4f5;
     --app-surface: #09090b;
-    --app-card: #18181b;
-    --app-card-subtle: #121215;
+    --app-card: #121215;
+    --app-card-subtle: #18181b;
     --app-foreground: #f4f4f5;
     --app-muted: #a1a1aa;
-    --app-border: #27272a;
+    --app-border: rgba(255, 255, 255, 0.08);
     --app-header: rgba(9, 9, 11, 0.95);
     --app-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --app-shadow-flat: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --app-shadow-lift: 0 8px 28px rgba(0, 0, 0, 0.7);
     --app-focus: #3b82f6;
   }
 }
@@ -70,7 +76,7 @@
   .app-card {
     border: 1px solid var(--app-border);
     background: var(--app-card);
-    box-shadow: var(--app-shadow);
+    box-shadow: var(--app-shadow-flat);
   }
 
   .app-card-subtle {
@@ -101,6 +107,12 @@
     color: #991b1b;
   }
 
+  /* DESIGN.md §2.2: glow border for active/featured cards, light mode. */
+  .tech-border-glow {
+    border-color: #bfdbfe;
+    box-shadow: 0 0 12px rgba(37, 99, 235, 0.06);
+  }
+
   @media (prefers-color-scheme: dark) {
   .app-button-primary {
     background: #fafafa;
@@ -116,6 +128,12 @@
     border-color: rgba(127, 29, 29, 0.75);
     background: rgba(127, 29, 29, 0.22);
     color: #fecaca;
+  }
+
+  /* DESIGN.md §2.2: glow border for active/featured cards, dark mode. */
+  .tech-border-glow {
+    border-color: rgba(59, 130, 246, 0.3);
+    box-shadow: 0 0 15px rgba(59, 130, 246, 0.15);
   }
   }
 }

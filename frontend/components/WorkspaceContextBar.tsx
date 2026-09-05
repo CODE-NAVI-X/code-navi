@@ -44,6 +44,11 @@ function returnLabel(destination: string): string {
   return "返回上一步";
 }
 
+/**
+ * 统一顶栏中段的「我在哪」面包屑（DESIGN.md §6.6 / D5 Q3）。
+ * 原 WorkspaceContextBar 独立条已内聚于此：展示 Workspace / Task 上下文
+ * 与返回入口；独立 Learning 提示与上下文失效警示保留原有语义。
+ */
 export function WorkspaceContextBar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -97,10 +102,8 @@ export function WorkspaceContextBar() {
       pathname.startsWith("/student/learning/");
     if (!isLearningRoute) return null;
     return (
-      <div className="border-t border-[var(--app-border)] bg-[var(--app-card)] px-3 py-2 shadow-[var(--app-shadow)]">
-        <div className="mx-auto max-w-[1920px] text-xs text-slate-600 dark:text-zinc-300">
-          独立 Learning：解析会保存至个人工作区，但不关联 Task。
-        </div>
+      <div className="hidden min-w-0 truncate text-xs text-[var(--app-muted)] md:block">
+        独立 Learning：解析会保存至个人工作区，但不关联 Task。
       </div>
     );
   }
@@ -109,27 +112,34 @@ export function WorkspaceContextBar() {
 
   if (context.state === "loading") {
     return (
-      <div className="border-t border-[var(--app-border)] bg-[var(--app-card)] px-3 py-2 shadow-[var(--app-shadow)]">
-        <div role="status" aria-live="polite" className="mx-auto flex max-w-[1920px] items-center gap-2 text-xs text-slate-600 dark:text-zinc-300">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          正在恢复工作上下文…
-        </div>
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--app-muted)]"
+      >
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+        <span className="truncate">正在恢复工作上下文…</span>
       </div>
     );
   }
 
   if (context.state === "error") {
     return (
-      <div role="alert" className="border-t border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/30">
-        <div className="mx-auto flex max-w-[1920px] flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
-          <span>工作上下文不可用；请从有效的工作区或任务入口重新进入。</span>
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={() => setRetryVersion((version) => version + 1)} className="font-semibold underline">
-              重试
-            </button>
-            <Link className="font-semibold underline" href="/">返回首页</Link>
-          </div>
-        </div>
+      <div
+        role="alert"
+        className="flex min-w-0 items-center gap-2 truncate text-xs text-amber-700 dark:text-amber-300"
+      >
+        <span className="truncate">工作上下文不可用</span>
+        <button
+          type="button"
+          onClick={() => setRetryVersion((version) => version + 1)}
+          className="shrink-0 font-semibold underline"
+        >
+          重试
+        </button>
+        <Link href="/" className="shrink-0 font-semibold underline">
+          返回首页
+        </Link>
       </div>
     );
   }
@@ -141,28 +151,26 @@ export function WorkspaceContextBar() {
   const currentIsDestination = pathname === destination;
 
   return (
-    <div className="border-t border-[var(--app-border)] bg-[var(--app-card)] px-3 py-2 shadow-[var(--app-shadow)]">
-      <div className="mx-auto flex max-w-[1920px] flex-wrap items-center justify-between gap-2 text-xs text-slate-700 dark:text-zinc-200">
-        <div className="flex min-w-0 items-center gap-2">
-          <BriefcaseBusiness className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate font-semibold">{context.workspace.title}</span>
-          {context.task && (
-            <>
-              <span className="text-slate-400 dark:text-zinc-500">/</span>
-              <span className="truncate">{context.task.title}</span>
-            </>
-          )}
-        </div>
-        {!currentIsDestination && (
-          <Link
-            href={destination}
-            className="app-button-secondary inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {returnLabel(destination)}
-          </Link>
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-slate-700 dark:text-zinc-200">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <BriefcaseBusiness className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-zinc-500" />
+        <span className="truncate font-semibold">{context.workspace.title}</span>
+        {context.task && (
+          <>
+            <span className="shrink-0 text-slate-400 dark:text-zinc-500">/</span>
+            <span className="truncate">{context.task.title}</span>
+          </>
         )}
       </div>
+      {!currentIsDestination && (
+        <Link
+          href={destination}
+          className="app-button-secondary inline-flex shrink-0 items-center gap-1 rounded-control px-2 py-1 font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">{returnLabel(destination)}</span>
+        </Link>
+      )}
     </div>
   );
 }
