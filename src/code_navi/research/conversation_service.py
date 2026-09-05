@@ -1806,6 +1806,10 @@ def _messages(conversation: ResearchConversationModel) -> list[ResearchConversat
         # their original shape (历史不改写), so the reader accepts both.
         if "message_id" not in payload and "id" in payload:
             payload["message_id"] = payload.pop("id")
+        # `template` is an internal orchestrator audit tag (consumed via the
+        # raw persisted JSON for plan snapshots); it is not part of the legacy
+        # message contract, so the reader strips it instead of expanding the API.
+        payload.pop("template", None)
         normalized.append(ResearchConversationMessage.model_validate(payload))
     return normalized
 

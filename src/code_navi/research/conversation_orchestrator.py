@@ -1298,7 +1298,7 @@ class ResearchConversationOrchestrator:
         elif current_stage == "research_execution":
             paper_ready = subtasks.get("paper_selected")
             exp_ready = subtasks.get("experiment_designed")
-            if is_confirmed and (paper_ready or exp_ready):
+            if is_confirmed and paper_ready and exp_ready:
                 state_model.current_stage = "research_analysis"
                 if "research_execution" not in completed_stages:
                     completed_stages.append("research_execution")
@@ -1418,12 +1418,13 @@ class ResearchConversationOrchestrator:
                 )
 
         elif current_stage == "research_execution":
-            paper_or_exp = subtasks.get("paper_selected") or subtasks.get("experiment_designed")
-            if is_confirmed and paper_or_exp:
+            paper_ready = subtasks.get("paper_selected")
+            exp_ready = subtasks.get("experiment_designed")
+            if is_confirmed and paper_ready and exp_ready:
                 tmpl = build_stage_transition_prompt(
                     from_stage="research_execution",
                     to_stage="research_analysis",
-                    completed_subtasks=["选定核心论文或完成实验方案设计"],
+                    completed_subtasks=["选定核心论文并完成实验方案设计"],
                     next_goals="运行实验指标记录，进行客观归因与对比分析",
                 )
             elif any(k in user_message for k in ["检索", "找论文", "搜索", "关键词"]):
@@ -1432,14 +1433,14 @@ class ResearchConversationOrchestrator:
                     candidate_queries=[user_message],
                     sources=["OpenAlex", "Crossref", "arXiv"],
                 )
-            elif papers_resp.current_paper is not None:
-                tmpl = build_paper_intro_prompt(
-                    paper=papers_resp.current_paper,
-                    profile=profiles_resp.current_profile,
-                    research_goal="论文精读与复现",
+            elif papers_resp.current_paper is not None and any(
+                k in user_message
+                for k in ["实验计划", "实验安排", "实验流程", "实验步骤", "初步方案", "具体方案"]
+            ):
+                # A specific experiment plan requires the selected current paper.
+                prof = (
+                    profiles_resp.current_profile or LearnerProfileData(version=1)
                 )
-            else:
-                prof = profiles_resp.current_profile or LearnerProfileData(version=1)
                 task_type = infer_task_type(
                     topic=user_message,
                     research_questions=[user_message],
@@ -1453,6 +1454,21 @@ class ResearchConversationOrchestrator:
                     paper=papers_resp.current_paper,
                     profile=prof,
                     standard_metrics=standard_metrics,
+                )
+            elif papers_resp.current_paper is not None:
+                tmpl = build_paper_intro_prompt(
+                    paper=papers_resp.current_paper,
+                    profile=profiles_resp.current_profile,
+                    research_goal="论文精读与复现",
+                )
+            else:
+                # No current paper: a specific experiment plan must not be
+                # generated (design: plan generation requires a selected paper).
+                # Stay on retrieval guidance until the user picks one.
+                tmpl = build_search_guidance_prompt(
+                    research_goal=user_message or "检索并选定当前复现论文",
+                    candidate_queries=[user_message or "复现论文检索"],
+                    sources=["OpenAlex", "Crossref", "arXiv"],
                 )
 
         else:  # research_analysis
@@ -1771,22 +1787,20 @@ class ResearchConversationOrchestrator:
         """Snapshot the user-confirmed plan (contract §7).
 
         The latest confirmed version becomes ``current_plan``; older versions
-        stay in ``plan_history``.  The snapshot content is the assistant's most
-        recent plan-generation message; without one nothing is recorded (no
-        fabrication).
+        stay in ``plan_history``.  Only a traceable plan-generation message
+        (``template == "profile_and_plan"``) qualifies; without one nothing is
+        recorded — welcome, paper-intro or stage-transition replies must never
+        be dressed up as the plan (no fabrication).
         """
-        assistant_msgs = [
-            msg for msg in (conv.messages_data or []) if msg.get("role") == "assistant"
-        ]
-        if not assistant_msgs:
-            return
         tagged = [
             msg
-            for msg in assistant_msgs
-            if msg.get("template") == "profile_and_plan"
+            for msg in (conv.messages_data or [])
+            if msg.get("role") == "assistant"
+            and msg.get("template") == "profile_and_plan"
         ]
-        source_msg = (tagged or assistant_msgs)[-1]
-        plan_content = source_msg.get("content")
+        if not tagged:
+            return
+        plan_content = tagged[-1].get("content")
         if not isinstance(plan_content, str) or not plan_content.strip():
             return
         history = list(state_model.plan_history or [])

@@ -556,9 +556,28 @@ def test_reconfirmed_plan_creates_version_two_and_keeps_history(db_session) -> N
     assert state_row.plan_history[1]["version"] == 2
 
 
-def test_experiment_design_generation_enables_execution_stage_completion(db_session) -> None:
-    """experiment_designed must be set after an experiment design is generated
-    in the regular flow, so research_execution can complete via confirmation.
+def _seed_current_paper(db_session, conversation_id: str) -> None:
+    from code_navi.research.models import ResearchOrchestratorPaperModel
+
+    db_session.add(
+        ResearchOrchestratorPaperModel(
+            conversation_id=conversation_id,
+            paper_url="https://arxiv.org/abs/1609.02907",
+            title="Semi-Supervised Classification with Graph Convolutional Networks",
+            purpose="replace",
+            is_current=True,
+            metadata_snapshot={},
+        )
+    )
+    db_session.commit()
+
+
+def test_specific_experiment_plan_requires_current_paper(db_session) -> None:
+    """具体实验方案的生成前提是已选当前论文（设计文档：初步/具体方案层次）。
+
+    Without a current paper the orchestrator must NOT generate a specific
+    experiment plan (must stay on retrieval / paper-introduction guidance),
+    and ``experiment_designed`` must stay False.
     """
     orchestrator = ResearchConversationOrchestrator(
         llm_generator=SequencedOrchestratorLlmGenerator(
@@ -567,25 +586,49 @@ def test_experiment_design_generation_enables_execution_stage_completion(db_sess
     )
     conv = ResearchConversationModel(id="conv-exec-1", profile_data={}, messages_data=[])
     db_session.add(conv)
-    state_model = ResearchOrchestratorStateModel(
-        conversation_id="conv-exec-1",
-        current_stage="research_execution",
-        completed_stages=["research_need", "research_plan"],
-        subtasks={
-            "need_defined": True,
-            "profile_ready": True,
-            "plan_generated": True,
-            "paper_selected": False,
-            "experiment_designed": False,
-        },
-        direction_history=[],
-        plan_history=[],
+    db_session.add(
+        ResearchOrchestratorStateModel(
+            conversation_id="conv-exec-1",
+            current_stage="research_execution",
+            completed_stages=["research_need", "research_plan"],
+            subtasks={
+                "need_defined": True,
+                "profile_ready": True,
+                "plan_generated": True,
+                "paper_selected": False,
+                "experiment_designed": False,
+            },
+            direction_history=[],
+            plan_history=[],
+        )
     )
-    db_session.add(state_model)
     db_session.commit()
 
-    # No paper selected yet; a regular (non-passive-tool) design request goes
-    # through the experiment_design template and marks the subtask.
+    # 1. No current paper: a design request must not produce a specific
+    #    experiment plan nor mark the subtask.
+    resp = orchestrator.process_message(
+        "conv-exec-1",
+        SendOrchestratorMessageRequest(
+            message="帮我制定一份具体的实验安排，包括数据准备和训练流程"
+        ),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+    assert resp.state.subtasks.experiment_designed is False
+
+    # 2. With the current paper selected (papers/select effect: current paper
+    #    row + paper_selected subtask), the same request generates the plan
+    #    and marks the subtask for the NEXT confirmation turn.
+    _seed_current_paper(db_session, "conv-exec-1")
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-exec-1")
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": True,
+        "paper_selected": True,
+        "experiment_designed": False,
+    }
+    db_session.commit()
     resp = orchestrator.process_message(
         "conv-exec-1",
         SendOrchestratorMessageRequest(
@@ -596,7 +639,8 @@ def test_experiment_design_generation_enables_execution_stage_completion(db_sess
     assert resp.state.current_stage == "research_execution"
     assert resp.state.subtasks.experiment_designed is True
 
-    # Confirmation afterwards completes the execution stage.
+    # 3. Paper selected + design generated + explicit confirmation: only now
+    #    may research_analysis begin.
     resp = orchestrator.process_message(
         "conv-exec-1",
         SendOrchestratorMessageRequest(message="可以，确认进入结果分析"),
@@ -604,6 +648,111 @@ def test_experiment_design_generation_enables_execution_stage_completion(db_sess
     )
     assert resp.state.current_stage == "research_analysis"
     assert "research_execution" in resp.state.completed_stages
+
+
+def test_execution_stage_requires_paper_and_design_together(db_session) -> None:
+    """已选当前论文但未完成实验方案：不能进入结果分析；反之亦然。"""
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=SequencedOrchestratorLlmGenerator(
+            ["姜姜陪你继续推进当前阶段 (｡･ω･｡)"]
+        )
+    )
+    conv = ResearchConversationModel(id="conv-exec-2", profile_data={}, messages_data=[])
+    db_session.add(conv)
+    db_session.add(
+        ResearchOrchestratorStateModel(
+            conversation_id="conv-exec-2",
+            current_stage="research_execution",
+            completed_stages=["research_need", "research_plan"],
+            subtasks={
+                "need_defined": True,
+                "profile_ready": True,
+                "plan_generated": True,
+                "paper_selected": True,
+                "experiment_designed": False,
+            },
+            direction_history=[],
+            plan_history=[],
+        )
+    )
+    db_session.commit()
+
+    # Paper selected but no experiment design yet: confirmation must NOT pass.
+    resp = orchestrator.process_message(
+        "conv-exec-2",
+        SendOrchestratorMessageRequest(message="可以，确认进入结果分析"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+
+    # Design exists but no paper selected: confirmation must NOT pass either.
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-exec-2")
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": True,
+        "paper_selected": False,
+        "experiment_designed": True,
+    }
+    db_session.commit()
+    resp = orchestrator.process_message(
+        "conv-exec-2",
+        SendOrchestratorMessageRequest(message="可以，确认进入结果分析"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_plan_snapshot_requires_traceable_plan_message(db_session) -> None:
+    """P0-2: without a traceable ``profile_and_plan`` message, confirming the
+    plan must not fabricate a version from the welcome / paper-intro /
+    stage-transition reply (or any arbitrary assistant message)."""
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=SequencedOrchestratorLlmGenerator(
+            ["姜姜陪你继续推进当前阶段 (｡･ω･｡)"]
+        )
+    )
+    conv = ResearchConversationModel(
+        id="conv-plan-3",
+        profile_data={},
+        messages_data=[
+            {
+                "message_id": "msg-welcome",
+                "role": "assistant",
+                "content": "(＾▽＾) 欢迎来到科研端！这是欢迎语，不是研究计划。",
+                "template": "welcome_and_bridge",
+                "created_at": "2026-09-05T09:00:00+00:00",
+            }
+        ],
+    )
+    db_session.add(conv)
+    db_session.add(
+        ResearchOrchestratorStateModel(
+            conversation_id="conv-plan-3",
+            current_stage="research_plan",
+            completed_stages=["research_need"],
+            subtasks={
+                "need_defined": True,
+                "profile_ready": True,
+                "plan_generated": True,
+            },
+            direction_history=[],
+            plan_history=[],
+        )
+    )
+    db_session.commit()
+
+    resp = orchestrator.process_message(
+        "conv-plan-3",
+        SendOrchestratorMessageRequest(message="可以，就按这个计划来"),
+        db_session,
+    )
+    # The stage still completes (subtasks + confirmation are genuine), but no
+    # plan version may be recorded without a traceable plan message.
+    assert resp.state.current_stage == "research_execution"
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-plan-3")
+    assert state_row.current_plan is None
+    assert state_row.plan_history == []
 
 
 def test_direction_change_preserves_history_while_resetting_stage(db_session) -> None:
