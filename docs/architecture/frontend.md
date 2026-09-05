@@ -26,7 +26,7 @@
 | 分组 | 条目 | 路由 |
 | --- | --- | --- |
 | 顶层 | 工作台 | `/` |
-| 学习闭环 | 理解与检查 | `/learning` |
+| 学习闭环 | 理解学习 | `/learning` |
 | 学习闭环 | 动手实践 | `/learning/practice` |
 | 学习闭环 | 项目代码 | `/learning/projects` |
 | 学习闭环 | 知识复盘 | `/learning/portrait` |
