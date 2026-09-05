@@ -1293,6 +1293,7 @@ class ResearchConversationOrchestrator:
                 if "research_plan" not in completed_stages:
                     completed_stages.append("research_plan")
                 state_model.completed_stages = completed_stages
+                self._record_confirmed_plan(state_model, conv)
 
         elif current_stage == "research_execution":
             paper_ready = subtasks.get("paper_selected")
@@ -1308,8 +1309,20 @@ class ResearchConversationOrchestrator:
                 subtasks["results_analyzed"] = True
                 state_model.subtasks = subtasks
 
+        # Subtask bookkeeping driven by deterministic template selection (never
+        # by the model): a generated plan / experiment design completes that
+        # subtask for the NEXT confirmation turn, so a same-turn confirm cannot
+        # advance past content the user has not yet seen.
+        if template_name == "profile_and_plan" and current_stage == "research_plan":
+            subtasks["plan_generated"] = True
+            state_model.subtasks = subtasks
+        elif template_name == "experiment_design" and current_stage == "research_execution":
+            subtasks["experiment_designed"] = True
+            state_model.subtasks = subtasks
+
         return self._finalize_reply(
-            conversation_id, state_model, user_message, reply_content, None, db
+            conversation_id, state_model, user_message, reply_content, None, db,
+            template_name=template_name,
         )
 
     def retry_last_message(
@@ -1750,6 +1763,43 @@ class ResearchConversationOrchestrator:
             f"所有历史记录均已完好保存，你可以随时继续当前阶段的讨论！"
         )
 
+    def _record_confirmed_plan(
+        self,
+        state_model: ResearchOrchestratorStateModel,
+        conv: ResearchConversationModel,
+    ) -> None:
+        """Snapshot the user-confirmed plan (contract §7).
+
+        The latest confirmed version becomes ``current_plan``; older versions
+        stay in ``plan_history``.  The snapshot content is the assistant's most
+        recent plan-generation message; without one nothing is recorded (no
+        fabrication).
+        """
+        assistant_msgs = [
+            msg for msg in (conv.messages_data or []) if msg.get("role") == "assistant"
+        ]
+        if not assistant_msgs:
+            return
+        tagged = [
+            msg
+            for msg in assistant_msgs
+            if msg.get("template") == "profile_and_plan"
+        ]
+        source_msg = (tagged or assistant_msgs)[-1]
+        plan_content = source_msg.get("content")
+        if not isinstance(plan_content, str) or not plan_content.strip():
+            return
+        history = list(state_model.plan_history or [])
+        entry = {
+            "version": len(history) + 1,
+            "content": plan_content,
+            "confirmed_by": "user_confirmation",
+            "confirmed_at": datetime.now(UTC).isoformat(),
+        }
+        history.append(entry)
+        state_model.plan_history = history
+        state_model.current_plan = entry
+
     def _finalize_reply(
         self,
         conversation_id: str,
@@ -1758,6 +1808,7 @@ class ResearchConversationOrchestrator:
         reply_content: str,
         triggered_tool: str | None,
         db: Session,
+        template_name: str | None = None,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -1781,6 +1832,7 @@ class ResearchConversationOrchestrator:
             "role": "assistant",
             "content": reply_content,
             "triggered_tool": triggered_tool,
+            "template": template_name,
             "stage_at_time": state_model.current_stage,
             "created_at": now_dt.isoformat(),
         })

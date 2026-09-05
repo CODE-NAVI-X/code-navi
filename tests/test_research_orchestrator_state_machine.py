@@ -416,3 +416,224 @@ def test_first_load_race_adopts_the_winner_state_row(db_session) -> None:
     again = orchestrator.get_state_model(conv_id, db_session)
     assert again.conversation_id == conv_id
     assert again.completed_stages == state.completed_stages
+
+
+class SequencedOrchestratorLlmGenerator:
+    """Fake LLM returning a distinct reply per call, for plan-version assertions."""
+
+    def __init__(self, replies: list[str]) -> None:
+        self.replies = list(replies)
+        self.calls = 0
+
+    def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+        from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+
+        text = self.replies[min(self.calls, len(self.replies) - 1)]
+        self.calls += 1
+        return OrchestratorLlmOutcome(status="generated", reply_text=text)
+
+
+def _make_plan_stage_state(db_session, conv_id: str) -> ResearchOrchestratorStateModel:
+    state_model = ResearchOrchestratorStateModel(
+        conversation_id=conv_id,
+        current_stage="research_plan",
+        completed_stages=["research_need"],
+        subtasks={"need_defined": True, "profile_ready": True, "plan_generated": False},
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_model)
+    db_session.commit()
+    return state_model
+
+
+def test_plan_generation_then_confirmation_completes_stage_two(db_session) -> None:
+    """plan_generated must be set by deterministic rule after a plan is
+    generated, so stage two can complete on a later explicit confirmation.
+
+    Regression: no code path ever set ``plan_generated = True``, so the
+    ``research_plan -> research_execution`` transition was unreachable.
+    """
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=SequencedOrchestratorLlmGenerator(
+            ["姜姜结合你的画像整理了一份执行计划，我们先从数据准备开始 (｡･ω･｡)"]
+        )
+    )
+    conv = ResearchConversationModel(id="conv-plan-1", profile_data={}, messages_data=[])
+    db_session.add(conv)
+    _make_plan_stage_state(db_session, "conv-plan-1")
+
+    # 1. Explicit confirmation while no plan exists yet: must NOT advance, but
+    #    the generated plan marks the subtask for the NEXT turn.
+    resp = orchestrator.process_message(
+        "conv-plan-1",
+        SendOrchestratorMessageRequest(message="可以，继续吧"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_plan"
+    assert resp.state.subtasks.plan_generated is True
+
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-plan-1")
+    # The plan itself is NOT yet user-confirmed: no version may be recorded.
+    assert state_row.current_plan is None
+    assert state_row.plan_history == []
+
+    # 2. Explicit confirmation after seeing the plan completes stage two.
+    resp = orchestrator.process_message(
+        "conv-plan-1",
+        SendOrchestratorMessageRequest(message="可以，就按这个计划来"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+    assert "research_plan" in resp.state.completed_stages
+
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-plan-1")
+    assert state_row.current_plan is not None
+    assert state_row.current_plan["version"] == 1
+    assert "执行计划" in state_row.current_plan["content"]
+    assert state_row.current_plan["confirmed_by"] == "user_confirmation"
+    assert len(state_row.plan_history) == 1
+    assert state_row.plan_history[0]["version"] == 1
+
+
+def test_reconfirmed_plan_creates_version_two_and_keeps_history(db_session) -> None:
+    """A second confirmed plan (e.g. after updating constraints) must create a
+    new version; the latest confirmed version becomes current, old stays in
+    history (contract §7)."""
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=SequencedOrchestratorLlmGenerator(
+            [
+                "姜姜结合你的画像整理了一份执行计划，我们先从数据准备开始 (｡･ω･｡)",
+                "姜姜根据新的时间安排整理了第二版计划，先补齐前置知识再复现 (｡･ω･｡)",
+            ]
+        )
+    )
+    conv = ResearchConversationModel(id="conv-plan-2", profile_data={}, messages_data=[])
+    db_session.add(conv)
+    _make_plan_stage_state(db_session, "conv-plan-2")
+
+    # First plan cycle.
+    orchestrator.process_message(
+        "conv-plan-2",
+        SendOrchestratorMessageRequest(message="可以，继续吧"),
+        db_session,
+    )
+    resp = orchestrator.process_message(
+        "conv-plan-2",
+        SendOrchestratorMessageRequest(message="可以，就按这个计划来"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+
+    # Re-plan cycle (e.g. after a direction change reset the subtasks).
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-plan-2")
+    state_row.current_stage = "research_plan"
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": False,
+    }
+    db_session.commit()
+
+    orchestrator.process_message(
+        "conv-plan-2",
+        SendOrchestratorMessageRequest(message="请根据新的每周时间安排更新计划"),
+        db_session,
+    )
+    resp = orchestrator.process_message(
+        "conv-plan-2",
+        SendOrchestratorMessageRequest(message="可以，就按新的计划来"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+
+    state_row = db_session.get(ResearchOrchestratorStateModel, "conv-plan-2")
+    assert state_row.current_plan["version"] == 2
+    assert "第二版计划" in state_row.current_plan["content"]
+    assert len(state_row.plan_history) == 2
+    assert state_row.plan_history[0]["version"] == 1
+    assert "执行计划" in state_row.plan_history[0]["content"]
+    assert state_row.plan_history[1]["version"] == 2
+
+
+def test_experiment_design_generation_enables_execution_stage_completion(db_session) -> None:
+    """experiment_designed must be set after an experiment design is generated
+    in the regular flow, so research_execution can complete via confirmation.
+    """
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=SequencedOrchestratorLlmGenerator(
+            ["姜姜结合论文与你的设备整理了具体实验安排，我们先准备数据集 (｡･ω･｡)"]
+        )
+    )
+    conv = ResearchConversationModel(id="conv-exec-1", profile_data={}, messages_data=[])
+    db_session.add(conv)
+    state_model = ResearchOrchestratorStateModel(
+        conversation_id="conv-exec-1",
+        current_stage="research_execution",
+        completed_stages=["research_need", "research_plan"],
+        subtasks={
+            "need_defined": True,
+            "profile_ready": True,
+            "plan_generated": True,
+            "paper_selected": False,
+            "experiment_designed": False,
+        },
+        direction_history=[],
+        plan_history=[],
+    )
+    db_session.add(state_model)
+    db_session.commit()
+
+    # No paper selected yet; a regular (non-passive-tool) design request goes
+    # through the experiment_design template and marks the subtask.
+    resp = orchestrator.process_message(
+        "conv-exec-1",
+        SendOrchestratorMessageRequest(
+            message="帮我制定一份具体的实验安排，包括数据准备和训练流程"
+        ),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+    assert resp.state.subtasks.experiment_designed is True
+
+    # Confirmation afterwards completes the execution stage.
+    resp = orchestrator.process_message(
+        "conv-exec-1",
+        SendOrchestratorMessageRequest(message="可以，确认进入结果分析"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_analysis"
+    assert "research_execution" in resp.state.completed_stages
+
+
+def test_direction_change_preserves_history_while_resetting_stage(db_session) -> None:
+    """换方向：保留历史，回到 research_need 重建当前方案（契约 §2）。
+
+    Freeze that a direction change keeps ``completed_stages`` and records the
+    new direction in ``direction_history`` instead of wiping history.
+    """
+    orchestrator = ResearchConversationOrchestrator()
+    conv = ResearchConversationModel(id="conv-sm-dir-hist", profile_data={}, messages_data=[])
+    db_session.add(conv)
+    db_session.add(
+        ResearchOrchestratorStateModel(
+            conversation_id="conv-sm-dir-hist",
+            current_stage="research_execution",
+            completed_stages=["research_need", "research_plan"],
+            subtasks={"need_defined": True, "profile_ready": True, "plan_generated": True},
+            direction_history=[],
+            plan_history=[],
+        )
+    )
+    db_session.commit()
+
+    resp = orchestrator.process_message(
+        "conv-sm-dir-hist",
+        SendOrchestratorMessageRequest(message="我想换个方向，改做图对比学习"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_need"
+    # History is preserved, not wiped.
+    assert "research_need" in resp.state.completed_stages
+    assert "research_plan" in resp.state.completed_stages
+    assert len(resp.state.direction_history) == 1

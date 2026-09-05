@@ -640,6 +640,60 @@ def test_reading_reports_stay_user_sourced_and_ppt_stays_a_draft() -> None:
     assert "不生成 PPT 文件" in paper_source
 
 
+CONFIRM_PAGE = Path("frontend/app/(student)/research/confirm/[contextId]/page.tsx")
+LEARNING_EXIT = Path("frontend/lib/learning-context.ts")
+
+
+def test_learning_to_research_navigation_targets_the_real_confirm_route() -> None:
+    """Freeze the Learning → Research hand-off route (NAS 404 regression).
+
+    The confirm page lives in the ``(student)`` route group, which adds no URL
+    segment: the only real URL is ``/research/confirm/[contextId]``.  A
+    ``/student/research/confirm/...`` push renders Next.js 404.
+    """
+    exit_source = LEARNING_EXIT.read_text(encoding="utf-8")
+    confirm_source = CONFIRM_PAGE.read_text(encoding="utf-8")
+
+    # The confirm page itself navigates to /research (not /student/research).
+    assert '"/research"' in confirm_source
+    # navigateToResearch must push the real confirm route for the created context.
+    assert "/student/research/confirm/" not in exit_source
+    assert "`/research/confirm/${encodeURIComponent(context.id)}`" in exit_source
+
+    # No frontend entry point may reintroduce the dead /student/... prefix.
+    offenders = [
+        str(path)
+        for path in Path("frontend").rglob("*.ts*")
+        if "/student/research/confirm/" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_confirm_page_failure_keeps_user_on_page_without_persisting() -> None:
+    """A failed learning-context PUT must not persist the conversation id,
+    must not navigate to /research, and must surface a retryable error."""
+    source = CONFIRM_PAGE.read_text(encoding="utf-8")
+
+    # confirmDraft catch: show the error; never write localStorage or navigate.
+    confirm_part = source.split("async function confirmDraft()")[1].split("if (loading)")[0]
+    catch_part = confirm_part.split("catch (requestError)")[1]
+    assert "setError(" in catch_part
+    assert "setConfirming(false)" in catch_part
+    assert "localStorage.setItem" not in catch_part
+    assert 'router.push("/research")' not in catch_part
+    assert 'router.replace("/research")' not in catch_part
+    # The error renders and the confirm button stays enabled for retry.
+    assert '{error && <p role="alert"' in source
+
+    # Restore path (already-confirmed transfer): same failure discipline.
+    effect_part = source.split("useEffect(")[1].split("async function saveDraft")[0]
+    effect_catch = effect_part.split(".catch((requestError)")[1]
+    assert "setError(" in effect_catch
+    assert "localStorage.setItem" not in effect_catch
+    assert 'router.replace("/research")' not in effect_catch
+    assert 'router.push("/research")' not in effect_catch
+
+
 def test_learning_context_put_wired_into_confirm_flow() -> None:
     confirm_page = Path("frontend/app/(student)/research/confirm/[contextId]/page.tsx")
     source = confirm_page.read_text(encoding="utf-8")

@@ -137,5 +137,5 @@ export async function navigateToResearch(
     options.notebookItemId,
     options.sessionId,
   );
-  navigator.push(`/student/research/confirm/${encodeURIComponent(context.id)}`);
+  navigator.push(`/research/confirm/${encodeURIComponent(context.id)}`);
 }

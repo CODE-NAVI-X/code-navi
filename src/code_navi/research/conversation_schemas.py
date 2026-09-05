@@ -168,6 +168,7 @@ class ResearchConversationMessage(BaseModel):
     # Audit metadata written by the orchestrator chat flow.
     triggered_tool: str | None = None
     stage_at_time: str | None = None
+    template: str | None = None
     recommended_action: (
         Literal[
             "continue_dialogue",
