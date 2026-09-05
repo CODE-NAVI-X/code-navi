@@ -124,6 +124,10 @@ class PracticeModelGenerationError(Exception):
     """Raised when an explicitly requested model generation cannot be used."""
 
 
+class ContextualPracticeUnavailable(Exception):
+    """Raised when offline rules cannot truthfully generate a contextual exercise."""
+
+
 class DuplicateLearningPracticeSetError(Exception):
     """Raised when the same learning snapshot already has an archived set."""
 
@@ -177,11 +181,20 @@ class PracticeSetService:
                 db,
                 owner_principal_id=owner_principal_id,
             )
+        if request.context is not None and self._provider_name() == "mock":
+            points = "、".join(point.name for point in request.context.knowledge_points)
+            raise ContextualPracticeUnavailable(
+                f"当前为离线 Mock 模式，无法为「{points}」生成可信的代码练习；"
+                "请配置 AI Provider 后重试。"
+            )
 
         knowledge_points = self._bound_knowledge_points(request)
         set_id = str(uuid4())
         code_fill_specs, code_fill_provider, code_fill_used_model = (
-            self._generate_code_fill_specs(request, strict_model=strict_model)
+            self._generate_code_fill_specs(
+                request,
+                strict_model=strict_model or request.context is not None,
+            )
             if request.kind != "concept_quiz"
             else ([], "mock", False)
         )

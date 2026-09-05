@@ -125,7 +125,7 @@ CodeFillSpec {
 }
 ```
 
-错误：422 schema 或缺少生成依据；404 引用的 `upload_id` 不存在或非本人；409 Provider 禁用且规则回退也不可用（同现状 quiz 语义）；413 不会出现（上下文超限归入 422）。
+错误：422 schema 或缺少生成依据；404 引用的 `upload_id` 不存在或非本人；409 Provider 禁用且规则回退也不可用（同现状 quiz 语义）。当请求携带 `context` 而离线 Mock 没有该知识点的受控规则题时，也返回 409；不得把固定 Mock 题伪装成该学习上下文的题目。413 不会出现（上下文超限归入 422）。
 
 ### 1.2a `POST /api/v1/practice/sets/generate-from-learning` — 基于学习数据生成
 

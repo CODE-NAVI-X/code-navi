@@ -57,7 +57,7 @@ import {
   type PracticeGatewayItem,
   type PracticeGatewaySetResponse,
 } from "@/lib/api/practice";
-import { isPracticeContextV1, type PracticeContextV1 } from "@/lib/practice-context";
+import { isPracticeContextV1 } from "@/lib/practice-context";
 import {
   LanguageBasicsPreference,
   readLanguageBasics,
@@ -487,28 +487,6 @@ function gatewayItemToContextStructureItem(
   };
 }
 
-function selectStructureFallback(
-  exercises: CompilerStructureExercise[],
-  context: PracticeContextV1,
-): CompilerStructureExercise | null {
-  const names = context.knowledge_points.map((point) => point.name.trim().toLowerCase());
-  return (
-    exercises.find((exercise) => {
-      const searchable = [
-        exercise.domain,
-        exercise.title,
-        exercise.objective,
-        exercise.instruction,
-        exercise.prompt,
-        ...exercise.hints,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return names.some((name) => name && (searchable.includes(name) || name.includes(exercise.domain)));
-    }) ?? exercises[0] ?? null
-  );
-}
-
 function PracticeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -818,29 +796,13 @@ function PracticeContent() {
           return;
         }
 
-        const fallback = selectStructureFallback(catalogExercises, directPracticeContext);
-        if (fallback) {
-          setActiveStructureExercise(fallback);
-          setDirectStructureState({
-            status: "fallback",
-            message:
-              "上下文练习集暂未返回可练题目，已切换到现有静态结构题；学习上下文仍保留在本页。",
-          });
-          return;
-        }
-
         const gatewayUnavailable = gatewayResult.status === "rejected";
-        const catalogUnavailable = catalogResult.status === "rejected";
         setDirectStructureState({
-          status: gatewayUnavailable || catalogUnavailable ? "error" : "empty",
+          status: gatewayUnavailable ? "error" : "empty",
           message:
-            gatewayUnavailable && catalogUnavailable
-              ? "上下文练习集和结构练习目录都加载失败，请稍后重试。"
-              : gatewayUnavailable
-                ? "上下文练习集生成失败，结构练习目录也没有可用题目。"
-                : catalogUnavailable
-                  ? "结构练习目录加载失败，暂时没有可用的核心结构题。"
-                  : "上下文练习集未返回可练结构题，结构练习目录为空。",
+            gatewayUnavailable
+              ? "学习上下文练习生成失败，未显示无关的静态题目。请配置 AI Provider 后重试，或返回普通练习入口。"
+              : "学习上下文练习未返回可用题目，未显示无关的静态题目。请返回普通练习入口。",
         });
       },
     );
@@ -1038,8 +1000,7 @@ function PracticeContent() {
       }
       // §3.1 boundary: when a practice-context.v1 was handed over, its body is
       // submitted through POST /api/v1/practice/sets/generate's `context` field.
-      // The direct path stays in core structure practice; only an ordinary
-      // entry uses the legacy compiler generation flow below.
+      // The direct path keeps the submitted learning context intact.
       if (directPracticeContext) {
         const gatewayResponse = await generatePracticeSetWithContext({
           context: directPracticeContext,
@@ -1056,24 +1017,19 @@ function PracticeContent() {
           });
           setActiveStructureExercise(null);
           setSetMessage(
-            `已按学习上下文生成 ${contextStructureItems.length} 道核心结构练习；覆盖：${
+            `已按学习上下文生成 ${contextStructureItems.length} 道练习；覆盖：${
               gatewayResponse.coverage.join("、") || "当前知识点"
             }`,
           );
           setView("structure");
           return;
         }
-        const fallback = selectStructureFallback(structureExercises, directPracticeContext);
-        if (fallback) {
-          setActiveStructureExercise(fallback);
-          setDirectStructureState({
-            status: "fallback",
-            message: "上下文练习集未返回可练结构题，已切换到现有静态结构题。",
-          });
-          setSetMessage("上下文练习集未返回可练结构题，已切换到现有静态结构题。");
-          setView("structure");
-          return;
-        }
+        setDirectStructureState({
+          status: "empty",
+          message: "学习上下文练习未返回可用题目，未显示无关的静态题目。",
+        });
+        setSetMessage("学习上下文练习未返回可用题目，请配置 AI Provider 后重试。");
+        return;
         setDirectStructureState({
           status: "empty",
           message: "上下文练习集未返回可练结构题，结构练习目录也为空。",
@@ -1128,21 +1084,11 @@ function PracticeContent() {
       );
     } catch (generationError) {
       if (directPracticeContext) {
-        const fallback = selectStructureFallback(structureExercises, directPracticeContext);
-        if (fallback) {
-          setActiveStructureExercise(fallback);
-          setDirectStructureState({
-            status: "fallback",
-            message: "上下文练习集生成失败，已切换到现有静态结构题。",
-          });
-          setSetMessage("上下文练习集生成失败，已切换到现有静态结构题。");
-          setView("structure");
-        } else {
-          setDirectStructureState({
-            status: "error",
-            message: generationError instanceof Error ? generationError.message : "练习集生成失败。",
-          });
-        }
+        setDirectStructureState({
+          status: "error",
+          message: generationError instanceof Error ? generationError.message : "学习上下文练习生成失败。",
+        });
+        setSetMessage(generationError instanceof Error ? generationError.message : "学习上下文练习生成失败。");
         return;
       }
       setSetMessage(generationError instanceof Error ? generationError.message : "练习集生成失败。");
@@ -2524,14 +2470,14 @@ function ContextStructureWorkspace({
             返回练习选择
           </button>
           <span className="font-mono text-[11px] text-slate-400 dark:text-zinc-500">
-            Core Structure Practice · {itemIndex + 1}/{structureSet.items.length}
+            Learning Context Practice · {itemIndex + 1}/{structureSet.items.length}
           </span>
         </div>
         <section className="app-card mt-6 rounded-2xl p-5 sm:p-7">
           <p className="font-mono text-[11px] font-semibold uppercase tracking-normal text-slate-400 dark:text-zinc-500">
             Learning Context → Practice
           </p>
-          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">核心结构练习</h1>
+          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">学习上下文练习</h1>
           <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-zinc-300">
             已跳过基础引导和语法测试，练习集直接来自学习上下文。
           </p>
@@ -2679,12 +2625,12 @@ function ContextStructureItem({
             onClick={onNext}
             className="app-button-secondary rounded-xl px-4 py-2.5 text-xs font-semibold"
           >
-            {explainOnly ? "继续下一道核心结构题" : "下一道核心结构题"}
+            {explainOnly ? "继续下一道上下文题" : "下一道上下文题"}
           </button>
         ) : null}
         {isComplete ? (
           <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-            本组核心结构练习已完成。
+            本组学习上下文练习已完成。
           </span>
         ) : null}
       </div>
