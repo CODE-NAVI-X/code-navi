@@ -3,7 +3,7 @@
 > **文档定位**：本文件是 Code Navi 前端唯一的设计语言源，供所有参与前端实现的模型与开发者共同遵守。
 > **适用范围**：`frontend/` 全部页面与组件。架构事实（路由、API 边界、浏览器状态）仍以 [docs/architecture/frontend.md](../docs/architecture/frontend.md) 为准；两者冲突时按根 `AGENTS.md` 优先级由用户裁决。
 > **依据**：D5（Issue #99）已拍板方案「Cyber-Modular Command Center（Resend 沉浸模块流 + 强化科技感）」，来源 `E:\揭榜挂帅codenavi\d5-agent-handoff.md` §一/§三 与拍板摘要；数值分歧按附录 C 裁决记录处理。
-> **版本**：v1.0（2026-09-05，阶段 0 交付，待用户与 Gemini 走查终审）。
+> **版本**：v1.1（2026-09-05）。阶段 0 终审通过；D5 视觉走查两轮收敛完成（第二轮七项 rubric 全通过、修改清单为空）。v1.0 → v1.1 变更：Mono 标号 token 由 `text-blue-500` 调整为 `text-blue-600 dark:text-blue-500`（走查第一轮 WCAG AA 裁决），见 §2.3 与 §3。
 
 ---
 
