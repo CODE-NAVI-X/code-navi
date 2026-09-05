@@ -25,10 +25,15 @@ from code_navi.research.conversation_orchestrator_schemas import (
     SelectPaperRequest,
     SendOrchestratorMessageRequest,
 )
+from code_navi.research.conversation_schemas import (
+    AcademicSourceStatus,
+    ConversationEvidenceBundle,
+)
 from code_navi.research.models import (
     ResearchConversationModel,
     ResearchOrchestratorStateModel,
 )
+from code_navi.research.schemas import AcademicPaperResult, EvidenceStatement
 
 
 @pytest.fixture
@@ -1288,3 +1293,267 @@ def test_two_layer_plan_template_boundary_rules() -> None:
     assert "具体实验方案" in specific["task"] + specific["rules"]
     assert "继承" in specific["rules"] and "第二套日程" in specific["rules"]
     assert "验收标准" in specific["rules"]
+
+
+# ---------------- P3-A: formal search -> candidate cards -> confirm ----------------
+
+class FakeSearchService:
+    """Stands in for the real ResearchConversationSearchService.search()."""
+
+    def __init__(self, bundle=None, error: Exception | None = None) -> None:
+        self.bundle = bundle
+        self.error = error
+        self.calls: list[str] = []
+
+    def search(self, conversation_id, request, db):
+        self.calls.append(request.query or "")
+        if self.error is not None:
+            raise self.error
+        return self.bundle
+
+
+def _make_evidence_bundle(conv_id: str, papers: list) -> ConversationEvidenceBundle:
+    return ConversationEvidenceBundle(
+        bundle_id="bundle-1",
+        conversation_id=conv_id,
+        query="GCN oversmoothing",
+        requested_sources=["openalex", "crossref", "arxiv"],
+        allowed_sources=["openalex", "crossref", "arxiv"],
+        queried_sources=["openalex", "crossref", "arxiv"],
+        source_statuses=[
+            AcademicSourceStatus(
+                source="arxiv", status="success", accessed_at=datetime.now(UTC)
+            ),
+        ],
+        searched_at=datetime.now(UTC),
+        papers=papers,
+        source_links=[None for _ in papers],
+        failure_reasons=[],
+        provenance_note="metadata and abstract only",
+    )
+
+
+def _real_paper(title: str, url: str, year: int = 2017) -> AcademicPaperResult:
+    return AcademicPaperResult(
+        title=title,
+        authors=["Kipf", "Welling"],
+        year=year,
+        source_name="arXiv",
+        url=url,
+        accessed_at=datetime.now(UTC),
+        information_scope="metadata_and_abstract_only",
+        metadata_evidence=[],
+        supporting_snippets=[],
+        abstract_excerpt="Graph convolutional networks (GCNs) oversmooth with depth.",
+        relevance=EvidenceStatement(
+            content="与检索词直接相关",
+            classification="fact",
+            basis="来自检索结果的元数据匹配",
+        ),
+        verification=EvidenceStatement(
+            content="元数据来自公开检索来源",
+            classification="fact",
+            basis="检索来源记录",
+        ),
+        full_text_available=False,
+    )
+
+
+def test_unconfirmed_search_terms_do_not_trigger_real_search(db_session) -> None:
+    """1. 未明确确认检索词，不得触发正式检索。"""
+    search_service = FakeSearchService()
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-1"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="我想检索一下 GCN 过平滑的相关论文"),
+        db_session,
+    )
+    assert search_service.calls == []  # no network search without confirmation
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_confirmed_search_runs_real_search_and_lists_candidates(db_session) -> None:
+    """2. 明确确认后真实检索，回复只列真实检索结果的标题/来源/年份。"""
+    paper = _real_paper(PAPER_TITLE, PAPER_URL)
+    search_service = FakeSearchService(
+        bundle=_make_evidence_bundle("conv-search-2", [paper])
+    )
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-2"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="确认检索：GCN oversmoothing"),
+        db_session,
+    )
+    # The search ran once with the user's terms (trigger words stripped).
+    assert len(search_service.calls) == 1
+    assert "GCN oversmoothing" in search_service.calls[0]
+    assert "确认检索" not in search_service.calls[0]
+    # The reply presents the REAL result metadata only.
+    reply_text = resp.reply_message.content
+    assert PAPER_TITLE in reply_text
+    assert "arXiv" in reply_text
+    assert "2017" in reply_text
+    assert PAPER_URL in reply_text
+    # Selection state untouched: candidates are not papers yet.
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is None
+    assert resp.state.subtasks.paper_selected is False
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_search_empty_state_is_explicit(db_session) -> None:
+    """6a. 检索无结果时明确空态，不编造候选。"""
+    search_service = FakeSearchService(
+        bundle=_make_evidence_bundle("conv-search-3", [])
+    )
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-3"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="确认检索：非常生僻的查询词"),
+        db_session,
+    )
+    reply_text = resp.reply_message.content
+    assert "没有检索到" in reply_text or "无结果" in reply_text
+    assert PAPER_TITLE not in reply_text
+
+
+def test_search_failure_is_explicit(db_session) -> None:
+    """6b. 检索服务失败时显式说明，不编造结果。"""
+    search_service = FakeSearchService(error=RuntimeError("all sources timed out"))
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-4"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="确认检索：GCN oversmoothing"),
+        db_session,
+    )
+    reply_text = resp.reply_message.content
+    assert "未成功" in reply_text or "失败" in reply_text or "暂时无法" in reply_text
+    assert PAPER_TITLE not in reply_text
+
+
+def test_search_flow_respects_owner_404_isolation(db_session) -> None:
+    """6c. 跨 owner 无法触发检索（404 隔离不回归）。"""
+    search_service = FakeSearchService()
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-5"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id, profile_data={}, messages_data=[], owner_principal_id="owner-a"
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+
+    with pytest.raises(ConversationNotFoundError):
+        orchestrator.process_message(
+            conv_id,
+            SendOrchestratorMessageRequest(message="确认检索：GCN oversmoothing"),
+            db_session,
+            owned_ids=["owner-b"],
+        )
+    assert search_service.calls == []
+
+
+# ---------------- P3-B: passive experiment-design tool must not bypass gates ----------------
+
+class PromptCapturingGenerator(FakeOrchestratorLlmGenerator):
+    def __init__(self) -> None:
+        self.system_prompts: list[str] = []
+        self.user_prompts: list[str] = []
+        self.calls = 0
+
+    def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+        from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+
+        self.system_prompts.append(system_prompt)
+        self.user_prompts.append(user_prompt)
+        self.calls += 1
+        return OrchestratorLlmOutcome(
+            status="generated",
+            reply_text="姜姜基于工具真实输出为你解释实验设计素材 (｡･ω･｡)",
+        )
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["帮我设计实验", "实验方案怎么做", "怎么跑"],
+)
+def test_passive_experiment_design_does_not_bypass_two_layer_gate(
+    db_session, message
+) -> None:
+    """P3-B: 被动 experiment-design 工具不点亮 experiment_designed、不推进阶段，
+    且姜姜必须询问是否基于工具结果生成初步实验方案。"""
+    generator = PromptCapturingGenerator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=generator)
+    conv_id = f"conv-p3b-{abs(hash(message))}"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    state_row = _make_execution_state(db_session, conv_id)
+    _seed_current_paper(db_session, conv_id)
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": True,
+        "paper_selected": True,
+        "experiment_designed": False,
+    }
+    db_session.commit()
+
+    resp = orchestrator.process_message(
+        conv_id, SendOrchestratorMessageRequest(message=message), db_session
+    )
+    assert resp.reply_message is not None
+    assert resp.reply_message.passive_tool_called == "experiment-design"
+    # Two-layer gate untouched by the passive tool.
+    assert resp.state.subtasks.experiment_designed is False
+    assert resp.state.current_stage == "research_execution"
+    # With a current paper, 姜姜 must ask about generating the preliminary plan.
+    assert any("初步实验方案" in p for p in generator.system_prompts)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["帮我设计实验", "实验方案怎么做", "怎么跑"],
+)
+def test_passive_experiment_design_without_paper_prompts_selection(
+    db_session, message
+) -> None:
+    """P3-B: 无当前论文时提示先检索/选定论文，不生成具体方案。"""
+    generator = PromptCapturingGenerator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=generator)
+    conv_id = f"conv-p3b-nopaper-{abs(hash(message))}"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id, SendOrchestratorMessageRequest(message=message), db_session
+    )
+    assert resp.reply_message is not None
+    assert resp.reply_message.passive_tool_called == "experiment-design"
+    assert resp.state.subtasks.experiment_designed is False
+    assert resp.state.current_stage == "research_execution"
+    assert any("选定论文" in p or "检索" in p for p in generator.system_prompts)

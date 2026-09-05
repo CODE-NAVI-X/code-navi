@@ -57,6 +57,8 @@ from .conversation_prompt_templates import (
     get_source_scope_prefix,
     validate_jiangjiang_output,
 )
+from .conversation_schemas import CreateConversationEvidenceBundleRequest
+from .conversation_search_service import ResearchConversationSearchService
 from .conversation_service import (
     ConversationNotFoundError,
     ResearchConversationService,
@@ -415,6 +417,39 @@ _EXPERIMENT_PLAN_INTENT_WORDS = (
 )
 
 
+_SEARCH_REQUEST_WORDS = ("检索", "搜索", "找论文", "查文献", "文献检索")
+_SEARCH_TRIGGER_PHRASES = (
+    "确认检索",
+    "正式检索",
+    "开始检索",
+    "帮我检索",
+    "帮我搜索",
+    "检索一下",
+    "搜索一下",
+    "查一下文献",
+    "查文献",
+    "文献检索",
+    "找论文",
+    "检索",
+    "搜索",
+    "关键词",
+    "查询",
+)
+
+
+def _has_search_request_words(message: str) -> bool:
+    return any(word in message for word in _SEARCH_REQUEST_WORDS)
+
+
+def _extract_search_query(message: str) -> str | None:
+    """Deterministically strip trigger words, keeping the user's own terms."""
+    query = message.strip()
+    for phrase in _SEARCH_TRIGGER_PHRASES:
+        query = query.replace(phrase, " ")
+    query = re.sub(r"[\s:：,，。;；、]+", " ", query).strip()
+    return query or None
+
+
 def _last_experiment_plan_layer(
     messages: list[dict[str, object]],
 ) -> str | None:
@@ -750,11 +785,13 @@ class ResearchConversationOrchestrator:
         conversation_service: ResearchConversationService | None = None,
         evaluation_service: ReproductionEvaluationService | None = None,
         llm_generator: OrchestratorLlmGenerator | None = None,
+        search_service: ResearchConversationSearchService | None = None,
     ) -> None:
         self.guidance_service = guidance_service or ResearchConversationGuidanceService()
         self.conversation_service = conversation_service or ResearchConversationService()
         self.evaluation_service = evaluation_service or ReproductionEvaluationService()
         self.llm_generator = llm_generator or RuntimeOrchestratorLlmGenerator()
+        self.search_service = search_service or ResearchConversationSearchService()
 
     @staticmethod
     def _collect_traceable_evidence_context(
@@ -1302,6 +1339,67 @@ class ResearchConversationOrchestrator:
                         template_name="paper_selected_confirmation",
                     )
 
+        # Step 2.6: formal academic search (P3-A).  Only a user-provided query
+        # with explicit confirmation reaches the real source-restricted search;
+        # results are presented from the persisted evidence bundle verbatim.
+        if (
+            state_model.current_stage == "research_execution"
+            and _has_search_request_words(user_message)
+            and is_confirmed
+        ):
+            query = _extract_search_query(user_message)
+            if query:
+                try:
+                    bundle = self.search_service.search(
+                        conversation_id,
+                        CreateConversationEvidenceBundleRequest(query=query),
+                        db,
+                    )
+                except Exception as err:
+                    reply_content = (
+                        "(｡･ω･｡) 姜姜按你的确认发起了正式检索，但这次检索未成功完成："
+                        f"{err}"
+                        "。没有编造任何检索结果。可以换个检索词，或者稍后再让姜姜重试一次。"
+                    )
+                else:
+                    source_note = "、".join(bundle.queried_sources) or "允许来源"
+                    searched_day = bundle.searched_at.date().isoformat()
+                    if bundle.papers:
+                        candidate_lines = "\n".join(
+                            f"{index}. 《{paper.title}》"
+                            f"（{paper.source_name}，{paper.year or '年份未标注'}）"
+                            f"\n   链接：{paper.url}"
+                            for index, paper in enumerate(bundle.papers, start=1)
+                        )
+                        reply_content = (
+                            f"(＾▽＾) 已按你的确认完成正式检索（来源：{source_note}；"
+                            f"检索时间：{searched_day}）。\n\n"
+                            f"以下候选全部来自真实检索结果的元数据与摘要，"
+                            f"未下载论文全文：\n{candidate_lines}\n\n"
+                            "点击聊天中的候选论文卡片，或直接告诉姜姜你想精读哪一篇；"
+                            "确定前不会把它设为当前论文哦。"
+                        )
+                    else:
+                        failure_note = ""
+                        if bundle.failure_reasons:
+                            failure_note = "；失败原因：" + "、".join(
+                                bundle.failure_reasons
+                            )
+                        reply_content = (
+                            f"(｡･ω･｡) 正式检索已完成（来源：{source_note}；"
+                            f"检索时间：{searched_day}），但这次没有检索到合适的论文"
+                            f"{failure_note}。\n\n"
+                            "姜姜不会编造候选。我们可以一起调整检索词、扩大或收窄范围，"
+                            "或者返回方向探索。"
+                        )
+                state_model = self.get_state_model(
+                    conversation_id, db, owned_ids=owned_ids
+                )
+                return self._finalize_reply(
+                    conversation_id, state_model, user_message, reply_content, None, db,
+                    template_name="search_results",
+                )
+
         # Step 3: Detect §2 Passive Tool intents
         tool_intents = detect_passive_tool_intent(user_message)
         if len(tool_intents) > 1:
@@ -1327,8 +1425,19 @@ class ResearchConversationOrchestrator:
             tool_material, is_empty = self._fetch_passive_tool_material(
                 tool_name, conversation_id, db, owned_ids, user_message=user_message
             )
+            current_paper_title: str | None = None
+            if tool_name == "experiment-design":
+                papers_for_prompt = self.get_papers(
+                    conversation_id, db, owned_ids=owned_ids
+                )
+                current_paper_title = (
+                    papers_for_prompt.current_paper.title
+                    if papers_for_prompt.current_paper
+                    else None
+                )
             prompt_data = self._build_passive_tool_prompt(
-                tool_name, tool_material, is_empty, user_message
+                tool_name, tool_material, is_empty, user_message,
+                current_paper_title=current_paper_title,
             )
             history_msgs = conv.messages_data or []
             outcome = self.llm_generator.generate(
@@ -1990,6 +2099,7 @@ class ResearchConversationOrchestrator:
         tool_material: str,
         is_empty_state: bool,
         user_message: str,
+        current_paper_title: str | None = None,
     ) -> dict[str, str]:
         """Build strict prompt for Jiang Jiang to paraphrase real passive tool return data."""
         tool_display_name = {
@@ -2012,6 +2122,23 @@ class ResearchConversationOrchestrator:
             f"4. 严禁使用 Emoji 表情（必须使用颜文字如 (＾▽＾)、(•̀ᴗ•́)و ̑̑ 等）；"
             f"严禁假造百分比成功率。\n"
         )
+        if tool_name == "experiment-design":
+            # P3-B: the passive tool never bypasses the two-layer plan gates.
+            system_prompt += (
+                "5. 该工具结果只是素材：不得声称实验设计已完成（experiment_designed）、"
+                "不得声称可以直接进入结果分析；\n"
+            )
+            if current_paper_title:
+                system_prompt += (
+                    f"6. 同学已有当前论文《{current_paper_title}》：解释完工具结果后，"
+                    "必须明确询问是否要基于该结果生成【初步实验方案】；"
+                    "初步方案经同学确认后才会细化为具体实验方案。\n"
+                )
+            else:
+                system_prompt += (
+                    "6. 同学尚未选定当前论文：必须提示先完成正式检索并选定一篇当前论文，"
+                    "才能开始生成实验方案。\n"
+                )
         user_prompt = (
             f"{tool_material}\n\n"
             f"【用户消息】\n{user_message}"

@@ -34,6 +34,8 @@ import {
   ResearchApiError,
   type ResearchConversationMessage,
   type ResearchConversationResponse,
+  listResearchEvidence,
+  type AcademicPaperResult,
   retryLastOrchestratorMessage,
   selectOrchestratorPaper,
   streamOrchestratorMessage,
@@ -45,6 +47,7 @@ import { ResearchStageProgress } from "./ResearchStageProgress";
 import { JiangJiangAvatar, UserAvatar } from "./JiangJiangAvatar";
 import { DirectionCardsBox } from "./DirectionCardsBox";
 import { CandidatePaperCard } from "./CandidatePaperCard";
+import { SearchCandidateCards } from "./SearchCandidateCards";
 
 type Phase = "initializing" | "idle" | "thinking";
 
@@ -72,6 +75,7 @@ export function ResearchConversation() {
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [orchestratorState, setOrchestratorState] = useState<OrchestratorStateResponse | null>(null);
   const [directionCards, setDirectionCards] = useState<DirectionCard[]>([]);
+  const [searchCandidates, setSearchCandidates] = useState<AcademicPaperResult[]>([]);
   const [papers, setPapers] = useState<OrchestratorPapersResponse | null>(null);
   const [phase, setPhase] = useState<Phase>("initializing");
   const [draft, setDraft] = useState("");
@@ -135,6 +139,9 @@ export function ResearchConversation() {
       }
       if (papersRes) {
         setPapers(papersRes);
+      }
+      if (activeConversationId) {
+        await refreshSearchCandidates(activeConversationId);
       }
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -218,6 +225,7 @@ export function ResearchConversation() {
           void getOrchestratorPapers(conversation.conversation_id)
             .then((res) => setPapers(res))
             .catch(() => {});
+          void refreshSearchCandidates(conversation.conversation_id);
         },
         onFailed: (response: OrchestratorMessageResponse) => {
           const errMsg = response.error || "思考未成功完成。请重试本轮。";
@@ -277,6 +285,17 @@ export function ResearchConversation() {
       setFailedTurnError(friendlyError(retryErr));
     } finally {
       setPhase("idle");
+    }
+  }
+
+  async function refreshSearchCandidates(conversationId: string) {
+    try {
+      const bundles = await listResearchEvidence(conversationId);
+      const withPapers = bundles.filter((bundle) => bundle.papers.length > 0);
+      const latest = withPapers[withPapers.length - 1];
+      setSearchCandidates(latest ? latest.papers.slice(0, 5) : []);
+    } catch {
+      setSearchCandidates([]);
     }
   }
 
@@ -540,6 +559,19 @@ export function ResearchConversation() {
               cards={directionCards}
               disabled={disabled}
               onSelectDirection={(dir) => void handleSend(dir)}
+            />
+          )}
+
+          {/* P3-A: candidate paper cards from the latest real search bundle */}
+          {searchCandidates.length > 0 && (
+            <SearchCandidateCards
+              papers={searchCandidates}
+              disabled={disabled}
+              onSelect={(paper) =>
+                void handleSend(
+                  `我想选择这篇论文作为复现候选：《${paper.title}》 ${paper.url}`,
+                )
+              }
             />
           )}
 

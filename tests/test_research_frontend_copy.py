@@ -720,3 +720,27 @@ def test_learning_context_put_wired_into_confirm_flow() -> None:
     assert "learned_content: restored.summary" in restore_part
     assert "learning_progress: null" in restore_part
 
+
+def test_search_candidate_cards_come_from_real_bundles_and_never_auto_select() -> None:
+    """P3-A freeze: candidate cards render real search-bundle metadata; a card
+    click only sends the pending-candidate chat message (no direct select)."""
+    workspace = WORKSPACE.read_text(encoding="utf-8")
+    cards = Path(
+        "frontend/components/research/SearchCandidateCards.tsx"
+    ).read_text(encoding="utf-8")
+
+    # The chat refreshes candidates from the existing evidence-bundle GET.
+    assert "listResearchEvidence" in workspace
+    assert "SearchCandidateCards" in workspace
+    assert "我想选择这篇论文作为复现候选" in workspace
+
+    # Cards show real metadata only; interpretation is deferred to the
+    # close-reading introduction turn.
+    assert "paper.title" in cards
+    assert "paper.source_name" in cards
+    assert "paper.year" in cards
+    assert "paper.url" in cards
+    assert "paper.abstract_excerpt" in cards
+    assert "真实检索结果" in cards
+    # No selection logic inside the card component.
+    assert "selectOrchestratorPaper" not in cards
