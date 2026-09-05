@@ -1453,7 +1453,10 @@ class ResearchConversationOrchestrator:
         system_str = (
             f"{tmpl['system']}\n\n"
             f"【当前任务】\n{tmpl['task']}\n\n"
-            f"【规则与指引】\n{tmpl['rules']}"
+            f"【规则与指引】\n{tmpl['rules']}\n\n"
+            "【最终输出自检】逐句确认：学习记录只作客观来源，不评价掌握度或能力；"
+            "设备与实验只写限制、条件和待验证项；任何指标、跑通、结果一致或证据关联都不等于复现成功；"
+            "不满足时改写为 fact/inference/to_verify 或明确追问。"
         )
         user_str = f"{tmpl['context']}\n\n【当前用户输入】\n{user_message}"
         template_name = tmpl.get("template_name", "")

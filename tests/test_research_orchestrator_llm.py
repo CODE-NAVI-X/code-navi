@@ -1734,3 +1734,20 @@ def test_orchestrator_scope_prefix_injection_per_template(db_session: Session) -
     assert resp_s2.reply_message is not None
     assert resp_s2.reply_message.content.startswith(RESEARCH_SOURCE_SCOPE_PREFIX_CLARIFICATION)
     assert "探索方向" in resp_s2.reply_message.content
+
+
+def test_regular_prompt_includes_final_boundary_self_check(db_session: Session) -> None:
+    orch = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-final-boundary-self-check"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+    prompt = orch._select_prompt_template(
+        conv_id,
+        current_stage="research_need",
+        subtasks={},
+        user_message="我想做图卷积网络研究",
+        is_confirmed=False,
+        db=db_session,
+        owned_ids=None,
+    )
+    assert "最终输出自检" in prompt["system_prompt"]
