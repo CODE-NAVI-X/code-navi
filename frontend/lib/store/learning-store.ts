@@ -23,6 +23,8 @@ import type {
 export interface LearningSnapshot {
   query: string;
   result: unknown; // ExplainResponse
+  /** Which of the two flow steps the user was on (understand | check). */
+  step?: "understand" | "check";
   /** Which of the unified result views the user was on (text | ppt | quiz). */
   view?: "text" | "ppt" | "quiz";
   /** PPT deck — set once generation starts, so it survives a route switch. */

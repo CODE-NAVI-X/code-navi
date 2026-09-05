@@ -649,6 +649,12 @@ export default function LearningPage(): JSX.Element {
   );
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ResultView>(savedSnapshot?.view ?? "text");
+  // Two-step flow: 「理解」 = entry UI, 「检查」 = structured text / PPT / quiz.
+  // Generation is always an explicit button action — switching steps never
+  // triggers a quiz or deck request.
+  const [step, setStep] = useState<"understand" | "check">(
+    savedSnapshot?.step ?? "understand",
+  );
 
   // PPT state — restored from the snapshot so the deck survives a route switch.
   const [outlines, setOutlines] = useState<SceneOutline[]>(
@@ -711,6 +717,7 @@ export default function LearningPage(): JSX.Element {
       setLearningSnapshot({
         query,
         result,
+        step,
         view,
         outlines,
         slides,
@@ -721,7 +728,7 @@ export default function LearningPage(): JSX.Element {
         quizResponse,
       });
     }
-  }, [query, result, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName, quizParams, quizResponse]);
+  }, [query, result, step, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName, quizParams, quizResponse]);
 
   const [notebookOpen, setNotebookOpen] = useState(false);
   const [notebookInitialTab, setNotebookInitialTab] = useState<"summary" | "research_note">("summary");
@@ -778,11 +785,16 @@ export default function LearningPage(): JSX.Element {
     try {
       const data = await explainKnowledgePoint({
         knowledge_point: trimmed,
+        directions: SUBJECT_DIRECTIONS.filter((direction) =>
+          selectedDirectionIds.has(direction.id),
+        ).map((direction) => direction.label),
         local_profile_id: getLocalProfileId(),
         workspace_id: workspaceId ?? undefined,
         task_id: taskId ?? undefined,
       });
       setResult(data);
+      // The explanation is the first artifact of the 「检查」 step.
+      setStep("check");
       setRecentLearning((items) => [
         {
           id: data.notebook_item_id ?? `current-${data.session_id}`,
@@ -836,13 +848,14 @@ export default function LearningPage(): JSX.Element {
       });
       setError(null);
       setView("text");
+      setStep("check");
     } catch (reason) {
       setError(reason instanceof Error ? `恢复最近学习失败：${reason.message}` : "恢复最近学习失败。");
     }
   }
 
   async function handleGeneratePpt() {
-    const trimmed = query.trim();
+    const trimmed = (result?.knowledge_point || query).trim();
     if (!trimmed) return;
 
     setPptGenerating(true);
@@ -964,20 +977,14 @@ export default function LearningPage(): JSX.Element {
   return (
     <div className="mx-auto min-w-0 max-w-7xl px-4 py-5 sm:py-8">
       <LearningFlowStepper
-        currentStep={view === "quiz" ? "check" : "understand"}
+        currentStep={step}
         knowledgePoint={practiceTopic}
         sessionId={activeSessionId}
         onStepClick={(stepId) => {
-          if (stepId === "understand") {
-            setView("text");
-            return true;
-          }
-          if (stepId === "check") {
-            if (!quizResponse && practiceTopic) {
-              void handleGenerateQuiz();
-            } else {
-              setView("quiz");
-            }
+          // Switching steps is navigation only; quiz / PPT generation stays an
+          // explicit button action inside the 「检查」 step.
+          if (stepId === "understand" || stepId === "check") {
+            setStep(stepId);
             return true;
           }
           return false;
@@ -985,6 +992,9 @@ export default function LearningPage(): JSX.Element {
       />
 
       <main className="space-y-6">
+        {/* 「理解」步骤：只显示入口区（输入 / 继续最近学习 / 探索方向） */}
+        {step === "understand" && (
+          <>
         <section aria-labelledby="learning-start-title" className="app-card rounded-2xl p-5 sm:p-7">
           <div className="mb-4 flex items-center gap-3">
             <span className="inline-flex rounded-full bg-slate-100 p-2 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300">
@@ -1065,20 +1075,25 @@ export default function LearningPage(): JSX.Element {
         </div>
       )}
 
-      {/* PPT error */}
-      {pptError && (
-        <div role="alert" className="app-status-error mb-6 flex items-start gap-3 rounded-xl p-4 text-xs">
-          <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" strokeWidth={1.5} />
-          <div>
-            <p className="font-semibold">PPT 生成异常</p>
-            <p className="mt-0.5 text-slate-600 dark:text-red-200/80">{pptError}</p>
-          </div>
-        </div>
-      )}
+          </>
+        )}
 
-      {/* Result area: unified 深度解析 ↔ PPT 演示课件 */}
-      {result && (
+        {/* 「检查」步骤：只显示结构化文本 / PPT / 练习题 + 闭环接力 */}
+        {step === "check" && (
+          result ? (
         <div>
+          {/* PPT error */}
+          {pptError && (
+            <div role="alert" className="app-status-error mb-6 flex items-start gap-3 rounded-xl p-4 text-xs">
+              <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" strokeWidth={1.5} />
+              <div>
+                <p className="font-semibold">PPT 生成异常</p>
+                <p className="mt-0.5 text-slate-600 dark:text-red-200/80">{pptError}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Result area: unified 深度解析 ↔ PPT 演示课件 */}
           {/* View switcher */}
           <div className="mb-4 max-w-full overflow-x-auto rounded-xl border border-slate-200/50 bg-slate-100/90 p-1 dark:border-zinc-700/40 dark:bg-zinc-800/80">
             <div className="flex min-w-max">
@@ -1144,6 +1159,23 @@ export default function LearningPage(): JSX.Element {
             />
           ) : (
             <div>
+              {/* PPT 专属界面右上角生成入口（与「配套练习题」一致） */}
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-base font-semibold text-slate-950 dark:text-zinc-50">PPT 演示课件</h3>
+                <button
+                  type="button"
+                  onClick={handleGeneratePpt}
+                  disabled={pptGenerating}
+                  className="app-button-primary inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
+                >
+                  {pptGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+                  ) : (
+                    <Presentation className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  )}
+                  {pptGenerating ? "正在生成配套 PPT…" : "一键生成配套 PPT 课件"}
+                </button>
+              </div>
               {hasPptContent && outlines.length > 0 ? (
                 <SlideViewer
                   knowledgePoint={query}
@@ -1168,10 +1200,7 @@ export default function LearningPage(): JSX.Element {
                   ) : (
                     <>
                       <Presentation className="mx-auto mb-3 h-8 w-8 text-slate-300 dark:text-zinc-600" strokeWidth={1.5} />
-                      <p className="text-xs font-medium">
-                        尚未生成 PPT。切换到「结构化文本」，点击右上角
-                        「一键生成配套 PPT 课件」即可。
-                      </p>
+                      <p className="text-xs font-medium">尚未生成 PPT。点击右上角「一键生成配套 PPT 课件」即可。</p>
                     </>
                   )}
                 </div>
@@ -1189,7 +1218,21 @@ export default function LearningPage(): JSX.Element {
             }}
           />
         </div>
-      )}
+          ) : (
+            <div className="app-card rounded-2xl p-8 text-center">
+              <p className="text-base text-[var(--app-muted)]">
+                还没有可检查的学习内容。回到「理解」，输入概念、问题或一段材料开始学习。
+              </p>
+              <button
+                type="button"
+                onClick={() => setStep("understand")}
+                className="app-button-secondary mt-4 inline-flex items-center gap-2 rounded-control px-4 py-2 text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-zinc-800"
+              >
+                返回「理解」开始学习
+              </button>
+            </div>
+          )
+        )}
 
       </main>
 

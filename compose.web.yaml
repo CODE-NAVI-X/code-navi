@@ -18,12 +18,81 @@ name: code-navi-web
 # backend:/data/provider.env`, then restart the backend.
 
 services:
+  piston:
+    # Code execution service for the practice module. Same pinned digest and
+    # limits as compose.yaml; exposed only inside this Compose network — the
+    # browser never reaches Piston directly.
+    image: ghcr.io/engineer-man/piston@sha256:2f66b7456189c4d713aa986d98eccd0b6ee16d26c7ec5f21b30e942756fd127a
+    privileged: true
+    restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 512
+    environment:
+      PISTON_DISABLE_NETWORKING: "true"
+      PISTON_MAX_PROCESS_COUNT: "64"
+      PISTON_MAX_OPEN_FILES: "64"
+      PISTON_MAX_FILE_SIZE: "1048576"
+      PISTON_OUTPUT_MAX_SIZE: "65536"
+      PISTON_MAX_CONCURRENT_JOBS: "4"
+      PISTON_COMPILE_TIMEOUT: "2000"
+      PISTON_RUN_TIMEOUT: "2000"
+      PISTON_COMPILE_CPU_TIME: "2000"
+      PISTON_RUN_CPU_TIME: "2000"
+      PISTON_COMPILE_MEMORY_LIMIT: "134217728"
+      PISTON_RUN_MEMORY_LIMIT: "134217728"
+    expose:
+      - "2000"
+    volumes:
+      - type: volume
+        source: piston_packages
+        target: /piston/packages
+    tmpfs:
+      - /tmp:exec,nosuid,size=256m
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('http').get('http://127.0.0.1:2000/api/v2/runtimes',
+          r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - web
+
+  compiler-runtime-setup:
+    # One-shot: wait for Piston, install the pinned Python runtime, verify.
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: code-navi-backend:local
+    environment:
+      PISTON_BASE_URL: http://piston:2000
+      PISTON_PYTHON_VERSION: ${PISTON_PYTHON_VERSION:-3.12.0}
+    entrypoint: []
+    command: ["python", "-m", "code_navi.online_compiler.runtime_setup"]
+    depends_on:
+      piston:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - web
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
     image: code-navi-backend:local
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       CODE_NAVI_DATABASE_URL: sqlite:////data/code-navi.db
       CODE_NAVI_DATA_DIR: /data
@@ -36,6 +105,9 @@ services:
       - code_navi_data:/data
     expose:
       - "8000"          # reachable only via Caddy on the same network
+    depends_on:
+      compiler-runtime-setup:
+        condition: service_completed_successfully
     networks:
       - web
 
@@ -45,6 +117,11 @@ services:
       dockerfile: Dockerfile.frontend
     image: code-navi-frontend:local
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       NODE_ENV: production
     expose:
@@ -57,6 +134,11 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "25000:25000"   # HTTPS entry — https://91666.icu:25000 / https://192.168.0.2:25000
     volumes:
@@ -76,6 +158,10 @@ volumes:
   code_navi_data:       # SQLite DB + provider config + event logs
   caddy_data:           # Caddy TLS certificates & autosave
   caddy_config:         # Caddy runtime config
+  piston_packages:
+    # Adopts an existing `piston_packages` volume when the host already has one
+    # (e.g. an earlier Piston run); created fresh on first deploy.
+    name: piston_packages
 
 networks:
   web:

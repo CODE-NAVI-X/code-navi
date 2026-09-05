@@ -49,6 +49,15 @@ class ExplainRequest(BaseModel):
         default="academic",
         description="Student persona controlling depth & tone of the explanation.",
     )
+    directions: list[str] = Field(
+        default_factory=list,
+        max_length=6,
+        description=(
+            "Optional exploration directions selected in the entry UI. They steer "
+            "the disciplinary context of the explanation and are never required "
+            "to start learning."
+        ),
+    )
     include_citations: bool = Field(
         default=True,
         description="Whether the response should include source citations.",
@@ -74,6 +83,17 @@ class ExplainRequest(BaseModel):
         max_length=36,
         description="Optional Task that owns the derived Learning Activity.",
     )
+
+    @model_validator(mode="after")
+    def normalize_directions(self) -> ExplainRequest:
+        """Trim, cap and de-duplicate direction labels defensively."""
+        cleaned: list[str] = []
+        for direction in self.directions:
+            text = (direction or "").strip()[:32]
+            if text and text not in cleaned:
+                cleaned.append(text)
+        self.directions = cleaned
+        return self
 
     @model_validator(mode="after")
     def require_profile_for_workspace_context(self) -> ExplainRequest:
