@@ -3,7 +3,7 @@
 > **文档定位**：本文件是 Code Navi 前端唯一的设计语言源，供所有参与前端实现的模型与开发者共同遵守。
 > **适用范围**：`frontend/` 全部页面与组件。架构事实（路由、API 边界、浏览器状态）仍以 [docs/architecture/frontend.md](../docs/architecture/frontend.md) 为准；两者冲突时按根 `AGENTS.md` 优先级由用户裁决。
 > **依据**：D5（Issue #99）已拍板方案「Cyber-Modular Command Center（Resend 沉浸模块流 + 强化科技感）」，来源 `E:\揭榜挂帅codenavi\d5-agent-handoff.md` §一/§三 与拍板摘要；数值分歧按附录 C 裁决记录处理。
-> **版本**：v1.0（2026-09-05，阶段 0 交付，待用户与 Gemini 走查终审）。
+> **版本**：v1.1（2026-09-05）。阶段 0 终审通过；D5 视觉走查两轮收敛完成（第二轮七项 rubric 全通过、修改清单为空）。v1.0 → v1.1 变更：Mono 标号 token 由 `text-blue-500` 调整为 `text-blue-600 dark:text-blue-500`（走查第一轮 WCAG AA 裁决），见 §2.3 与 §3。
 
 ---
 
@@ -72,7 +72,7 @@
 
 | 语义 | 用色 | 场景 |
 | --- | --- | --- |
-| 交互/科技强调 | Blue-500 / Blue-600 | Mono 标号、焦点、链接、激活光晕 |
+| 交互/科技强调 | 文字用 Blue-600（浅）/ Blue-500（深）；装饰图形可用 Blue-500 | Mono 标号、链接、CTA 等文字强调必须达 WCAG AA 4.5:1（浅色 Blue-600 = 5.17:1，深色 Blue-500 = 5.09:1，视觉走查第一轮收敛 2026-09-05）；焦点环、激活光晕等非文本元素 ≥ 3:1 |
 | 就绪/成功 | Emerald-400 / Emerald-500 | Provider 就绪呼吸灯、进度条收尾色 |
 | 降级/Mock | Amber-400 系列 | Provider 降级或 Mock 态、上下文不可用警示条 |
 | 错误 | Red（沿用 `.app-status-error` 配色） | 执行失败、请求失败 |
@@ -96,7 +96,7 @@
 | 阅读正文 | `text-lg` (18px) | `.reading-area`（`line-height: 1.8`） |
 | 标题 | `text-xl` / `text-2xl` | 页面与区块标题 |
 
-**Mono 排版规则**：编号、指标数字、代码、路径一律 `font-mono`；工程标号格式为 `两位数字 + " // " + 大写英文短语`，类组合 `font-mono text-xs tracking-wider text-blue-500`（例：`01 // UNDERSTAND`、`02 // PRACTICE`、`03 // REVIEW`）。中文标题另起一行，用 `text-base font-semibold`，不塞进标号。
+**Mono 排版规则**：编号、指标数字、代码、路径一律 `font-mono`；工程标号格式为 `两位数字 + " // " + 大写英文短语`，类组合 `font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500`（浅色 5.17:1 / 深色 5.09:1，达 WCAG AA；走查第一轮收敛裁决，2026-09-05）（例：`01 // UNDERSTAND`、`02 // PRACTICE`、`03 // REVIEW`）。中文标题另起一行，用 `text-base font-semibold`，不塞进标号。
 
 ---
 
