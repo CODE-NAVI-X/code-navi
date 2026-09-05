@@ -73,7 +73,8 @@ _SYSTEM_TEMPLATE = """\
   ]
 }}
 
-用户将提供知识点 (knowledge_point) 和角色风格 (persona)：
+用户将提供知识点 (knowledge_point)、角色风格 (persona) 和可选的探索方向 (directions)：
+- directions 仅用于定位学科语境（例如“人工智能”“计算机网络”），不要把方向名称当作要解释的知识点本身
 - persona = "beginner" → 用通俗语言，避免专业术语
 - persona = "academic" → 保持学术严谨，可适度使用术语
 - persona = "practitioner" → 突出工程/实践应用视角
@@ -239,6 +240,8 @@ class QueryOrchestrator:
             knowledge_point=self.decontamination_engine.decontaminate(request.knowledge_point),
             persona=persona,
         )
+        if request.directions:
+            user_message += "\ndirections: " + "、".join(request.directions)
 
         # 2. One audited kernel run — no tools granted, Events persisted to disk.
         agent = build_knowledge_explainer_agent(self.decontamination_engine.passphrase)

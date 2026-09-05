@@ -6,6 +6,7 @@ repeatable.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 from pathlib import Path
@@ -213,6 +214,75 @@ class TestQueryOrchestrator:
 
         response = orchestrator.explain(request, db)
         assert response.citations == []
+
+    def test_explain_request_normalizes_directions(self) -> None:
+        request = ExplainRequest(
+            knowledge_point="HTTP Cookie",
+            directions=["  AI 与数据 ", "", "机器学习", "AI 与数据", "d" * 64],
+        )
+
+        assert request.directions == ["AI 与数据", "机器学习", "d" * 32]
+        assert ExplainRequest(knowledge_point="HTTP Cookie").directions == []
+
+    def test_explain_includes_directions_in_user_message(
+        self,
+        db: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: dict[str, str] = {}
+
+        class _StubResult:
+            output_text = json.dumps({"summary": "方向上下文测试", "citations": []})
+            run_id = "run-directions"
+            event_log_path = "unused"
+
+        class _StubRuntime:
+            def __init__(self, provider, session_dir=None) -> None:
+                self._provider = provider
+
+            def run(self, agent, request):
+                captured["user_message"] = request.user_input
+                return _StubResult()
+
+        monkeypatch.setattr(services, "AgentRuntime", _StubRuntime)
+
+        response = QueryOrchestrator().explain(
+            ExplainRequest(
+                knowledge_point="HTTP Cookie",
+                directions=["人工智能", "机器学习"],
+            ),
+            db,
+        )
+
+        assert response.summary == "方向上下文测试"
+        assert "knowledge_point:" in captured["user_message"]
+        assert "directions: 人工智能、机器学习" in captured["user_message"]
+
+    def test_explain_without_directions_omits_direction_line(
+        self,
+        db: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: dict[str, str] = {}
+
+        class _StubResult:
+            output_text = json.dumps({"summary": "无方向测试", "citations": []})
+            run_id = "run-no-directions"
+            event_log_path = "unused"
+
+        class _StubRuntime:
+            def __init__(self, provider, session_dir=None) -> None:
+                self._provider = provider
+
+            def run(self, agent, request):
+                captured["user_message"] = request.user_input
+                return _StubResult()
+
+        monkeypatch.setattr(services, "AgentRuntime", _StubRuntime)
+
+        QueryOrchestrator().explain(ExplainRequest(knowledge_point="HTTP Cookie"), db)
+
+        assert "directions:" not in captured["user_message"]
 
     def test_offline_response_does_not_expose_internal_prompt(self, db: Session) -> None:
         orchestrator = QueryOrchestrator()

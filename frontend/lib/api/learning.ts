@@ -23,6 +23,11 @@ export interface ExplainRequest {
   session_id?: string;
   persona?: string | null;
   include_citations?: boolean;
+  /**
+   * Selected exploration directions from the entry UI. They steer the
+   * explanation's disciplinary context but are never required to start.
+   */
+  directions?: string[];
   /** Local Workspace scope; never an account credential or authorization token. */
   local_profile_id?: string;
   workspace_id?: string;
@@ -153,6 +158,7 @@ export async function explainKnowledgePoint(
         session_id: request.session_id ?? getLearningSessionId(),
         persona: request.persona ?? "academic",
         include_citations: request.include_citations ?? true,
+        directions: request.directions?.length ? request.directions : undefined,
         local_profile_id: request.local_profile_id,
         workspace_id: request.workspace_id,
         task_id: request.task_id,
