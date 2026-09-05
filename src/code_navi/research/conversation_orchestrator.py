@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from code_navi.providers import ProviderSettings, create_provider
@@ -729,8 +730,19 @@ class ResearchConversationOrchestrator:
                 owner_principal_id=conv.owner_principal_id,
             )
             db.add(state_model)
-            db.commit()
-            db.refresh(state_model)
+            try:
+                db.commit()
+            except IntegrityError:
+                # The frontend fires state and direction-cards in parallel on
+                # first load of a legacy conversation; the losing writer must
+                # adopt the winner's row instead of failing the request.
+                db.rollback()
+                winner = db.get(ResearchOrchestratorStateModel, conversation_id)
+                if winner is None:
+                    raise
+                state_model = winner
+            else:
+                db.refresh(state_model)
         elif (
             owned_ids is not None
             and state_model.owner_principal_id

@@ -554,6 +554,8 @@ difficulty?}`，仅支持 Python 文件。服务端从条件、返回和关键�
 
 错误：401/403 按 §0.1；`profile_id` 非法 422；**任何空态返回 200 + 空数组/空对象**（新用户零数据不报错）。鉴权：`get_optional_principal` + `get_owned_principal_ids`，登录态下 research 会话按 owner 过滤（`research_conversations.owner_principal_id`），匿名态沿用现状仅按会话可达性。前端画像中枢（`/learning/portrait` 复盘页 + 科研画像组件）一次调用渲染，替代现状前端自行拼 `/api/v1/profile` + 会话列表两次请求。
 
+实现注记（2026-09，实现即冻结的规则裁定）：`local_profile_id` 是浏览器侧生成的 Practice 本地画像键（`profile-` 前缀 + 随机串，≤64 字符，非 UUID v4），Practice 归档与复盘投影按它逐字作用域。本端点接受该格式（1..64 字符），不再要求 UUID v4；`profile_id` 仍为 UUID v4 必填。
+
 ### 4.2 `GET /api/v1/learning/knowledge-gaps` — 新增 code_fill 缺口来源
 
 变更（additive）：`source_type` 新增枚举值 `code_fill_attempt`。聚合规则与 quiz 一致：仅 `graded=true` 的 `code_fill_attempts` 参与；缺口知识点取该 item 归档的 `knowledge_points`（§1.1 envelope 字段），摘要取判分 `comment` 截断。三源只读投影原则不变，不复制判分事实。

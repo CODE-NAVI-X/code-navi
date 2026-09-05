@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from code_navi.db import Base
@@ -368,3 +369,50 @@ def test_research_analysis_subtask_requires_traceable_experiment_results(db_sess
         db_session,
     )
     assert resp11.state.subtasks.results_analyzed is True
+
+
+def test_first_load_race_adopts_the_winner_state_row(db_session) -> None:
+    """Parallel first-load requests must not fail with a UNIQUE violation.
+
+    Regression: on a legacy conversation the state and direction-cards
+    requests both ran check-then-insert; the loser raised
+    ``UNIQUE constraint failed: research_orchestrator_states.conversation_id``
+    and surfaced as HTTP 500.
+    """
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-state-race"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+
+    real_commit = db_session.commit
+    rival_committed = {"done": False}
+
+    def rival_wins_commit() -> None:
+        if rival_committed["done"]:
+            real_commit()
+            return
+        rival_committed["done"] = True
+        # The rival request (the parallel direction-cards read) wins the race
+        # and inserts its row before our commit lands.
+        rival = sessionmaker(bind=db_session.get_bind())()
+        try:
+            rival.add(ResearchOrchestratorStateModel(conversation_id=conv_id))
+            rival.commit()
+        finally:
+            rival.close()
+        raise IntegrityError(
+            "INSERT INTO research_orchestrator_states",
+            {},
+            Exception("UNIQUE constraint failed: research_orchestrator_states.conversation_id"),
+        )
+
+    db_session.commit = rival_wins_commit  # type: ignore[method-assign]
+    try:
+        state = orchestrator.get_state_model(conv_id, db_session)
+    finally:
+        db_session.commit = real_commit  # type: ignore[method-assign]
+
+    assert state.conversation_id == conv_id
+    again = orchestrator.get_state_model(conv_id, db_session)
+    assert again.conversation_id == conv_id
+    assert again.completed_stages == state.completed_stages

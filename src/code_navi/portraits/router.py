@@ -38,10 +38,13 @@ def get_portraits_overview(
     ),
     local_profile_id: str | None = Query(
         default=None,
-        pattern=UUID_V4_PATTERN,
-        min_length=36,
-        max_length=36,
-        description="Optional local profile UUID.",
+        min_length=1,
+        max_length=64,
+        description=(
+            "Optional local practice profile key. The browser mints a "
+            "`profile-`-prefixed id (not a UUID); the Practice review "
+            "projection keys on it verbatim."
+        ),
     ),
     conversation_limit: int = Query(
         default=5,

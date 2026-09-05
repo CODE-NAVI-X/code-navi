@@ -289,14 +289,14 @@ export default function HomePage() {
             </div>
           </section>
 
-          {/* ── 第二区：三大能力闭环（Core Capability Loop） ──────────────── */}
+          {/* ── 第二区：学习闭环与科研衔接（Learning loop and research handoff） ── */}
           <section aria-labelledby="capability-loop-title" className="mt-6">
             <div className="flex items-baseline justify-between gap-3">
               <h2 id="capability-loop-title" className="text-xl font-bold tracking-tight text-slate-950 dark:text-zinc-50">
-                三大能力闭环
+                学习闭环与科研衔接
               </h2>
               <span className="font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500 uppercase">
-                Capability Loop
+                Learning Loop → Research
               </span>
             </div>
 
