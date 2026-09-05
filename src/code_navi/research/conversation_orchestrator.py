@@ -403,6 +403,33 @@ def detect_paper_purpose_answer(message: str) -> str | None:
     return None
 
 
+# P2-C: deterministic experiment-plan intent words for the regular flow
+# ("实验方案" itself is a §2 passive-tool trigger and never reaches here).
+_EXPERIMENT_PLAN_INTENT_WORDS = (
+    "实验计划",
+    "实验安排",
+    "实验流程",
+    "实验步骤",
+    "初步方案",
+    "具体方案",
+)
+
+
+def _last_experiment_plan_layer(
+    messages: list[dict[str, object]],
+) -> str | None:
+    """Return the layer ("preliminary"/"specific") of the latest experiment
+    plan message, or None when none was generated.  Legacy messages written
+    before the two-layer split are treated as specific plans."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        if msg.get("template") == "experiment_design":
+            layer = msg.get("plan_layer")
+            return layer if layer in ("preliminary", "specific") else "specific"
+    return None
+
+
 def _has_defined_need(
     user_message: str,
     conv: ResearchConversationModel | None,
@@ -1479,7 +1506,13 @@ class ResearchConversationOrchestrator:
         if template_name == "profile_and_plan" and current_stage == "research_plan":
             subtasks["plan_generated"] = True
             state_model.subtasks = subtasks
-        elif template_name == "experiment_design" and current_stage == "research_execution":
+        elif (
+            template_name == "experiment_design"
+            and current_stage == "research_execution"
+            and prompt_data.get("plan_layer") == "specific"
+        ):
+            # P2-C: only the SPECIFIC plan completes the design subtask; a
+            # preliminary plan must be confirmed before it is even generated.
             subtasks["experiment_designed"] = True
             state_model.subtasks = subtasks
 
@@ -1499,6 +1532,7 @@ class ResearchConversationOrchestrator:
         return self._finalize_reply(
             conversation_id, state_model, user_message, reply_content, None, db,
             template_name=template_name,
+            plan_layer=prompt_data.get("plan_layer"),
         )
 
     def retry_last_message(
@@ -1534,9 +1568,10 @@ class ResearchConversationOrchestrator:
     ) -> dict[str, str]:
         """Select and assemble one of the 8 Prompt templates with confirmed context."""
         learning_ctx = self.get_learning_context(conversation_id, db, owned_ids=owned_ids)
-        raw_learning_ctx = self.get_state_model(
-            conversation_id, db, owned_ids=owned_ids
-        ).learning_context or {}
+        state_row = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        raw_learning_ctx = state_row.learning_context or {}
+        conv_row = db.get(ResearchConversationModel, conversation_id)
+        conv_msgs = list((conv_row.messages_data if conv_row else None) or [])
         cards_resp = self.get_direction_cards(conversation_id, db, owned_ids=owned_ids)
         profiles_resp = self.get_learner_profiles(conversation_id, db, owned_ids=owned_ids)
         papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
@@ -1627,43 +1662,60 @@ class ResearchConversationOrchestrator:
                     candidate_queries=[user_message],
                     sources=["OpenAlex", "Crossref", "arXiv"],
                 )
-            elif papers_resp.current_paper is not None and any(
-                k in user_message
-                for k in ["实验计划", "实验安排", "实验流程", "实验步骤", "初步方案", "具体方案"]
-            ):
-                # A specific experiment plan requires the selected current paper.
-                prof = (
-                    profiles_resp.current_profile or LearnerProfileData(version=1)
-                )
-                task_type = infer_task_type(
-                    topic=user_message,
-                    research_questions=[user_message],
-                )
-                standard_metrics = [
-                    m.name for m in STANDARD_METRICS if task_type in m.applies_to_task_type
-                ]
-                if not standard_metrics:
-                    standard_metrics = ["待核验指标 (to_verify)"]
-                tmpl = build_experiment_design_prompt(
-                    paper=papers_resp.current_paper,
-                    profile=prof,
-                    standard_metrics=standard_metrics,
-                )
             elif papers_resp.current_paper is not None:
-                tmpl = build_paper_intro_prompt(
-                    paper=papers_resp.current_paper,
-                    profile=profiles_resp.current_profile,
-                    research_goal="论文精读与复现",
+                # P2-C: two-layer experiment plans.  The preliminary plan is
+                # generated on an experiment-plan request; the SPECIFIC plan is
+                # only generated after the user confirms the preliminary one.
+                # Only the specific plan lights experiment_designed.
+                last_layer = _last_experiment_plan_layer(conv_msgs)
+                has_plan_intent = any(
+                    k in user_message for k in _EXPERIMENT_PLAN_INTENT_WORDS
                 )
+                if is_confirmed and last_layer == "preliminary":
+                    plan_layer = "specific"
+                elif has_plan_intent:
+                    plan_layer = "specific" if last_layer == "specific" else "preliminary"
+                else:
+                    plan_layer = None
+                if plan_layer is not None:
+                    prof = (
+                        profiles_resp.current_profile or LearnerProfileData(version=1)
+                    )
+                    task_type = infer_task_type(
+                        topic=user_message,
+                        research_questions=[user_message],
+                    )
+                    standard_metrics = [
+                        m.name for m in STANDARD_METRICS if task_type in m.applies_to_task_type
+                    ]
+                    if not standard_metrics:
+                        standard_metrics = ["待核验指标 (to_verify)"]
+                    plan_entry = state_row.current_plan
+                    plan_notes = (
+                        plan_entry.get("content")
+                        if isinstance(plan_entry, dict)
+                        else None
+                    )
+                    tmpl = build_experiment_design_prompt(
+                        paper=papers_resp.current_paper,
+                        profile=prof,
+                        standard_metrics=standard_metrics,
+                        plan_notes=plan_notes,
+                        plan_layer=plan_layer,
+                    )
+                else:
+                    tmpl = build_paper_intro_prompt(
+                        paper=papers_resp.current_paper,
+                        profile=profiles_resp.current_profile,
+                        research_goal="论文精读与复现",
+                    )
             else:
                 # No current paper: a specific experiment plan must not be
                 # generated (design: plan generation requires a selected paper).
                 # With a pending candidate, keep introducing it until the user
                 # explicitly confirms; otherwise stay on retrieval guidance.
-                conv_for_candidate = db.get(ResearchConversationModel, conversation_id)
                 pending_candidate = find_last_paper_candidate(
-                    list((conv_for_candidate.messages_data if conv_for_candidate else None) or [])
-                    + [{"role": "user", "content": user_message}]
+                    conv_msgs + [{"role": "user", "content": user_message}]
                 )
                 if pending_candidate is not None:
                     candidate_paper = CurrentPaperCard(
@@ -1721,6 +1773,7 @@ class ResearchConversationOrchestrator:
             "system_prompt": system_str,
             "user_prompt": user_str,
             "template_name": template_name,
+            "plan_layer": tmpl.get("plan_layer"),
             "is_learning_record_mode": is_learning_record_mode,
         }
 
@@ -2038,6 +2091,7 @@ class ResearchConversationOrchestrator:
         triggered_tool: str | None,
         db: Session,
         template_name: str | None = None,
+        plan_layer: str | None = None,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -2062,6 +2116,7 @@ class ResearchConversationOrchestrator:
             "content": reply_content,
             "triggered_tool": triggered_tool,
             "template": template_name,
+            "plan_layer": plan_layer,
             "stage_at_time": state_model.current_stage,
             "created_at": now_dt.isoformat(),
         })

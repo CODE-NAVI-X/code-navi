@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
@@ -17,6 +19,8 @@ from code_navi.research.conversation_orchestrator import (
     is_opening_greeting_intent,
 )
 from code_navi.research.conversation_orchestrator_schemas import (
+    CurrentPaperCard,
+    LearnerProfileData,
     LearningContextInput,
     SelectPaperRequest,
     SendOrchestratorMessageRequest,
@@ -623,8 +627,9 @@ def test_specific_experiment_plan_requires_current_paper(db_session) -> None:
     assert resp.state.subtasks.experiment_designed is False
 
     # 2. With the current paper selected (papers/select effect: current paper
-    #    row + paper_selected subtask), the same request generates the plan
-    #    and marks the subtask for the NEXT confirmation turn.
+    #    row + paper_selected subtask), the design request generates the
+    #    PRELIMINARY plan (P2-C two-layer contract) without lighting the
+    #    subtask.
     _seed_current_paper(db_session, "conv-exec-1")
     state_row = db_session.get(ResearchOrchestratorStateModel, "conv-exec-1")
     state_row.subtasks = {
@@ -643,10 +648,20 @@ def test_specific_experiment_plan_requires_current_paper(db_session) -> None:
         db_session,
     )
     assert resp.state.current_stage == "research_execution"
+    assert resp.state.subtasks.experiment_designed is False
+
+    # 3. Explicit confirmation turns the preliminary plan into the SPECIFIC
+    #    plan; only now does experiment_designed light up.
+    resp = orchestrator.process_message(
+        "conv-exec-1",
+        SendOrchestratorMessageRequest(message="可以，就按初步方案细化。"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
     assert resp.state.subtasks.experiment_designed is True
 
-    # 3. Paper selected + design generated + explicit confirmation: only now
-    #    may research_analysis begin.
+    # 4. Paper selected + specific plan generated + explicit confirmation:
+    #    only now may research_analysis begin.
     resp = orchestrator.process_message(
         "conv-exec-1",
         SendOrchestratorMessageRequest(message="可以，确认进入结果分析"),
@@ -1135,3 +1150,141 @@ def test_paper_flow_respects_owner_404_isolation(db_session) -> None:
         )
     with pytest.raises(ConversationNotFoundError):
         orchestrator.get_papers(conv_id, db_session, owned_ids=["owner-b"])
+
+
+def test_preliminary_and_specific_plans_are_two_steps(db_session) -> None:
+    """P2-C: 初步方案与具体实验方案分两步；仅具体方案点亮 experiment_designed。"""
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=SequencedOrchestratorLlmGenerator(
+            [
+                "姜姜先用通俗语言整理初步方案：准备复现什么、用到哪些方法 (｡･ω･｡)",
+                "姜姜把初步方案细化为具体实验方案，日程继承第二阶段总体计划 (｡･ω･｡)",
+            ]
+        )
+    )
+    conv_id = "conv-twolayer-1"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    state_row = _make_execution_state(db_session, conv_id)
+    _seed_current_paper(db_session, conv_id)
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": True,
+        "paper_selected": True,
+        "experiment_designed": False,
+    }
+    db_session.commit()
+
+    # Step 1: preliminary plan request -> generated, but experiment_designed
+    # must stay False (a preliminary plan alone cannot unlock analysis).
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="帮我制定一份初步方案，先看看要做哪些准备"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+    assert resp.state.subtasks.experiment_designed is False
+    conv = db_session.get(ResearchConversationModel, conv_id)
+    last = (conv.messages_data or [])[-1]
+    assert last["template"] == "experiment_design"
+    assert last["plan_layer"] == "preliminary"
+
+    # Step 2: user confirms the preliminary plan -> the SPECIFIC plan is
+    # generated (model/data flow/schedule inherited from the overall plan),
+    # and only now experiment_designed lights up.
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="可以，初步方案就这样，细化成具体方案吧"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+    assert resp.state.subtasks.experiment_designed is True
+    conv = db_session.get(ResearchConversationModel, conv_id)
+    last = (conv.messages_data or [])[-1]
+    assert last["plan_layer"] == "specific"
+
+    # Step 3: explicit confirmation completes the execution stage.
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="可以，确认进入结果分析"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_analysis"
+
+
+def test_specific_plan_prompt_inherits_overall_plan(db_session) -> None:
+    """具体方案必须继承第二阶段总体计划，不能生成冲突的第二套日程。"""
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator()
+    )
+    conv_id = "conv-twolayer-2"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    state_row = _make_execution_state(db_session, conv_id)
+    _seed_current_paper(db_session, conv_id)
+    plan_entry = {
+        "version": 1,
+        "content": "总体计划：第1-3天准备数据，第4-6天复现基线并记录。",
+        "confirmed_by": "user_confirmation",
+    }
+    state_row.current_plan = plan_entry
+    state_row.plan_history = [plan_entry]
+    # Preliminary plan already generated and confirmed next.
+    conv = db_session.get(ResearchConversationModel, conv_id)
+    conv.messages_data = [
+        {
+            "message_id": "m1",
+            "role": "assistant",
+            "content": "初步方案内容",
+            "template": "experiment_design",
+            "plan_layer": "preliminary",
+            "created_at": "2026-09-05T09:00:00+00:00",
+        }
+    ]
+    db_session.commit()
+
+    prompt = orchestrator._select_prompt_template(
+        conv_id,
+        current_stage="research_execution",
+        subtasks={
+            "need_defined": True,
+            "profile_ready": True,
+            "plan_generated": True,
+            "paper_selected": True,
+            "experiment_designed": False,
+        },
+        user_message="可以，就按初步方案细化。",
+        is_confirmed=True,
+        db=db_session,
+        owned_ids=None,
+    )
+    assert prompt["template_name"] == "experiment_design"
+    assert prompt["plan_layer"] == "specific"
+    assert "第1-3天准备数据" in prompt["user_prompt"]
+    assert "继承" in prompt["user_prompt"] or "总体计划" in prompt["user_prompt"]
+
+
+def test_two_layer_plan_template_boundary_rules() -> None:
+    """初步方案不得宣称已执行/完成；具体方案必须继承总体计划。"""
+    from code_navi.research.conversation_prompt_templates import (
+        build_experiment_design_prompt,
+    )
+
+    profile = LearnerProfileData(version=1)
+    paper = CurrentPaperCard(
+        id="p1",
+        paper_url=PAPER_URL,
+        title=PAPER_TITLE,
+        purpose="replace",
+        selected_at=datetime.now(UTC),
+    )
+    preliminary = build_experiment_design_prompt(
+        paper=paper, profile=profile, standard_metrics=["Accuracy"], plan_layer="preliminary"
+    )
+    specific = build_experiment_design_prompt(
+        paper=paper, profile=profile, standard_metrics=["Accuracy"], plan_layer="specific"
+    )
+    assert "初步方案" in preliminary["task"] + preliminary["rules"]
+    assert "不得声称" in preliminary["rules"] and "复现成功" in preliminary["rules"]
+    assert "具体实验方案" in specific["task"] + specific["rules"]
+    assert "继承" in specific["rules"] and "第二套日程" in specific["rules"]
+    assert "验收标准" in specific["rules"]
