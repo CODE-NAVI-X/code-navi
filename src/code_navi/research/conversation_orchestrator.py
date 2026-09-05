@@ -57,6 +57,8 @@ from .conversation_prompt_templates import (
     get_source_scope_prefix,
     validate_jiangjiang_output,
 )
+from .conversation_schemas import CreateConversationEvidenceBundleRequest
+from .conversation_search_service import ResearchConversationSearchService
 from .conversation_service import (
     ConversationNotFoundError,
     ResearchConversationService,
@@ -338,6 +340,129 @@ def is_opening_greeting_intent(message: str) -> bool:
     """Check if message expresses a fresh session opening/greeting intent."""
     msg = message.strip()
     return any(re.match(p, msg, re.IGNORECASE) for p in _OPENING_GREETING_PATTERNS)
+
+
+# P2-B: deterministic paper-candidate detection (design: candidate paper cards
+# and pasted paper links go through introduction -> explicit confirmation; the
+# model never decides on its own which paper becomes current).
+_PAPER_CANDIDATE_PHRASES = (
+    "选这篇",
+    "选择这篇",
+    "复现候选",
+    "候选论文",
+    "选为当前论文",
+    "作为当前论文",
+    "选择论文",
+    "想选",
+)
+_PAPER_URL_PATTERN = re.compile(r"https?://[^\s)）】」]+", re.IGNORECASE)
+_PAPER_TITLE_PATTERN = re.compile(r"《([^《》]{1,200})》")
+_PAPER_PURPOSE_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("replace", ("替换", "换掉", "换成", "取代当前")),
+    ("compare", ("对比", "比较")),
+    ("cite", ("引用",)),
+)
+
+
+def detect_paper_candidate_submission(message: str) -> dict[str, str] | None:
+    """Return the submitted paper candidate (title + url) from a chat message.
+
+    A submission is a message that both carries a paper URL and explicit
+    candidate-selection phrasing; plain links without selection intent are not
+    treated as candidates.
+    """
+    msg = message.strip()
+    url_match = _PAPER_URL_PATTERN.search(msg)
+    if url_match is None:
+        return None
+    if not any(phrase in msg for phrase in _PAPER_CANDIDATE_PHRASES):
+        return None
+    url = url_match.group(0).rstrip(".,，;；、")
+    title_match = _PAPER_TITLE_PATTERN.search(msg)
+    title = title_match.group(1).strip() if title_match else url
+    return {"title": title, "paper_url": url}
+
+
+def find_last_paper_candidate(messages: list[dict[str, object]]) -> dict[str, str] | None:
+    """Find the most recent user-submitted paper candidate in the history."""
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        candidate = detect_paper_candidate_submission(str(msg.get("content") or ""))
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def detect_paper_purpose_answer(message: str) -> str | None:
+    """Map a purpose answer to replace / compare / cite (None if unclear)."""
+    msg = message.strip()
+    if "论文" not in msg and "这篇" not in msg:
+        return None
+    for purpose, words in _PAPER_PURPOSE_WORDS:
+        if any(word in msg for word in words):
+            return purpose
+    return None
+
+
+# P2-C: deterministic experiment-plan intent words for the regular flow
+# ("实验方案" itself is a §2 passive-tool trigger and never reaches here).
+_EXPERIMENT_PLAN_INTENT_WORDS = (
+    "实验计划",
+    "实验安排",
+    "实验流程",
+    "实验步骤",
+    "初步方案",
+    "具体方案",
+)
+
+
+_SEARCH_REQUEST_WORDS = ("检索", "搜索", "找论文", "查文献", "文献检索")
+_SEARCH_TRIGGER_PHRASES = (
+    "确认检索",
+    "正式检索",
+    "开始检索",
+    "帮我检索",
+    "帮我搜索",
+    "检索一下",
+    "搜索一下",
+    "查一下文献",
+    "查文献",
+    "文献检索",
+    "找论文",
+    "检索",
+    "搜索",
+    "关键词",
+    "查询",
+)
+
+
+def _has_search_request_words(message: str) -> bool:
+    return any(word in message for word in _SEARCH_REQUEST_WORDS)
+
+
+def _extract_search_query(message: str) -> str | None:
+    """Deterministically strip trigger words, keeping the user's own terms."""
+    query = message.strip()
+    for phrase in _SEARCH_TRIGGER_PHRASES:
+        query = query.replace(phrase, " ")
+    query = re.sub(r"[\s:：,，。;；、]+", " ", query).strip()
+    return query or None
+
+
+def _last_experiment_plan_layer(
+    messages: list[dict[str, object]],
+) -> str | None:
+    """Return the layer ("preliminary"/"specific") of the latest experiment
+    plan message, or None when none was generated.  Legacy messages written
+    before the two-layer split are treated as specific plans."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        if msg.get("template") == "experiment_design":
+            layer = msg.get("plan_layer")
+            return layer if layer in ("preliminary", "specific") else "specific"
+    return None
 
 
 def _has_defined_need(
@@ -660,11 +785,13 @@ class ResearchConversationOrchestrator:
         conversation_service: ResearchConversationService | None = None,
         evaluation_service: ReproductionEvaluationService | None = None,
         llm_generator: OrchestratorLlmGenerator | None = None,
+        search_service: ResearchConversationSearchService | None = None,
     ) -> None:
         self.guidance_service = guidance_service or ResearchConversationGuidanceService()
         self.conversation_service = conversation_service or ResearchConversationService()
         self.evaluation_service = evaluation_service or ReproductionEvaluationService()
         self.llm_generator = llm_generator or RuntimeOrchestratorLlmGenerator()
+        self.search_service = search_service or ResearchConversationSearchService()
 
     @staticmethod
     def _collect_traceable_evidence_context(
@@ -805,6 +932,12 @@ class ResearchConversationOrchestrator:
             "learning_progress": request.learning_progress,
             "updated_at": now_dt.isoformat(),
         }
+        # Consumed markers record which learning input 姜姜 has already
+        # absorbed in a welcome turn; they survive re-PUTs so the same delta
+        # is never explained twice.
+        for consumed_key in ("consumed_learned_content", "consumed_learning_progress"):
+            if consumed_key in previous_ctx:
+                ctx[consumed_key] = previous_ctx[consumed_key]
         if previous_ctx and (
             previous_ctx.get("learned_content") != request.learned_content
             or previous_ctx.get("learning_progress") != request.learning_progress
@@ -1111,6 +1244,162 @@ class ResearchConversationOrchestrator:
                 conversation_id, state_model, user_message, reply_content, None, db
             )
 
+        # Step 2.5: Paper candidate flow (P2-B, deterministic; three-step
+        # separation: submission -> introduction -> explicit confirmation;
+        # single current paper; replace/compare/cite clarified first).
+        is_confirmed = detect_confirmation_intent(user_message)
+        if state_model.current_stage == "research_execution":
+            papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
+            candidate_in_msg = detect_paper_candidate_submission(user_message)
+            purpose_answer = detect_paper_purpose_answer(user_message)
+            if candidate_in_msg is not None and papers_resp.current_paper is not None:
+                reply_content = (
+                    "(｡･ω･｡) 姜姜看到你提交了一篇新论文。当前已有一篇正在复现的论文，"
+                    "一次只能有一篇当前论文哦。\n\n"
+                    "先和你确认这篇新论文的用途：\n"
+                    "1. 替换当前论文（replace）；\n"
+                    "2. 用于对比阅读（compare）；\n"
+                    "3. 仅整理引用（cite）。\n\n"
+                    "你希望按哪种用途处理呢？"
+                )
+                return self._finalize_reply(
+                    conversation_id, state_model, user_message, reply_content, None, db,
+                    template_name="paper_purpose_clarification",
+                )
+            if purpose_answer is not None and papers_resp.current_paper is not None:
+                pending = find_last_paper_candidate(conv.messages_data or [])
+                if pending is None:
+                    reply_content = (
+                        "姜姜没有找到需要处理的新论文链接。请先把论文链接和标题发给我，"
+                        "再说明你想替换、对比还是引用，好吗？"
+                    )
+                    return self._finalize_reply(
+                        conversation_id, state_model, user_message, reply_content, None, db,
+                        template_name="paper_purpose_clarification",
+                    )
+                self.select_paper(
+                    conversation_id,
+                    SelectPaperRequest(
+                        paper_url=pending["paper_url"],
+                        title=pending["title"],
+                        purpose=purpose_answer,
+                        metadata={},
+                    ),
+                    db,
+                    owned_ids=owned_ids,
+                )
+                if purpose_answer == "replace":
+                    reply_content = (
+                        f"好的，已把《{pending['title']}》更新为当前复现论文 (•̀ᴗ•́)و ̑̑\n\n"
+                        f"之前的论文记录仍保留在历史里。接下来我们可以基于这篇论文和你的画像，"
+                        f"先制定一份初步实验方案，你说开始就开始！"
+                    )
+                elif purpose_answer == "compare":
+                    reply_content = (
+                        f"已把《{pending['title']}》记录为对比阅读论文。当前论文保持不变，"
+                        f"对比结论属于待核验信息，需要你实际阅读后再确认。"
+                    )
+                else:
+                    reply_content = (
+                        f"已把《{pending['title']}》记录为参考引用论文。当前论文保持不变，"
+                        f"引用条目仍需你人工核对。"
+                    )
+                state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+                return self._finalize_reply(
+                    conversation_id, state_model, user_message, reply_content, None, db,
+                    template_name="paper_purpose_selected",
+                )
+            if (
+                candidate_in_msg is None
+                and is_confirmed
+                and papers_resp.current_paper is None
+            ):
+                pending = find_last_paper_candidate(conv.messages_data or [])
+                if pending is not None:
+                    # Explicit confirmation after the introduction selects the paper.
+                    self.select_paper(
+                        conversation_id,
+                        SelectPaperRequest(
+                            paper_url=pending["paper_url"],
+                            title=pending["title"],
+                            purpose="replace",
+                            metadata={},
+                        ),
+                        db,
+                        owned_ids=owned_ids,
+                    )
+                    reply_content = (
+                        f"好的，就把《{pending['title']}》设为当前复现论文 (•̀ᴗ•́)و ̑̑\n\n"
+                        f"接下来姜姜建议我们基于这篇论文、你的设备与时间画像，"
+                        f"先制定一份初步实验方案；信息不足的地方我会逐项追问。你说开始就开始！"
+                    )
+                    state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+                    return self._finalize_reply(
+                        conversation_id, state_model, user_message, reply_content, None, db,
+                        template_name="paper_selected_confirmation",
+                    )
+
+        # Step 2.6: formal academic search (P3-A).  Only a user-provided query
+        # with explicit confirmation reaches the real source-restricted search;
+        # results are presented from the persisted evidence bundle verbatim.
+        if (
+            state_model.current_stage == "research_execution"
+            and _has_search_request_words(user_message)
+            and is_confirmed
+        ):
+            query = _extract_search_query(user_message)
+            if query:
+                try:
+                    bundle = self.search_service.search(
+                        conversation_id,
+                        CreateConversationEvidenceBundleRequest(query=query),
+                        db,
+                    )
+                except Exception as err:
+                    reply_content = (
+                        "(｡･ω･｡) 姜姜按你的确认发起了正式检索，但这次检索未成功完成："
+                        f"{err}"
+                        "。没有编造任何检索结果。可以换个检索词，或者稍后再让姜姜重试一次。"
+                    )
+                else:
+                    source_note = "、".join(bundle.queried_sources) or "允许来源"
+                    searched_day = bundle.searched_at.date().isoformat()
+                    if bundle.papers:
+                        candidate_lines = "\n".join(
+                            f"{index}. 《{paper.title}》"
+                            f"（{paper.source_name}，{paper.year or '年份未标注'}）"
+                            f"\n   链接：{paper.url}"
+                            for index, paper in enumerate(bundle.papers, start=1)
+                        )
+                        reply_content = (
+                            f"(＾▽＾) 已按你的确认完成正式检索（来源：{source_note}；"
+                            f"检索时间：{searched_day}）。\n\n"
+                            f"以下候选全部来自真实检索结果的元数据与摘要，"
+                            f"未下载论文全文：\n{candidate_lines}\n\n"
+                            "点击聊天中的候选论文卡片，或直接告诉姜姜你想精读哪一篇；"
+                            "确定前不会把它设为当前论文哦。"
+                        )
+                    else:
+                        failure_note = ""
+                        if bundle.failure_reasons:
+                            failure_note = "；失败原因：" + "、".join(
+                                bundle.failure_reasons
+                            )
+                        reply_content = (
+                            f"(｡･ω･｡) 正式检索已完成（来源：{source_note}；"
+                            f"检索时间：{searched_day}），但这次没有检索到合适的论文"
+                            f"{failure_note}。\n\n"
+                            "姜姜不会编造候选。我们可以一起调整检索词、扩大或收窄范围，"
+                            "或者返回方向探索。"
+                        )
+                state_model = self.get_state_model(
+                    conversation_id, db, owned_ids=owned_ids
+                )
+                return self._finalize_reply(
+                    conversation_id, state_model, user_message, reply_content, None, db,
+                    template_name="search_results",
+                )
+
         # Step 3: Detect §2 Passive Tool intents
         tool_intents = detect_passive_tool_intent(user_message)
         if len(tool_intents) > 1:
@@ -1136,8 +1425,19 @@ class ResearchConversationOrchestrator:
             tool_material, is_empty = self._fetch_passive_tool_material(
                 tool_name, conversation_id, db, owned_ids, user_message=user_message
             )
+            current_paper_title: str | None = None
+            if tool_name == "experiment-design":
+                papers_for_prompt = self.get_papers(
+                    conversation_id, db, owned_ids=owned_ids
+                )
+                current_paper_title = (
+                    papers_for_prompt.current_paper.title
+                    if papers_for_prompt.current_paper
+                    else None
+                )
             prompt_data = self._build_passive_tool_prompt(
-                tool_name, tool_material, is_empty, user_message
+                tool_name, tool_material, is_empty, user_message,
+                current_paper_title=current_paper_title,
             )
             history_msgs = conv.messages_data or []
             outcome = self.llm_generator.generate(
@@ -1198,7 +1498,6 @@ class ResearchConversationOrchestrator:
         current_stage = state_model.current_stage
         subtasks = dict(state_model.subtasks or {})
         completed_stages = list(state_model.completed_stages or [])
-        is_confirmed = detect_confirmation_intent(user_message)
 
         # Build prompt from one of 8 templates with confirmed context
         prompt_data = self._select_prompt_template(
@@ -1293,11 +1592,12 @@ class ResearchConversationOrchestrator:
                 if "research_plan" not in completed_stages:
                     completed_stages.append("research_plan")
                 state_model.completed_stages = completed_stages
+                self._record_confirmed_plan(state_model, conv)
 
         elif current_stage == "research_execution":
             paper_ready = subtasks.get("paper_selected")
             exp_ready = subtasks.get("experiment_designed")
-            if is_confirmed and (paper_ready or exp_ready):
+            if is_confirmed and paper_ready and exp_ready:
                 state_model.current_stage = "research_analysis"
                 if "research_execution" not in completed_stages:
                     completed_stages.append("research_execution")
@@ -1308,8 +1608,40 @@ class ResearchConversationOrchestrator:
                 subtasks["results_analyzed"] = True
                 state_model.subtasks = subtasks
 
+        # Subtask bookkeeping driven by deterministic template selection (never
+        # by the model): a generated plan / experiment design completes that
+        # subtask for the NEXT confirmation turn, so a same-turn confirm cannot
+        # advance past content the user has not yet seen.
+        if template_name == "profile_and_plan" and current_stage == "research_plan":
+            subtasks["plan_generated"] = True
+            state_model.subtasks = subtasks
+        elif (
+            template_name == "experiment_design"
+            and current_stage == "research_execution"
+            and prompt_data.get("plan_layer") == "specific"
+        ):
+            # P2-C: only the SPECIFIC plan completes the design subtask; a
+            # preliminary plan must be confirmed before it is even generated.
+            subtasks["experiment_designed"] = True
+            state_model.subtasks = subtasks
+
+        # P2-A: a successfully generated welcome turn absorbs the current
+        # learning input exactly once; later recoveries only surface real
+        # increments over this consumed baseline.
+        if template_name == "welcome_and_bridge":
+            ctx = dict(state_model.learning_context or {})
+            if (
+                ctx.get("consumed_learned_content") != ctx.get("learned_content")
+                or ctx.get("consumed_learning_progress") != ctx.get("learning_progress")
+            ):
+                ctx["consumed_learned_content"] = ctx.get("learned_content")
+                ctx["consumed_learning_progress"] = ctx.get("learning_progress")
+                state_model.learning_context = ctx
+
         return self._finalize_reply(
-            conversation_id, state_model, user_message, reply_content, None, db
+            conversation_id, state_model, user_message, reply_content, None, db,
+            template_name=template_name,
+            plan_layer=prompt_data.get("plan_layer"),
         )
 
     def retry_last_message(
@@ -1345,9 +1677,10 @@ class ResearchConversationOrchestrator:
     ) -> dict[str, str]:
         """Select and assemble one of the 8 Prompt templates with confirmed context."""
         learning_ctx = self.get_learning_context(conversation_id, db, owned_ids=owned_ids)
-        raw_learning_ctx = self.get_state_model(
-            conversation_id, db, owned_ids=owned_ids
-        ).learning_context or {}
+        state_row = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        raw_learning_ctx = state_row.learning_context or {}
+        conv_row = db.get(ResearchConversationModel, conversation_id)
+        conv_msgs = list((conv_row.messages_data if conv_row else None) or [])
         cards_resp = self.get_direction_cards(conversation_id, db, owned_ids=owned_ids)
         profiles_resp = self.get_learner_profiles(conversation_id, db, owned_ids=owned_ids)
         papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
@@ -1364,18 +1697,36 @@ class ResearchConversationOrchestrator:
                 not user_message or is_opening_greeting_intent(user_message)
             ):
                 extra_note = None
-                previous_content = raw_learning_ctx.get("previous_learned_content")
-                previous_progress = raw_learning_ctx.get("previous_learning_progress")
-                if previous_content is not None or previous_progress is not None:
-                    extra_note = (
-                        "新增学习内容（与上次输入对比，来源为学习端记录）：\n"
-                        f"- 上次已学内容：{previous_content or '暂无'}\n"
-                        f"- 本次已学内容：{learning_ctx.learned_content or '暂无'}\n"
-                        f"- 上次进度记录：{previous_progress or '暂无'}\n"
-                        f"- 本次进度记录：{learning_ctx.learning_progress or '暂无'}\n"
-                        "请只说明新增记录与当前研究方向的可能关联，并标注仍需用户确认；"
-                        "不得据此推断掌握度、实验能力或研究结论。"
-                    )
+                has_learning_input = bool(
+                    learning_ctx.learned_content or learning_ctx.learning_progress
+                )
+                consumed_content = raw_learning_ctx.get("consumed_learned_content")
+                consumed_progress = raw_learning_ctx.get("consumed_learning_progress")
+                already_consumed = (
+                    consumed_content == learning_ctx.learned_content
+                    and consumed_progress == learning_ctx.learning_progress
+                )
+                if has_learning_input and not already_consumed:
+                    if consumed_content is None and consumed_progress is None:
+                        extra_note = (
+                            "学习端记录（首次进入科研端，姜姜主动吸收）：\n"
+                            f"- 已学内容：{learning_ctx.learned_content or '暂无'}\n"
+                            f"- 学习进度记录：{learning_ctx.learning_progress or '暂无'}\n"
+                            "请说明这些学习内容与当前研究方向的可能关联；"
+                            "学习记录只代表学习端浏览或整理过的内容，"
+                            "不得据此推断掌握度、实验能力或研究结论。"
+                        )
+                    else:
+                        extra_note = (
+                            "新增学习内容（与已吸收的学习记录对比，来源为学习端记录）：\n"
+                            f"- 已吸收基线 - 已学内容：{consumed_content or '暂无'}\n"
+                            f"- 已吸收基线 - 进度记录：{consumed_progress or '暂无'}\n"
+                            f"- 当前已学内容：{learning_ctx.learned_content or '暂无'}\n"
+                            f"- 当前进度记录：{learning_ctx.learning_progress or '暂无'}\n"
+                            "请只说明相对已吸收基线的新增内容，以及它与当前研究方向的可能关联，"
+                            "并标注仍需用户确认；历史学习内容和历史讨论保持保留；"
+                            "不得据此推断掌握度、实验能力或研究结论。"
+                        )
                 tmpl = build_welcome_prompt(
                     learning_context=learning_ctx,
                     direction_cards=cards_resp.cards,
@@ -1405,12 +1756,13 @@ class ResearchConversationOrchestrator:
                 )
 
         elif current_stage == "research_execution":
-            paper_or_exp = subtasks.get("paper_selected") or subtasks.get("experiment_designed")
-            if is_confirmed and paper_or_exp:
+            paper_ready = subtasks.get("paper_selected")
+            exp_ready = subtasks.get("experiment_designed")
+            if is_confirmed and paper_ready and exp_ready:
                 tmpl = build_stage_transition_prompt(
                     from_stage="research_execution",
                     to_stage="research_analysis",
-                    completed_subtasks=["选定核心论文或完成实验方案设计"],
+                    completed_subtasks=["选定核心论文并完成实验方案设计"],
                     next_goals="运行实验指标记录，进行客观归因与对比分析",
                 )
             elif any(k in user_message for k in ["检索", "找论文", "搜索", "关键词"]):
@@ -1420,27 +1772,80 @@ class ResearchConversationOrchestrator:
                     sources=["OpenAlex", "Crossref", "arXiv"],
                 )
             elif papers_resp.current_paper is not None:
-                tmpl = build_paper_intro_prompt(
-                    paper=papers_resp.current_paper,
-                    profile=profiles_resp.current_profile,
-                    research_goal="论文精读与复现",
+                # P2-C: two-layer experiment plans.  The preliminary plan is
+                # generated on an experiment-plan request; the SPECIFIC plan is
+                # only generated after the user confirms the preliminary one.
+                # Only the specific plan lights experiment_designed.
+                last_layer = _last_experiment_plan_layer(conv_msgs)
+                has_plan_intent = any(
+                    k in user_message for k in _EXPERIMENT_PLAN_INTENT_WORDS
                 )
+                if is_confirmed and last_layer == "preliminary":
+                    plan_layer = "specific"
+                elif has_plan_intent:
+                    plan_layer = "specific" if last_layer == "specific" else "preliminary"
+                else:
+                    plan_layer = None
+                if plan_layer is not None:
+                    prof = (
+                        profiles_resp.current_profile or LearnerProfileData(version=1)
+                    )
+                    task_type = infer_task_type(
+                        topic=user_message,
+                        research_questions=[user_message],
+                    )
+                    standard_metrics = [
+                        m.name for m in STANDARD_METRICS if task_type in m.applies_to_task_type
+                    ]
+                    if not standard_metrics:
+                        standard_metrics = ["待核验指标 (to_verify)"]
+                    plan_entry = state_row.current_plan
+                    plan_notes = (
+                        plan_entry.get("content")
+                        if isinstance(plan_entry, dict)
+                        else None
+                    )
+                    tmpl = build_experiment_design_prompt(
+                        paper=papers_resp.current_paper,
+                        profile=prof,
+                        standard_metrics=standard_metrics,
+                        plan_notes=plan_notes,
+                        plan_layer=plan_layer,
+                    )
+                else:
+                    tmpl = build_paper_intro_prompt(
+                        paper=papers_resp.current_paper,
+                        profile=profiles_resp.current_profile,
+                        research_goal="论文精读与复现",
+                    )
             else:
-                prof = profiles_resp.current_profile or LearnerProfileData(version=1)
-                task_type = infer_task_type(
-                    topic=user_message,
-                    research_questions=[user_message],
+                # No current paper: a specific experiment plan must not be
+                # generated (design: plan generation requires a selected paper).
+                # With a pending candidate, keep introducing it until the user
+                # explicitly confirms; otherwise stay on retrieval guidance.
+                pending_candidate = find_last_paper_candidate(
+                    conv_msgs + [{"role": "user", "content": user_message}]
                 )
-                standard_metrics = [
-                    m.name for m in STANDARD_METRICS if task_type in m.applies_to_task_type
-                ]
-                if not standard_metrics:
-                    standard_metrics = ["待核验指标 (to_verify)"]
-                tmpl = build_experiment_design_prompt(
-                    paper=papers_resp.current_paper,
-                    profile=prof,
-                    standard_metrics=standard_metrics,
-                )
+                if pending_candidate is not None:
+                    candidate_paper = CurrentPaperCard(
+                        id="pending-candidate",
+                        paper_url=pending_candidate["paper_url"],
+                        title=pending_candidate["title"],
+                        purpose="replace",
+                        metadata_snapshot={},
+                        selected_at=datetime.now(UTC),
+                    )
+                    tmpl = build_paper_intro_prompt(
+                        paper=candidate_paper,
+                        profile=profiles_resp.current_profile,
+                        research_goal="论文精读与复现（等待用户确认是否选定该论文）",
+                    )
+                else:
+                    tmpl = build_search_guidance_prompt(
+                        research_goal=user_message or "检索并选定当前复现论文",
+                        candidate_queries=[user_message or "复现论文检索"],
+                        sources=["OpenAlex", "Crossref", "arXiv"],
+                    )
 
         else:  # research_analysis
             hw = profiles_resp.current_profile.hardware if profiles_resp.current_profile else None
@@ -1477,6 +1882,7 @@ class ResearchConversationOrchestrator:
             "system_prompt": system_str,
             "user_prompt": user_str,
             "template_name": template_name,
+            "plan_layer": tmpl.get("plan_layer"),
             "is_learning_record_mode": is_learning_record_mode,
         }
 
@@ -1693,6 +2099,7 @@ class ResearchConversationOrchestrator:
         tool_material: str,
         is_empty_state: bool,
         user_message: str,
+        current_paper_title: str | None = None,
     ) -> dict[str, str]:
         """Build strict prompt for Jiang Jiang to paraphrase real passive tool return data."""
         tool_display_name = {
@@ -1715,6 +2122,23 @@ class ResearchConversationOrchestrator:
             f"4. 严禁使用 Emoji 表情（必须使用颜文字如 (＾▽＾)、(•̀ᴗ•́)و ̑̑ 等）；"
             f"严禁假造百分比成功率。\n"
         )
+        if tool_name == "experiment-design":
+            # P3-B: the passive tool never bypasses the two-layer plan gates.
+            system_prompt += (
+                "5. 该工具结果只是素材：不得声称实验设计已完成（experiment_designed）、"
+                "不得声称可以直接进入结果分析；\n"
+            )
+            if current_paper_title:
+                system_prompt += (
+                    f"6. 同学已有当前论文《{current_paper_title}》：解释完工具结果后，"
+                    "必须明确询问是否要基于该结果生成【初步实验方案】；"
+                    "初步方案经同学确认后才会细化为具体实验方案。\n"
+                )
+            else:
+                system_prompt += (
+                    "6. 同学尚未选定当前论文：必须提示先完成正式检索并选定一篇当前论文，"
+                    "才能开始生成实验方案。\n"
+                )
         user_prompt = (
             f"{tool_material}\n\n"
             f"【用户消息】\n{user_message}"
@@ -1750,6 +2174,41 @@ class ResearchConversationOrchestrator:
             f"所有历史记录均已完好保存，你可以随时继续当前阶段的讨论！"
         )
 
+    def _record_confirmed_plan(
+        self,
+        state_model: ResearchOrchestratorStateModel,
+        conv: ResearchConversationModel,
+    ) -> None:
+        """Snapshot the user-confirmed plan (contract §7).
+
+        The latest confirmed version becomes ``current_plan``; older versions
+        stay in ``plan_history``.  Only a traceable plan-generation message
+        (``template == "profile_and_plan"``) qualifies; without one nothing is
+        recorded — welcome, paper-intro or stage-transition replies must never
+        be dressed up as the plan (no fabrication).
+        """
+        tagged = [
+            msg
+            for msg in (conv.messages_data or [])
+            if msg.get("role") == "assistant"
+            and msg.get("template") == "profile_and_plan"
+        ]
+        if not tagged:
+            return
+        plan_content = tagged[-1].get("content")
+        if not isinstance(plan_content, str) or not plan_content.strip():
+            return
+        history = list(state_model.plan_history or [])
+        entry = {
+            "version": len(history) + 1,
+            "content": plan_content,
+            "confirmed_by": "user_confirmation",
+            "confirmed_at": datetime.now(UTC).isoformat(),
+        }
+        history.append(entry)
+        state_model.plan_history = history
+        state_model.current_plan = entry
+
     def _finalize_reply(
         self,
         conversation_id: str,
@@ -1758,6 +2217,8 @@ class ResearchConversationOrchestrator:
         reply_content: str,
         triggered_tool: str | None,
         db: Session,
+        template_name: str | None = None,
+        plan_layer: str | None = None,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -1781,6 +2242,8 @@ class ResearchConversationOrchestrator:
             "role": "assistant",
             "content": reply_content,
             "triggered_tool": triggered_tool,
+            "template": template_name,
+            "plan_layer": plan_layer,
             "stage_at_time": state_model.current_stage,
             "created_at": now_dt.isoformat(),
         })

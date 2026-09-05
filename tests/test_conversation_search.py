@@ -455,6 +455,28 @@ def test_sparse_conversation_cannot_start_network_search(client: TestClient) -> 
     assert response.status_code == 409
 
 
+def test_user_confirmed_query_searches_without_ready_profile(client: TestClient) -> None:
+    """画像未就绪时，用户已确认的检索词仍直接驱动正式检索（设计文档 §检索）。"""
+    source = FakeSource()
+    _conversation_search_service.search_tool = AcademicSearchTool({"arxiv": source})
+    _conversation_service.decision_generator = type(
+        "UnavailableGenerator",
+        (),
+        {"generate": lambda self, **kwargs: ConversationDecisionOutcome.unavailable()},
+    )()
+    created = client.post("/api/v1/research/conversations", json={}).json()
+
+    response = client.post(
+        f"/api/v1/research/conversations/{created['conversation_id']}/evidence-bundles",
+        json={"query": "GCN oversmoothing node classification", "sources": ["arxiv"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["papers"][0]["title"] == "Generative AI in Programming Education"
+    assert source.calls == 1
+
+
 def test_academic_search_skill_contract_is_packaged() -> None:
     skill = load_academic_search_skill()
 

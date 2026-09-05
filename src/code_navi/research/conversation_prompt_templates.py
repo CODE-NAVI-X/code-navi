@@ -1214,8 +1214,18 @@ def build_experiment_design_prompt(
     profile: LearnerProfileData,
     standard_metrics: list[str],
     plan_notes: str | None = None,
+    plan_layer: str = "preliminary",
 ) -> dict[str, Any]:
-    """Template 6: Experiment Design (实验方案)."""
+    """Template 6: Experiment Design (实验方案，初步/具体两层).
+
+    ``plan_layer="preliminary"`` produces the plain-language preliminary plan
+    (what will be reproduced, which methods, what to prepare); it is generated
+    only after the paper is selected and understood, and must be confirmed by
+    the user before the specific plan is produced.  ``plan_layer="specific"``
+    refines it into the concrete plan (model, data flow, code flow, schedule,
+    tasks, acceptance checklist) and MUST inherit the confirmed stage-two
+    overall plan instead of creating a conflicting second schedule.
+    """
     paper_title = paper.title if paper else "未绑定特定论文"
     metrics_str = ", ".join(standard_metrics)
     profile_hw = profile.hardware or "未提供显存/设备"
@@ -1226,25 +1236,46 @@ def build_experiment_design_prompt(
         f"【白名单标准评估指标】\n{metrics_str}\n"
     )
     if plan_notes:
-        context += f"\n【前期计划要点】\n{plan_notes}\n"
+        context += f"\n【已确认的总体计划（第二阶段）】\n{plan_notes}\n"
 
-    rules = (
-        "1. 为同学设计清晰的实验步骤、基线对比与评估指标方案；\n"
-        "2. 指标优先从标准指标目录选取；若有非标准指标需明确标注待核验 (to_verify)；\n"
-        "3. 方案必须考虑同学实际显存大小与计算资源，给出合适的 Batch Size 与训练轮次建议；\n"
-        "4. 严禁以 Accuracy、F1、Loss、论文基线值或任何数值区间定义、暗示或设定\n"
-        "   “复现成功 / 通过 / 达标”的指标阈值、区间或判定标准；\n"
-        "   论文报告值或预期指标只能表述为“论文报告的参考值”“基线参考区间”或\n"
-        "   “待核验的一致性对比”，不构成复现结论；\n"
-        "   即使后续实验数值接近论文基线，也不得输出“视为复现成功”或“判定复现成功”；\n"
-        "   必须明确写清：evidence_linked、指标接近、计划完成或记录完整均不代表复现成功；\n"
-        "   缺少可追溯结果时继续标记 to_verify 并追问；\n"
-        "5. 严禁断言百分之百复现或伪造实验准确率；严禁使用 Emoji。\n"
+    shared_rules = (
+        "指标优先从标准指标目录选取；若有非标准指标需明确标注待核验 (to_verify)；\n"
+        "方案必须考虑同学实际显存大小与计算资源，给出合适的 Batch Size 与训练轮次建议；\n"
+        "严禁以 Accuracy、F1、Loss、论文基线值或任何数值区间定义、暗示或设定\n"
+        "“复现成功 / 通过 / 达标”的指标阈值、区间或判定标准；\n"
+        "论文报告值或预期指标只能表述为“论文报告的参考值”“基线参考区间”或\n"
+        "“待核验的一致性对比”，不构成复现结论；\n"
+        "即使后续实验数值接近论文基线，也不得输出“视为复现成功”或“判定复现成功”；\n"
+        "必须明确写清：evidence_linked、指标接近、计划完成或记录完整均不代表复现成功；\n"
+        "缺少可追溯结果时继续标记 to_verify 并追问；\n"
+        "严禁断言百分之百复现或伪造实验准确率；严禁使用 Emoji。\n"
     )
+    if plan_layer == "specific":
+        task = "具体实验方案（细化模型、数据流、代码流程、实验日程、任务与验收标准）"
+        rules = (
+            "1. 本轮输出【具体实验方案】：在已确认的初步方案之上细化模型结构、数据流、\n"
+            "   代码流程、实验日程、任务拆分与验收标准；方法与术语必须与依托论文一致；\n"
+            "2. 日程必须继承【已确认的总体计划（第二阶段）】的时间安排；若提供了总体计划，\n"
+            "   严禁生成与之冲突的第二套日程，只能在其框架内细化；未提供时先追问总体计划；\n"
+            "3. 方案依据必须写清来自依托论文、用户画像、设备与可投入时间；信息不足时\n"
+            "   逐项追问，不得编造；\n"
+            "4. " + shared_rules
+        )
+    else:
+        task = "初步实验方案（通俗说明准备复现什么、用到哪些方法、先做哪些准备）"
+        rules = (
+            "1. 本轮输出【初步实验方案】：用通俗语言说明准备复现什么、会用到哪些方法、\n"
+            "   要先做哪些准备；不展开具体代码流程与逐日日程；\n"
+            "2. 明确说明这是初步方案，需用户确认后才会细化为具体实验方案；\n"
+            "3. 不得声称代码已执行、实验已完成、流程已跑通或复现成功；\n"
+            "   所有准备项都还未发生，只描述计划；\n"
+            "4. " + shared_rules
+        )
     return {
         "template_name": "experiment_design",
+        "plan_layer": plan_layer,
         "system": JIANGJIANG_SYSTEM_PERSONA,
-        "task": "可执行实验方案与指标设计（实验方案）",
+        "task": task,
         "context": context,
         "rules": rules,
     }
