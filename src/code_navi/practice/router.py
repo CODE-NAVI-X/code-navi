@@ -17,6 +17,7 @@ from ..auth.dependencies import (
     get_owned_principal_ids,
 )
 from ..db import get_db
+from ..learning_profile.service import ProfileService
 from ..online_compiler.ai_evaluation import AiEvaluationError
 from ..online_compiler.config import Settings
 from ..online_compiler.provider_setup import create_ai_service
@@ -30,6 +31,8 @@ from .schemas import (
     CodeUploadAnalyzeRequest,
     ExplainSymbolRequest,
     ExplainSymbolResponse,
+    LearningDataPracticeGenerateRequest,
+    LearningDataPracticeGenerateResponse,
     PracticeSetGenerateRequest,
     PracticeSetResponse,
     ProjectCodeFillRequest,
@@ -38,8 +41,11 @@ from .schemas import (
     StructureCatalogResponse,
 )
 from .service import (
+    DuplicateLearningPracticeSetError,
     ExplainOnlyJudgingError,
     MissingGenerationBasis,
+    MissingLearningData,
+    PracticeModelGenerationError,
     PracticeSetNotFoundError,
     PracticeSetService,
     UploadNotFoundError,
@@ -54,6 +60,7 @@ from .structure_practice import (
 router = APIRouter(prefix="/api/v1/practice", tags=["Practice"])
 
 _practice_service = PracticeSetService()
+_profile_service = ProfileService()
 _structure_practice = StructurePracticeService()
 _db_dependency = Depends(get_db)
 _opt_principal_dep = Depends(get_optional_principal)
@@ -79,6 +86,43 @@ async def generate_practice_set(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except UploadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/sets/generate-from-learning",
+    response_model=LearningDataPracticeGenerateResponse,
+    status_code=200,
+)
+async def generate_practice_set_from_learning(
+    request: LearningDataPracticeGenerateRequest,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> LearningDataPracticeGenerateResponse:
+    """Generate a set from persisted portrait and knowledge-gap facts."""
+    principal_id = principal.principal_id if principal else None
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    profile = _profile_service.get_profile(request.profile_id, db, owned_ids=owned_ids)
+    gaps = _profile_service.get_knowledge_gaps(
+        local_profile_id=request.local_profile_id,
+        profile_id=request.profile_id,
+        db=db,
+        owned_ids=owned_ids,
+    )
+    try:
+        return _practice_service.generate_from_learning(
+            request,
+            profile,
+            gaps.items,
+            db,
+            owner_principal_id=principal_id,
+            owned_ids=owned_ids,
+        )
+    except MissingLearningData as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DuplicateLearningPracticeSetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PracticeModelGenerationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/sets/{set_id}", response_model=PracticeSetResponse, status_code=200)

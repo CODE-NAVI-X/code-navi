@@ -106,3 +106,16 @@ def test_no_third_entry_point_assembles_the_structure() -> None:
         and path.resolve() not in allowed
     ]
     assert offenders == []
+
+
+def test_learning_data_generation_has_a_practice_page_entry() -> None:
+    api = PRACTICE_API.read_text(encoding="utf-8")
+    page = PRACTICE_PAGE.read_text(encoding="utf-8")
+
+    assert '"/api/v1/practice/sets/generate-from-learning"' in api
+    assert "local_profile_id: payload.localProfileId" in api
+    assert "profile_id: payload.profileId" in api
+    assert "generatePracticeSetFromLearning" in page
+    assert 'setSetGenerationSource("learning")' in page
+    assert "question_bank_gaps" in page
+    assert "learningResponse.practice_set.items" in page

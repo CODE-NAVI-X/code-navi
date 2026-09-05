@@ -168,6 +168,27 @@ class PracticeSetGenerateRequest(BaseModel):
     )
 
 
+class LearningDataPracticeGenerateRequest(BaseModel):
+    """Explicit request to generate a set from persisted learning facts."""
+
+    local_profile_id: str = Field(..., min_length=1, max_length=64)
+    profile_id: str = Field(
+        ...,
+        pattern=_UUID_V4_PATTERN,
+        min_length=36,
+        max_length=36,
+        description="Unified learning portrait key.",
+    )
+    kind: PracticeSetKind = "mixed"
+    count: int = Field(default=5, ge=3, le=8)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    knowledge_points: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="Optional explicit knowledge points; never includes a client mastery value.",
+    )
+
+
 class PracticeSetResponse(BaseModel):
     """Response of the generate gateway; ``GET /sets/{set_id}`` returns the same.
 
@@ -187,6 +208,19 @@ class PracticeSetResponse(BaseModel):
         default=None,
         description="Echoed when the topic (not a context) drove generation.",
     )
+
+
+class LearningDataPracticeGenerateResponse(BaseModel):
+    """Safe result of a learning-data generation request.
+
+    The archived set remains the source for exercises; this envelope adds only
+    traceable, non-secret generation provenance.
+    """
+
+    practice_set: PracticeSetResponse
+    generation_version: Literal["learning-data.v1"]
+    selected_knowledge_points: list[str] = Field(default_factory=list, max_length=4)
+    question_bank_gaps: list[str] = Field(default_factory=list, max_length=4)
 
 
 class CodeFillGradeBlankAnswer(BaseModel):
@@ -422,6 +456,8 @@ __all__ = [
     "ExplainSymbolRequest",
     "ExplainSymbolResponse",
     "JudgeChannel",
+    "LearningDataPracticeGenerateRequest",
+    "LearningDataPracticeGenerateResponse",
     "PracticeContextKnowledgePoint",
     "PracticeContextV1",
     "PracticeItem",

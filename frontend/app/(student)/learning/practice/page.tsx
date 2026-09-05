@@ -50,6 +50,7 @@ import {
 import { getLocalProfileId } from "@/lib/api/workspaces";
 import {
   gradePracticeCodeFill,
+  generatePracticeSetFromLearning,
   generatePracticeSetWithContext,
   type PracticeCodeFillPayload,
   type PracticeCodeFillGradeResponse,
@@ -295,6 +296,52 @@ function generatedProblemToExercise(
   };
 }
 
+function gatewayItemToExercise(
+  item: PracticeGatewayItem,
+  batchId: string,
+): PracticeExercise | null {
+  if (item.item_kind !== "coding_problem") return null;
+  const payload = item.payload;
+  const title = typeof payload.title === "string" ? payload.title : "";
+  const description = typeof payload.description === "string" ? payload.description : "";
+  if (!title || !description) return null;
+  const difficulty: Difficulty =
+    payload.difficulty === "easy" || payload.difficulty === "medium" || payload.difficulty === "hard"
+      ? payload.difficulty
+      : "medium";
+  const tags = Array.isArray(payload.tags)
+    ? payload.tags.filter((tag): tag is string => typeof tag === "string")
+    : item.knowledge_points;
+  const sampleTests = Array.isArray(payload.sampleTests)
+    ? payload.sampleTests
+        .map((test) => {
+          const value = isRecord(test) ? test : {};
+          return {
+            stdin: String(value.input ?? value.stdin ?? ""),
+            expectedOutput: String(value.output ?? value.expectedOutput ?? ""),
+          };
+        })
+        .filter((test) => test.stdin || test.expectedOutput)
+    : [];
+  return {
+    id: `${batchId}-${item.item_id}`,
+    title,
+    summary: `${tags.join(" / ") || "综合"} / 学习数据生成`,
+    difficulty,
+    tags: ["生成", ...tags],
+    description,
+    inputHint: typeof payload.inputHint === "string" ? payload.inputHint : "按题目要求填写",
+    outputHint: typeof payload.outputHint === "string" ? payload.outputHint : "按题目逻辑输出",
+    source: typeof payload.starterCode === "string" ? payload.starterCode : "",
+    stdin: sampleTests[0]?.stdin ?? "",
+    origin: "generated_problem",
+    judgeable: payload.judgeable === true,
+    orderReason:
+      typeof payload.generationReason === "string" ? payload.generationReason : undefined,
+    sampleTests,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -460,6 +507,9 @@ function PracticeContent() {
     practiceContext ? practiceContext.knowledge_points.map((point) => point.name).join(", ") : "",
   );
   const [setIncludeUploaded, setSetIncludeUploaded] = useState(true);
+  const [setGenerationSource, setSetGenerationSource] = useState<"goal" | "learning">(
+    "goal",
+  );
   const [setBusy, setSetBusy] = useState(false);
   const [setMessage, setSetMessage] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<CompilerRuntimeStatus | null>(null);
@@ -782,13 +832,55 @@ function PracticeContent() {
   }
 
   async function generatePracticeSet() {
-    if (!setPrompt.trim()) {
+    if (setGenerationSource === "goal" && !setPrompt.trim()) {
       setSetMessage("请先填写学习目标。");
       return;
     }
     setSetBusy(true);
     setSetMessage(null);
     try {
+      if (setGenerationSource === "learning") {
+        const learningResponse = await generatePracticeSetFromLearning({
+          localProfileId: getLocalProfileId(),
+          profileId: learnerId,
+          count: setTargetCount,
+          difficulty: setDifficultyHigh,
+          knowledgePoints: setKnowledgeTags
+            .split(/[,，]/)
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+            .slice(0, 4),
+        });
+        const batchId =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? `learning-set-${crypto.randomUUID()}`
+            : `learning-set-${Date.now()}`;
+        const generated = learningResponse.practice_set.items
+          .map((item) => gatewayItemToExercise(item, batchId))
+          .filter((exercise): exercise is PracticeExercise => exercise !== null);
+        if (generated.length === 0) {
+          setSetMessage("学习数据题集未包含可执行编程题，请改用学习目标生成。");
+          return;
+        }
+        setImportedExercises((items) => [
+          ...generated,
+          ...items.filter((item) => !generated.some((next) => next.id === item.id)),
+        ]);
+        setSelectedExerciseId(generated[0].id);
+        setQuery("");
+        setDifficulty("all");
+        const bankGap = learningResponse.question_bank_gaps.length
+          ? `；题库待覆盖：${learningResponse.question_bank_gaps.join("、")}`
+          : "";
+        setSetMessage(
+          `已按学习数据生成 ${generated.length} 道可执行题（${
+            learningResponse.practice_set.generation_mode === "mock"
+              ? "Mock 闭环"
+              : learningResponse.practice_set.generation_mode
+          }）；优先知识点：${learningResponse.selected_knowledge_points.join("、") || "当前薄弱点"}${bankGap}`,
+        );
+        return;
+      }
       // §3.1 boundary: when a practice-context.v1 was handed over, its body is
       // submitted through POST /api/v1/practice/sets/generate's `context` field.
       // The direct path stays in core structure practice; only an ordinary
@@ -1486,12 +1578,43 @@ function PracticeContent() {
                   {setBusy ? "生成中" : "生成并排列"}
                 </button>
               </div>
+              <div
+                className="mt-4 inline-flex overflow-hidden rounded-lg border border-slate-200 dark:border-zinc-800"
+                role="group"
+                aria-label="练习生成来源"
+              >
+                <button
+                  type="button"
+                  onClick={() => setSetGenerationSource("goal")}
+                  aria-pressed={setGenerationSource === "goal"}
+                  className={`h-9 px-3 text-xs font-semibold transition ${
+                    setGenerationSource === "goal"
+                      ? "bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "bg-transparent text-slate-600 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  按学习目标
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSetGenerationSource("learning")}
+                  aria-pressed={setGenerationSource === "learning"}
+                  className={`h-9 border-l border-slate-200 px-3 text-xs font-semibold transition dark:border-zinc-800 ${
+                    setGenerationSource === "learning"
+                      ? "bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "bg-transparent text-slate-600 hover:bg-slate-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  按学习数据
+                </button>
+              </div>
               <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
                 <label className="text-xs font-semibold text-slate-700 dark:text-zinc-200">
                   学习目标
                   <textarea
                     value={setPrompt}
                     onChange={(event) => setSetPrompt(event.target.value)}
+                    disabled={setGenerationSource === "learning"}
                     className="app-input mt-1 min-h-24 w-full resize-y rounded-xl p-3 text-sm font-normal leading-6"
                   />
                 </label>
