@@ -10,6 +10,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from code_navi.db import Base
+from code_navi.research.academic import (
+    AcademicSearchTool,
+    AcademicSourceResult,
+    PaperMetadata,
+)
 from code_navi.research.conversation_orchestrator import (
     ConversationNotFoundError,
     ResearchConversationOrchestrator,
@@ -28,6 +33,11 @@ from code_navi.research.conversation_orchestrator_schemas import (
 from code_navi.research.conversation_schemas import (
     AcademicSourceStatus,
     ConversationEvidenceBundle,
+    CreateConversationEvidenceBundleRequest,
+)
+from code_navi.research.conversation_search_service import (
+    ConversationSearchNotReadyError,
+    ResearchConversationSearchService,
 )
 from code_navi.research.models import (
     ResearchConversationModel,
@@ -1477,6 +1487,70 @@ def test_search_flow_respects_owner_404_isolation(db_session) -> None:
             owned_ids=["owner-b"],
         )
     assert search_service.calls == []
+
+
+class SinglePaperArxivSource:
+    """Deterministic arXiv source for the real search-service integration path."""
+
+    def search(self, query: str) -> AcademicSourceResult:
+        return AcademicSourceResult.success(
+            "arxiv",
+            [
+                PaperMetadata(
+                    title=PAPER_TITLE,
+                    authors=["Thomas Kipf", "Max Welling"],
+                    year=2017,
+                    source_name="arXiv",
+                    url=PAPER_URL,
+                    identifier="arXiv:1609.02907",
+                    abstract_excerpt=f"Evidence for {query}",
+                    accessed_at=datetime(2026, 8, 3, tzinfo=UTC),
+                )
+            ],
+        )
+
+
+def test_confirmed_user_query_runs_real_search_service_on_sparse_profile(db_session) -> None:
+    """P3-A 集成：确认检索词经真实检索服务出候选；画像就绪门控只拦自动计划。"""
+    search_service = ResearchConversationSearchService(
+        search_tool=AcademicSearchTool({"arxiv": SinglePaperArxivSource()})
+    )
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-real-1"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "图卷积网络 (GCN) 的研究延展与论文复现准备"},
+            messages_data=[],
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="确认检索：GCN oversmoothing"),
+        db_session,
+    )
+    reply_text = resp.reply_message.content
+    assert PAPER_TITLE in reply_text
+    assert "arXiv" in reply_text
+    assert "2017" in reply_text
+    assert PAPER_URL in reply_text
+    # 候选不是当前论文：点击后介绍、明确确认才选定。
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is None
+    assert resp.state.subtasks.paper_selected is False
+    # 真实检索 bundle 持久化，作为前端候选论文卡的数据源。
+    bundles = search_service.list_bundles(conv_id, db_session)
+    assert len(bundles) == 1
+    assert bundles[0].papers[0].url == PAPER_URL
+    # 同一稀疏画像下，缺少用户检索词的自动计划仍被就绪门控拒绝。
+    with pytest.raises(ConversationSearchNotReadyError):
+        search_service.search(
+            conv_id, CreateConversationEvidenceBundleRequest(), db_session
+        )
 
 
 # ---------------- P3-B: passive experiment-design tool must not bypass gates ----------------

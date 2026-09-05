@@ -111,8 +111,13 @@ class ResearchConversationSearchService:
         db: Session,
     ) -> ConversationEvidenceBundle:
         """Dispatch the allow-listed Tool once after an explicit API request."""
-        plan = self.plan(conversation_id, db)
-        query = request.query or plan.query
+        if (request.query or "").strip():
+            # Design contract: a user-provided query with explicit confirmation
+            # starts the formal search directly. Profile readiness only gates
+            # the auto-generated search plan, never the confirmed user query.
+            query = request.query or ""
+        else:
+            query = self.plan(conversation_id, db).query
         cached = self._cached_bundle(conversation_id, query, request.sources, db)
         if cached is not None:
             return cached.model_copy(update={"cache_hit": True})
