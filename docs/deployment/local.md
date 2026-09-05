@@ -9,9 +9,9 @@
 | `python scripts/dev.py` | FastAPI、Next 与依赖检查 | 跨平台本地 Web/API 开发闭环；迁移需先执行，不启动 Piston |
 | Windows `dev-start.cmd` | 迁移、Piston runtime、FastAPI 与 Next | 当前包含 Python 练习的 Windows 本地入口 |
 | `compose.yaml` | `code-navi` CLI、Piston、runtime 初始化和数据卷 | CLI 与代码执行服务容器基线 |
-| `compose.web.yaml` | FastAPI、Next standalone、Caddy 和持久化数据卷 | 当前 NAS 配置对应的受限 Web 容器基线 |
+| `compose.web.yaml` | FastAPI、Next standalone、Caddy、Piston 与持久化数据卷 | 当前 NAS 配置对应的受限 Web 容器基线 |
 
-两套 Compose 相互独立。`compose.yaml` 不暴露 Code Navi Web/API，但会启动 privileged Piston 并把其 API 绑定到宿主 loopback；`compose.web.yaml` 构建 Web/API 镜像并由 Caddy 提供统一 HTTPS 入口，但尚未接入 Piston。两者都不提供远程仓库写入、应用身份系统或生产数据库。
+两套 Compose 相互独立。`compose.yaml` 不暴露 Code Navi Web/API，但会启动 privileged Piston 并把其 API 绑定到宿主 loopback；`compose.web.yaml` 构建 Web/API 镜像、由 Caddy 提供统一 HTTPS 入口，并在同一 Compose 网络内启动 privileged Piston（不发布宿主端口）供练习执行使用。两者都不提供远程仓库写入或生产数据库。
 
 ## 2. 本地 Web/API
 
@@ -137,6 +137,8 @@ docker compose -f compose.web.yaml up -d --build
 docker compose -f compose.web.yaml ps
 ```
 
+首次启动会拉取固定 digest 的 Piston 镜像，并由 `compiler-runtime-setup` 一次性安装 Python 3.12 runtime；这是显式联网步骤，runtime 包持久化在 `piston_packages` 卷中。Piston 只在 Compose 网络内暴露 2000 端口，不经 Caddy 对外，浏览器无法直接访问。
+
 如需使用本机已有的 Provider 配置，明确复制到持久化卷并重启后端：
 
 ```powershell
@@ -170,6 +172,7 @@ docker compose -f compose.web.yaml restart backend
 | 后端基础镜像 | `python:3.11-slim`；非 root UID/GID `10001` |
 | 前端基础镜像 | `node:22-alpine`；Next standalone 产物由 `node server.js` 启动 |
 | 内部端口 | 后端 `8000`、前端 `3000`，只在 Compose 网络中暴露 |
+| Piston 容器 | 固定 digest 的 `ghcr.io/engineer-man/piston`；privileged；2 CPU / 2 GB 内存 / 512 pids；仅在 Compose 网络内暴露 `2000`；runtime 包存于 `piston_packages` 卷 |
 | 外部端口 | Caddy `25000` |
 | 持久化 | 后端 `/data` 与 Caddy 的 data/config 命名卷 |
 | API 地址 | 前端使用同源相对路径，由 Caddy 分流 |
