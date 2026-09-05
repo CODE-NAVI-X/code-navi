@@ -1845,7 +1845,7 @@ function PracticeContent() {
 
   return (
     <main className="min-h-screen bg-[var(--app-surface)] text-slate-950 dark:text-zinc-50">
-      <header className="sticky top-16 z-30 flex min-h-16 flex-wrap items-center gap-2 border-b border-slate-200 bg-[var(--app-card)]/95 px-3 py-2 shadow-[var(--app-shadow)] backdrop-blur md:px-5 dark:border-zinc-800">
+      <header className="sticky top-12 z-30 flex min-h-16 flex-wrap items-center gap-2 border-b border-slate-200 bg-[var(--app-card)]/95 px-3 py-2 shadow-[var(--app-shadow)] backdrop-blur md:top-16 md:px-5 dark:border-zinc-800">
         <button
           type="button"
           onClick={() => {

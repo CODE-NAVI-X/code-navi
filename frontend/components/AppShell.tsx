@@ -9,15 +9,18 @@ import {
   BriefcaseBusiness,
   ClipboardList,
   Code2,
+  FolderGit2,
   Menu,
   Microscope,
   Sparkles,
+  Telescope,
   User,
   Users,
   X,
 } from "lucide-react";
 import { WorkspaceContextBar } from "@/components/WorkspaceContextBar";
 import { AuthNav } from "@/components/AuthNav";
+import { ProviderStatusIndicator } from "@/components/ProviderStatusIndicator";
 
 interface NavItem {
   href: string;
@@ -28,11 +31,18 @@ interface NavItem {
   isWorkbench?: boolean;
 }
 
+// D5 Q1 拍板：学习闭环五入口，/learning/projects 为本次新增侧边栏入口。
 const learningSubItems: NavItem[] = [
   { href: "/learning", label: "理解与检查", icon: BookOpen, exact: true },
   { href: "/learning/practice", label: "动手实践", icon: Code2, matchPrefix: "/learning/practice" },
-  { href: "/learning/portrait", label: "复盘", icon: BarChart3, matchPrefix: "/learning/portrait" },
-  { href: "/learning/notebook", label: "笔记", icon: ClipboardList, matchPrefix: "/learning/notebook" },
+  { href: "/learning/projects", label: "项目代码", icon: FolderGit2, matchPrefix: "/learning/projects" },
+  { href: "/learning/portrait", label: "知识复盘", icon: BarChart3, matchPrefix: "/learning/portrait" },
+  { href: "/learning/notebook", label: "学习笔记", icon: ClipboardList, matchPrefix: "/learning/notebook" },
+];
+
+const managementItems: NavItem[] = [
+  { href: "/classes", label: "班级成员", icon: Users, matchPrefix: "/classes" },
+  { href: "/account", label: "账户设置", icon: User, matchPrefix: "/account" },
 ];
 
 function isItemActive(item: NavItem, pathname: string): boolean {
@@ -65,15 +75,21 @@ function isLearningLoopActive(pathname: string): boolean {
   );
 }
 
+function isResearchActive(pathname: string): boolean {
+  return pathname === "/research" || pathname.startsWith("/research/");
+}
+
 function NavLink({
   item,
   pathname,
   onNavigate,
+  compact = false,
   className = "",
 }: {
   item: NavItem;
   pathname: string;
   onNavigate?: () => void;
+  compact?: boolean;
   className?: string;
 }) {
   const active = isItemActive(item, pathname);
@@ -84,15 +100,37 @@ function NavLink({
       href={item.href}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+      className={`flex items-center gap-3 rounded-control font-semibold transition ${
+        compact ? "px-3 py-2 text-xs" : "px-3 py-2.5 text-sm"
+      } ${className} ${
         active
           ? "bg-slate-950 text-white shadow-sm dark:bg-white dark:text-zinc-950"
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
-      } ${className}`}
+      }`}
     >
-      <Icon className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+      <Icon className={compact ? "h-3.5 w-3.5 shrink-0" : "h-4 w-4 shrink-0"} strokeWidth={1.8} />
       <span className="truncate">{item.label}</span>
     </Link>
+  );
+}
+
+function NavGroupTitle({
+  title,
+  icon: Icon,
+  active,
+}: {
+  title: string;
+  icon: typeof Sparkles;
+  active?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between px-3 py-1.5 text-xs font-bold tracking-wider text-slate-400 uppercase dark:text-zinc-500">
+      <div className="flex items-center gap-1.5">
+        <Icon className="h-3.5 w-3.5 text-blue-500" strokeWidth={1.8} />
+        <span>{title}</span>
+      </div>
+      {active && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
+    </div>
   );
 }
 
@@ -106,8 +144,8 @@ function NavigationTree({
   const learningActive = isLearningLoopActive(pathname);
 
   return (
-    <nav aria-label="侧边栏主导航" className="flex flex-1 flex-col gap-1.5 px-3 py-4 overflow-y-auto">
-      {/* 1. 工作台 */}
+    <nav aria-label="侧边栏主导航" className="flex flex-1 flex-col gap-1.5 overflow-y-auto px-3 py-4">
+      {/* 1. 工作台（终审裁决：必须保留为导航树首项） */}
       <NavLink
         item={{ href: "/", label: "工作台", icon: BriefcaseBusiness, isWorkbench: true }}
         pathname={pathname}
@@ -116,15 +154,7 @@ function NavigationTree({
 
       {/* 2. 学习闭环 */}
       <div className="mt-3">
-        <div className="flex items-center justify-between px-3 py-1.5 text-xs font-bold tracking-wider text-slate-400 uppercase dark:text-zinc-500">
-          <div className="flex items-center gap-1.5">
-            <Sparkles className="h-3.5 w-3.5 text-blue-500" strokeWidth={1.8} />
-            <span>学习闭环</span>
-          </div>
-          {learningActive && (
-            <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
-          )}
-        </div>
+        <NavGroupTitle title="学习闭环" icon={Sparkles} active={learningActive} />
         <div className="mt-1 flex flex-col gap-1 pl-2 border-l-2 border-slate-200/80 ml-2 dark:border-zinc-800">
           {learningSubItems.map((subItem) => (
             <NavLink
@@ -138,28 +168,39 @@ function NavigationTree({
         </div>
       </div>
 
-      {/* 3. 科研引导 */}
+      {/* 3. 科研专区 */}
       <div className="mt-3">
-        <NavLink
-          item={{ href: "/research", label: "科研引导", icon: Microscope, matchPrefix: "/research" }}
-          pathname={pathname}
-          onNavigate={onNavigate}
-        />
+        <NavGroupTitle title="科研专区" icon={Telescope} active={isResearchActive(pathname)} />
+        <div className="mt-1 flex flex-col gap-1 pl-2 border-l-2 border-slate-200/80 ml-2 dark:border-zinc-800">
+          <NavLink
+            item={{ href: "/research", label: "科研引导", icon: Microscope, matchPrefix: "/research" }}
+            pathname={pathname}
+            onNavigate={onNavigate}
+            className="py-2 text-xs"
+          />
+        </div>
       </div>
 
-      {/* 4. 班级 */}
-      <NavLink
-        item={{ href: "/classes", label: "班级", icon: Users, matchPrefix: "/classes" }}
-        pathname={pathname}
-        onNavigate={onNavigate}
-      />
-
-      {/* 5. 账户 */}
-      <NavLink
-        item={{ href: "/account", label: "账户", icon: User, matchPrefix: "/account" }}
-        pathname={pathname}
-        onNavigate={onNavigate}
-      />
+      {/* 4. 组织管理（D5 Q1 拍板：视觉降级，下沉底部次级分区） */}
+      <div className="mt-auto pt-3">
+        <div className="border-t border-[var(--app-border)] pt-3">
+          <div className="flex items-center px-3 py-1.5 text-xs font-bold tracking-wider text-slate-400 uppercase dark:text-zinc-500">
+            <span>组织管理</span>
+          </div>
+          <div className="mt-1 flex flex-col gap-1">
+            {managementItems.map((subItem) => (
+              <NavLink
+                key={subItem.href}
+                item={subItem}
+                pathname={pathname}
+                onNavigate={onNavigate}
+                compact
+                className="text-slate-500 dark:text-zinc-400"
+              />
+            ))}
+          </div>
+        </div>
+      </div>
     </nav>
   );
 }
@@ -169,122 +210,101 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[var(--app-surface)] text-[var(--app-foreground)] flex">
-      {/* 桌面端固定侧边栏 */}
-      <aside
-        aria-label="桌面主导航"
-        className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 z-30 border-r border-[var(--app-border)] bg-[var(--app-card)] shadow-xs"
-      >
-        {/* 顶部 Brand */}
-        <div className="flex h-16 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-5">
-          <Link href="/" className="flex items-center gap-2.5" aria-label="Code Navi 首页">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 font-mono text-sm font-bold text-white shadow-sm dark:bg-white dark:text-zinc-950">
-              CN
-            </span>
-            <div className="flex flex-col">
-              <span className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">Code Navi</span>
-              <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-medium">智教码航平台</span>
-            </div>
-          </Link>
-        </div>
+    <div className="flex min-h-screen flex-col bg-[var(--app-surface)] text-[var(--app-foreground)]">
+      {/* 统一顶栏（D5 Q3 拍板）：管「我在哪、我是谁」，零路由项 */}
+      <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-header)] px-3 backdrop-blur-xl md:h-16 md:gap-3 md:px-5">
+        <button
+          type="button"
+          onClick={() => setMobileDrawerOpen(true)}
+          aria-label="打开导航菜单"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control border border-[var(--app-border)] bg-[var(--app-card)] text-slate-700 hover:bg-slate-100 dark:text-zinc-200 dark:hover:bg-zinc-800 md:hidden"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
 
-        {/* 导航列表 */}
-        <NavigationTree pathname={pathname} />
+        <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="Code Navi 首页">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-slate-950 font-mono text-xs font-bold text-white shadow-sm dark:bg-white dark:text-zinc-950 md:h-8 md:w-8">
+            CN
+          </span>
+          <span className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">
+            Code Navi
+          </span>
+        </Link>
 
-        {/* 底部 Auth 状态 */}
-        <div className="shrink-0 border-t border-[var(--app-border)] p-3">
-          <Suspense fallback={null}>
-            <AuthNav />
-          </Suspense>
-        </div>
-      </aside>
+        <span
+          className="mx-1 hidden h-6 w-px bg-[var(--app-border)] md:block"
+          aria-hidden="true"
+        />
 
-      {/* 移动端顶部 Header */}
-      <div className="flex-1 flex flex-col min-w-0 md:pl-64">
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[var(--app-border)] bg-[var(--app-header)] px-4 backdrop-blur-xl md:hidden">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setMobileDrawerOpen(true)}
-              aria-label="打开导航菜单"
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-card)] text-slate-700 hover:bg-slate-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-            <Link href="/" className="flex items-center gap-2" aria-label="Code Navi 首页">
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-950 font-mono text-xs font-bold text-white dark:bg-white dark:text-zinc-950">
-                CN
-              </span>
-              <span className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">Code Navi</span>
-            </Link>
-          </div>
-          <Suspense fallback={null}>
-            <AuthNav />
-          </Suspense>
-        </header>
-
-        {/* 移动端抽屉 (Drawer) */}
-        {mobileDrawerOpen && (
-          <div
-            className="fixed inset-0 z-50 md:hidden"
-            role="dialog"
-            aria-modal="true"
-            aria-label="移动端主导航"
-          >
-            {/* 遮罩背景 */}
-            <div
-              className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity"
-              onClick={() => setMobileDrawerOpen(false)}
-              aria-hidden="true"
-            />
-            {/* 抽屉内容 */}
-            <div className="fixed inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-[var(--app-card)] shadow-2xl border-r border-[var(--app-border)] animate-in slide-in-from-left duration-200">
-              <div className="flex h-14 items-center justify-between border-b border-[var(--app-border)] px-4">
-                <Link
-                  href="/"
-                  onClick={() => setMobileDrawerOpen(false)}
-                  className="flex items-center gap-2.5"
-                >
-                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-950 font-mono text-xs font-bold text-white dark:bg-white dark:text-zinc-950">
-                    CN
-                  </span>
-                  <span className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">Code Navi</span>
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => setMobileDrawerOpen(false)}
-                  aria-label="关闭导航菜单"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              <NavigationTree
-                pathname={pathname}
-                onNavigate={() => setMobileDrawerOpen(false)}
-              />
-
-              <div className="border-t border-[var(--app-border)] p-4">
-                <Suspense fallback={null}>
-                  <AuthNav />
-                </Suspense>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Workspace 上下文栏 */}
+        {/* Workspace / Task 上下文面包屑（原独立上下文条内聚于此） */}
         <Suspense fallback={null}>
           <WorkspaceContextBar />
         </Suspense>
 
-        {/* 主页面内容 */}
-        <main className="flex-1">
-          {children}
-        </main>
+        <div className="ml-auto flex shrink-0 items-center gap-2 md:gap-3">
+          <ProviderStatusIndicator />
+          <Suspense fallback={null}>
+            <AuthNav />
+          </Suspense>
+        </div>
+      </header>
+
+      <div className="flex min-w-0 flex-1">
+        {/* 桌面侧边栏：管「去哪里」 */}
+        <aside
+          aria-label="桌面主导航"
+          className="fixed left-0 top-12 bottom-0 z-30 hidden w-64 flex-col border-r border-[var(--app-border)] bg-[var(--app-card)] shadow-xs md:flex"
+        >
+          <NavigationTree pathname={pathname} />
+        </aside>
+
+        <main className="min-w-0 flex-1 md:pl-64">{children}</main>
       </div>
+
+      {/* 移动端抽屉 (Drawer)：390×844 降级，遮罩点击关闭 */}
+      {mobileDrawerOpen && (
+        <div
+          className="fixed inset-0 z-50 md:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="移动端主导航"
+        >
+          {/* 遮罩背景 */}
+          <div
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity"
+            onClick={() => setMobileDrawerOpen(false)}
+            aria-hidden="true"
+          />
+          {/* 抽屉内容 */}
+          <div className="fixed inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-[var(--app-card)] shadow-2xl border-r border-[var(--app-border)] animate-in slide-in-from-left duration-200">
+            <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-4">
+              <Link
+                href="/"
+                onClick={() => setMobileDrawerOpen(false)}
+                className="flex items-center gap-2.5"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-control bg-slate-950 font-mono text-xs font-bold text-white dark:bg-white dark:text-zinc-950">
+                  CN
+                </span>
+                <span className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">Code Navi</span>
+              </Link>
+              <button
+                type="button"
+                onClick={() => setMobileDrawerOpen(false)}
+                aria-label="关闭导航菜单"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <NavigationTree
+              pathname={pathname}
+              onNavigate={() => setMobileDrawerOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
