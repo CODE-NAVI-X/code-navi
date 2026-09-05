@@ -340,6 +340,69 @@ def is_opening_greeting_intent(message: str) -> bool:
     return any(re.match(p, msg, re.IGNORECASE) for p in _OPENING_GREETING_PATTERNS)
 
 
+# P2-B: deterministic paper-candidate detection (design: candidate paper cards
+# and pasted paper links go through introduction -> explicit confirmation; the
+# model never decides on its own which paper becomes current).
+_PAPER_CANDIDATE_PHRASES = (
+    "选这篇",
+    "选择这篇",
+    "复现候选",
+    "候选论文",
+    "选为当前论文",
+    "作为当前论文",
+    "选择论文",
+    "想选",
+)
+_PAPER_URL_PATTERN = re.compile(r"https?://[^\s)）】」]+", re.IGNORECASE)
+_PAPER_TITLE_PATTERN = re.compile(r"《([^《》]{1,200})》")
+_PAPER_PURPOSE_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("replace", ("替换", "换掉", "换成", "取代当前")),
+    ("compare", ("对比", "比较")),
+    ("cite", ("引用",)),
+)
+
+
+def detect_paper_candidate_submission(message: str) -> dict[str, str] | None:
+    """Return the submitted paper candidate (title + url) from a chat message.
+
+    A submission is a message that both carries a paper URL and explicit
+    candidate-selection phrasing; plain links without selection intent are not
+    treated as candidates.
+    """
+    msg = message.strip()
+    url_match = _PAPER_URL_PATTERN.search(msg)
+    if url_match is None:
+        return None
+    if not any(phrase in msg for phrase in _PAPER_CANDIDATE_PHRASES):
+        return None
+    url = url_match.group(0).rstrip(".,，;；、")
+    title_match = _PAPER_TITLE_PATTERN.search(msg)
+    title = title_match.group(1).strip() if title_match else url
+    return {"title": title, "paper_url": url}
+
+
+def find_last_paper_candidate(messages: list[dict[str, object]]) -> dict[str, str] | None:
+    """Find the most recent user-submitted paper candidate in the history."""
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        candidate = detect_paper_candidate_submission(str(msg.get("content") or ""))
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def detect_paper_purpose_answer(message: str) -> str | None:
+    """Map a purpose answer to replace / compare / cite (None if unclear)."""
+    msg = message.strip()
+    if "论文" not in msg and "这篇" not in msg:
+        return None
+    for purpose, words in _PAPER_PURPOSE_WORDS:
+        if any(word in msg for word in words):
+            return purpose
+    return None
+
+
 def _has_defined_need(
     user_message: str,
     conv: ResearchConversationModel | None,
@@ -1117,6 +1180,101 @@ class ResearchConversationOrchestrator:
                 conversation_id, state_model, user_message, reply_content, None, db
             )
 
+        # Step 2.5: Paper candidate flow (P2-B, deterministic; three-step
+        # separation: submission -> introduction -> explicit confirmation;
+        # single current paper; replace/compare/cite clarified first).
+        is_confirmed = detect_confirmation_intent(user_message)
+        if state_model.current_stage == "research_execution":
+            papers_resp = self.get_papers(conversation_id, db, owned_ids=owned_ids)
+            candidate_in_msg = detect_paper_candidate_submission(user_message)
+            purpose_answer = detect_paper_purpose_answer(user_message)
+            if candidate_in_msg is not None and papers_resp.current_paper is not None:
+                reply_content = (
+                    "(｡･ω･｡) 姜姜看到你提交了一篇新论文。当前已有一篇正在复现的论文，"
+                    "一次只能有一篇当前论文哦。\n\n"
+                    "先和你确认这篇新论文的用途：\n"
+                    "1. 替换当前论文（replace）；\n"
+                    "2. 用于对比阅读（compare）；\n"
+                    "3. 仅整理引用（cite）。\n\n"
+                    "你希望按哪种用途处理呢？"
+                )
+                return self._finalize_reply(
+                    conversation_id, state_model, user_message, reply_content, None, db,
+                    template_name="paper_purpose_clarification",
+                )
+            if purpose_answer is not None and papers_resp.current_paper is not None:
+                pending = find_last_paper_candidate(conv.messages_data or [])
+                if pending is None:
+                    reply_content = (
+                        "姜姜没有找到需要处理的新论文链接。请先把论文链接和标题发给我，"
+                        "再说明你想替换、对比还是引用，好吗？"
+                    )
+                    return self._finalize_reply(
+                        conversation_id, state_model, user_message, reply_content, None, db,
+                        template_name="paper_purpose_clarification",
+                    )
+                self.select_paper(
+                    conversation_id,
+                    SelectPaperRequest(
+                        paper_url=pending["paper_url"],
+                        title=pending["title"],
+                        purpose=purpose_answer,
+                        metadata={},
+                    ),
+                    db,
+                    owned_ids=owned_ids,
+                )
+                if purpose_answer == "replace":
+                    reply_content = (
+                        f"好的，已把《{pending['title']}》更新为当前复现论文 (•̀ᴗ•́)و ̑̑\n\n"
+                        f"之前的论文记录仍保留在历史里。接下来我们可以基于这篇论文和你的画像，"
+                        f"先制定一份初步实验方案，你说开始就开始！"
+                    )
+                elif purpose_answer == "compare":
+                    reply_content = (
+                        f"已把《{pending['title']}》记录为对比阅读论文。当前论文保持不变，"
+                        f"对比结论属于待核验信息，需要你实际阅读后再确认。"
+                    )
+                else:
+                    reply_content = (
+                        f"已把《{pending['title']}》记录为参考引用论文。当前论文保持不变，"
+                        f"引用条目仍需你人工核对。"
+                    )
+                state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+                return self._finalize_reply(
+                    conversation_id, state_model, user_message, reply_content, None, db,
+                    template_name="paper_purpose_selected",
+                )
+            if (
+                candidate_in_msg is None
+                and is_confirmed
+                and papers_resp.current_paper is None
+            ):
+                pending = find_last_paper_candidate(conv.messages_data or [])
+                if pending is not None:
+                    # Explicit confirmation after the introduction selects the paper.
+                    self.select_paper(
+                        conversation_id,
+                        SelectPaperRequest(
+                            paper_url=pending["paper_url"],
+                            title=pending["title"],
+                            purpose="replace",
+                            metadata={},
+                        ),
+                        db,
+                        owned_ids=owned_ids,
+                    )
+                    reply_content = (
+                        f"好的，就把《{pending['title']}》设为当前复现论文 (•̀ᴗ•́)و ̑̑\n\n"
+                        f"接下来姜姜建议我们基于这篇论文、你的设备与时间画像，"
+                        f"先制定一份初步实验方案；信息不足的地方我会逐项追问。你说开始就开始！"
+                    )
+                    state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+                    return self._finalize_reply(
+                        conversation_id, state_model, user_message, reply_content, None, db,
+                        template_name="paper_selected_confirmation",
+                    )
+
         # Step 3: Detect §2 Passive Tool intents
         tool_intents = detect_passive_tool_intent(user_message)
         if len(tool_intents) > 1:
@@ -1204,7 +1362,6 @@ class ResearchConversationOrchestrator:
         current_stage = state_model.current_stage
         subtasks = dict(state_model.subtasks or {})
         completed_stages = list(state_model.completed_stages or [])
-        is_confirmed = detect_confirmation_intent(user_message)
 
         # Build prompt from one of 8 templates with confirmed context
         prompt_data = self._select_prompt_template(
@@ -1501,12 +1658,33 @@ class ResearchConversationOrchestrator:
             else:
                 # No current paper: a specific experiment plan must not be
                 # generated (design: plan generation requires a selected paper).
-                # Stay on retrieval guidance until the user picks one.
-                tmpl = build_search_guidance_prompt(
-                    research_goal=user_message or "检索并选定当前复现论文",
-                    candidate_queries=[user_message or "复现论文检索"],
-                    sources=["OpenAlex", "Crossref", "arXiv"],
+                # With a pending candidate, keep introducing it until the user
+                # explicitly confirms; otherwise stay on retrieval guidance.
+                conv_for_candidate = db.get(ResearchConversationModel, conversation_id)
+                pending_candidate = find_last_paper_candidate(
+                    list((conv_for_candidate.messages_data if conv_for_candidate else None) or [])
+                    + [{"role": "user", "content": user_message}]
                 )
+                if pending_candidate is not None:
+                    candidate_paper = CurrentPaperCard(
+                        id="pending-candidate",
+                        paper_url=pending_candidate["paper_url"],
+                        title=pending_candidate["title"],
+                        purpose="replace",
+                        metadata_snapshot={},
+                        selected_at=datetime.now(UTC),
+                    )
+                    tmpl = build_paper_intro_prompt(
+                        paper=candidate_paper,
+                        profile=profiles_resp.current_profile,
+                        research_goal="论文精读与复现（等待用户确认是否选定该论文）",
+                    )
+                else:
+                    tmpl = build_search_guidance_prompt(
+                        research_goal=user_message or "检索并选定当前复现论文",
+                        candidate_queries=[user_message or "复现论文检索"],
+                        sources=["OpenAlex", "Crossref", "arXiv"],
+                    )
 
         else:  # research_analysis
             hw = profiles_resp.current_profile.hardware if profiles_resp.current_profile else None

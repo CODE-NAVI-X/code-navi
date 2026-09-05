@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from code_navi.db import Base
 from code_navi.research.conversation_orchestrator import (
+    ConversationNotFoundError,
     ResearchConversationOrchestrator,
     detect_confirmation_intent,
     detect_direction_change_intent,
@@ -17,6 +18,7 @@ from code_navi.research.conversation_orchestrator import (
 )
 from code_navi.research.conversation_orchestrator_schemas import (
     LearningContextInput,
+    SelectPaperRequest,
     SendOrchestratorMessageRequest,
 )
 from code_navi.research.models import (
@@ -818,7 +820,9 @@ def test_first_learning_write_welcome_and_cards(db_session) -> None:
     conv_id = "conv-incr-1"
     db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
     db_session.commit()
-    _put_learning(orchestrator, conv_id, "图卷积网络(GCN)谱卷积与消息传递", "完成理论推导", db_session)
+    _put_learning(
+        orchestrator, conv_id, "图卷积网络(GCN)谱卷积与消息传递", "完成理论推导", db_session
+    )
 
     prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
     assert prompt["template_name"] == "welcome_and_bridge"
@@ -853,7 +857,9 @@ def test_reentry_with_consumed_context_does_not_repeat_delta(db_session) -> None
         db_session,
     )
     # Real learning progress arrives afterwards.
-    _put_learning(orchestrator, conv_id, "GCN 谱方法；GraphSAGE 邻居采样", "完成 GraphSAGE 推导", db_session)
+    _put_learning(
+        orchestrator, conv_id, "GCN 谱方法；GraphSAGE 邻居采样", "完成 GraphSAGE 推导", db_session
+    )
     prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
     assert "新增学习内容" in prompt["user_prompt"]
     # The recovery turn absorbs the delta exactly once.
@@ -912,3 +918,220 @@ def test_real_learning_change_explains_only_the_increment(db_session) -> None:
     state_row = db_session.get(ResearchOrchestratorStateModel, conv_id)
     ctx = state_row.learning_context or {}
     assert "GCN 谱方法" in (ctx.get("learned_content") or "")
+
+
+PAPER_URL = "https://arxiv.org/abs/1609.02907"
+PAPER_TITLE = "Semi-Supervised Classification with Graph Convolutional Networks"
+CLICK_MESSAGE = f"我想选择这篇论文作为复现候选：《{PAPER_TITLE}》 {PAPER_URL}"
+
+
+def _make_execution_state(db, conv_id: str) -> ResearchOrchestratorStateModel:
+    state_model = ResearchOrchestratorStateModel(
+        conversation_id=conv_id,
+        current_stage="research_execution",
+        completed_stages=["research_need", "research_plan"],
+        subtasks={
+            "need_defined": True,
+            "profile_ready": True,
+            "plan_generated": True,
+            "paper_selected": False,
+            "experiment_designed": False,
+        },
+        direction_history=[],
+        plan_history=[],
+    )
+    db.add(state_model)
+    db.commit()
+    return state_model
+
+
+def _last_message_template(db, conv_id: str) -> str | None:
+    conv = db.get(ResearchConversationModel, conv_id)
+    msgs = conv.messages_data or []
+    return msgs[-1].get("template") if msgs else None
+
+
+def test_paper_submission_only_introduces_without_selecting(db_session) -> None:
+    """点击/提交候选论文只触发精读式介绍，不设置当前论文。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-paper-1"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message=CLICK_MESSAGE),
+        db_session,
+    )
+    assert resp.status == "completed"
+    assert resp.state.current_stage == "research_execution"
+    assert resp.state.subtasks.paper_selected is False
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is None
+    # The turn must be the paper-introduction turn, not an unrelated template.
+    assert _last_message_template(db_session, conv_id) == "paper_intro"
+
+
+def test_explicit_confirmation_after_intro_selects_current_paper(db_session) -> None:
+    """明确确认（就选这篇）之后才写入单一当前论文并点亮 paper_selected。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-paper-2"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message=CLICK_MESSAGE),
+        db_session,
+    )
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="可以，就选这篇。"),
+        db_session,
+    )
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is not None
+    assert papers.current_paper.paper_url == PAPER_URL
+    assert papers.current_paper.purpose == "replace"
+    assert resp.state.subtasks.paper_selected is True
+    # Selection alone does not complete the execution stage.
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_vague_answer_does_not_select_paper(db_session) -> None:
+    """模糊答复不选择论文，停留在介绍/确认。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-paper-3"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message=CLICK_MESSAGE),
+        db_session,
+    )
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="让我再想想，还不太确定"),
+        db_session,
+    )
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is None
+    assert resp.state.subtasks.paper_selected is False
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_new_candidate_with_current_paper_asks_purpose_first(db_session) -> None:
+    """已有当前论文时提交新论文：先问 replace / compare / cite，不直接替换。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-paper-4"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+    orchestrator.select_paper(
+        conv_id,
+        SelectPaperRequest(paper_url=PAPER_URL, title=PAPER_TITLE, purpose="replace", metadata={}),
+        db_session,
+    )
+    other_url = "https://arxiv.org/abs/2009.13805"
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(
+            message=f"我想选择这篇论文作为复现候选：《Graph Attention Networks》 {other_url}"
+        ),
+        db_session,
+    )
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is not None
+    assert papers.current_paper.paper_url == PAPER_URL  # unchanged
+    assert resp.reply_message is not None
+    reply_text = resp.reply_message.content
+    assert "替换" in reply_text and "对比" in reply_text and "引用" in reply_text
+
+
+def test_purpose_answers_map_to_replace_compare_cite(db_session) -> None:
+    """replace 更新当前论文；compare/cite 只记录历史、不覆盖当前论文。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-paper-5"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    _make_execution_state(db_session, conv_id)
+    orchestrator.select_paper(
+        conv_id,
+        SelectPaperRequest(paper_url=PAPER_URL, title=PAPER_TITLE, purpose="replace", metadata={}),
+        db_session,
+    )
+    url_b = "https://arxiv.org/abs/1710.10903"
+    url_c = "https://arxiv.org/abs/1810.04805"
+
+    # compare: history only, current unchanged.
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message=f"我想选择这篇论文作为复现候选：《GAT》 {url_b}"),
+        db_session,
+    )
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="这篇用于对比阅读。"),
+        db_session,
+    )
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is not None
+    assert papers.current_paper.paper_url == PAPER_URL
+    assert any(p.paper_url == url_b and p.purpose == "compare" for p in papers.paper_history)
+
+    # cite: history only, current unchanged.
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message=f"我想选择这篇论文作为复现候选：《BERT》 {url_c}"),
+        db_session,
+    )
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="这篇仅作引用整理。"),
+        db_session,
+    )
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper.paper_url == PAPER_URL
+    assert any(p.paper_url == url_c and p.purpose == "cite" for p in papers.paper_history)
+
+    # replace: current paper switches.
+    url_d = "https://arxiv.org/abs/1811.05268"
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(
+            message=f"我想选择这篇论文作为复现候选：《GraphSAGE》 {url_d}"
+        ),
+        db_session,
+    )
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="就替换吧，把这篇设为当前论文。"),
+        db_session,
+    )
+    papers = orchestrator.get_papers(conv_id, db_session)
+    assert papers.current_paper is not None
+    assert papers.current_paper.paper_url == url_d
+    assert papers.current_paper.purpose == "replace"
+    assert resp.state.subtasks.paper_selected is True
+
+
+def test_paper_flow_respects_owner_404_isolation(db_session) -> None:
+    """跨 owner 访问论文确认流返回 404 隔离（不泄露存在性）。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-paper-6"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id, profile_data={}, messages_data=[], owner_principal_id="owner-a"
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+
+    with pytest.raises(ConversationNotFoundError):
+        orchestrator.process_message(
+            conv_id,
+            SendOrchestratorMessageRequest(message=CLICK_MESSAGE),
+            db_session,
+            owned_ids=["owner-b"],
+        )
+    with pytest.raises(ConversationNotFoundError):
+        orchestrator.get_papers(conv_id, db_session, owned_ids=["owner-b"])
