@@ -805,6 +805,12 @@ class ResearchConversationOrchestrator:
             "learning_progress": request.learning_progress,
             "updated_at": now_dt.isoformat(),
         }
+        # Consumed markers record which learning input 姜姜 has already
+        # absorbed in a welcome turn; they survive re-PUTs so the same delta
+        # is never explained twice.
+        for consumed_key in ("consumed_learned_content", "consumed_learning_progress"):
+            if consumed_key in previous_ctx:
+                ctx[consumed_key] = previous_ctx[consumed_key]
         if previous_ctx and (
             previous_ctx.get("learned_content") != request.learned_content
             or previous_ctx.get("learning_progress") != request.learning_progress
@@ -1320,6 +1326,19 @@ class ResearchConversationOrchestrator:
             subtasks["experiment_designed"] = True
             state_model.subtasks = subtasks
 
+        # P2-A: a successfully generated welcome turn absorbs the current
+        # learning input exactly once; later recoveries only surface real
+        # increments over this consumed baseline.
+        if template_name == "welcome_and_bridge":
+            ctx = dict(state_model.learning_context or {})
+            if (
+                ctx.get("consumed_learned_content") != ctx.get("learned_content")
+                or ctx.get("consumed_learning_progress") != ctx.get("learning_progress")
+            ):
+                ctx["consumed_learned_content"] = ctx.get("learned_content")
+                ctx["consumed_learning_progress"] = ctx.get("learning_progress")
+                state_model.learning_context = ctx
+
         return self._finalize_reply(
             conversation_id, state_model, user_message, reply_content, None, db,
             template_name=template_name,
@@ -1377,18 +1396,36 @@ class ResearchConversationOrchestrator:
                 not user_message or is_opening_greeting_intent(user_message)
             ):
                 extra_note = None
-                previous_content = raw_learning_ctx.get("previous_learned_content")
-                previous_progress = raw_learning_ctx.get("previous_learning_progress")
-                if previous_content is not None or previous_progress is not None:
-                    extra_note = (
-                        "新增学习内容（与上次输入对比，来源为学习端记录）：\n"
-                        f"- 上次已学内容：{previous_content or '暂无'}\n"
-                        f"- 本次已学内容：{learning_ctx.learned_content or '暂无'}\n"
-                        f"- 上次进度记录：{previous_progress or '暂无'}\n"
-                        f"- 本次进度记录：{learning_ctx.learning_progress or '暂无'}\n"
-                        "请只说明新增记录与当前研究方向的可能关联，并标注仍需用户确认；"
-                        "不得据此推断掌握度、实验能力或研究结论。"
-                    )
+                has_learning_input = bool(
+                    learning_ctx.learned_content or learning_ctx.learning_progress
+                )
+                consumed_content = raw_learning_ctx.get("consumed_learned_content")
+                consumed_progress = raw_learning_ctx.get("consumed_learning_progress")
+                already_consumed = (
+                    consumed_content == learning_ctx.learned_content
+                    and consumed_progress == learning_ctx.learning_progress
+                )
+                if has_learning_input and not already_consumed:
+                    if consumed_content is None and consumed_progress is None:
+                        extra_note = (
+                            "学习端记录（首次进入科研端，姜姜主动吸收）：\n"
+                            f"- 已学内容：{learning_ctx.learned_content or '暂无'}\n"
+                            f"- 学习进度记录：{learning_ctx.learning_progress or '暂无'}\n"
+                            "请说明这些学习内容与当前研究方向的可能关联；"
+                            "学习记录只代表学习端浏览或整理过的内容，"
+                            "不得据此推断掌握度、实验能力或研究结论。"
+                        )
+                    else:
+                        extra_note = (
+                            "新增学习内容（与已吸收的学习记录对比，来源为学习端记录）：\n"
+                            f"- 已吸收基线 - 已学内容：{consumed_content or '暂无'}\n"
+                            f"- 已吸收基线 - 进度记录：{consumed_progress or '暂无'}\n"
+                            f"- 当前已学内容：{learning_ctx.learned_content or '暂无'}\n"
+                            f"- 当前进度记录：{learning_ctx.learning_progress or '暂无'}\n"
+                            "请只说明相对已吸收基线的新增内容，以及它与当前研究方向的可能关联，"
+                            "并标注仍需用户确认；历史学习内容和历史讨论保持保留；"
+                            "不得据此推断掌握度、实验能力或研究结论。"
+                        )
                 tmpl = build_welcome_prompt(
                     learning_context=learning_ctx,
                     direction_cards=cards_resp.cards,

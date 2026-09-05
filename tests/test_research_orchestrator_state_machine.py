@@ -106,7 +106,11 @@ def test_reentry_prompt_exposes_learning_delta(db_session) -> None:
         owned_ids=None,
     )
     assert prompt["template_name"] == "welcome_and_bridge"
-    assert "新增学习内容" in prompt["user_prompt"]
+    # P2-A consumption semantics: before any welcome turn has absorbed the
+    # learning records, the first recovery surfaces them via the
+    # first-absorption note (the delta wording is reserved for increments
+    # over an already-absorbed baseline).
+    assert "学习端记录" in prompt["user_prompt"]
     assert "GraphSAGE 邻居采样" in prompt["user_prompt"]
 
 
@@ -786,3 +790,125 @@ def test_direction_change_preserves_history_while_resetting_stage(db_session) ->
     assert "research_need" in resp.state.completed_stages
     assert "research_plan" in resp.state.completed_stages
     assert len(resp.state.direction_history) == 1
+
+
+def _put_learning(orchestrator, conv_id: str, learned: str, progress: str | None, db) -> None:
+    orchestrator.update_learning_context(
+        conv_id,
+        LearningContextInput(learned_content=learned, learning_progress=progress),
+        db,
+    )
+
+
+def _select_welcome_prompt(orchestrator, conv_id: str, db) -> dict:
+    return orchestrator._select_prompt_template(
+        conv_id,
+        current_stage="research_need",
+        subtasks={"need_defined": False},
+        user_message="你好姜姜，我回来继续做科研了。",
+        is_confirmed=False,
+        db=db,
+        owned_ids=None,
+    )
+
+
+def test_first_learning_write_welcome_and_cards(db_session) -> None:
+    """1. 首次写入学习上下文：欢迎模板引用学习内容，方向卡正常生成。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-incr-1"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+    _put_learning(orchestrator, conv_id, "图卷积网络(GCN)谱卷积与消息传递", "完成理论推导", db_session)
+
+    prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
+    assert prompt["template_name"] == "welcome_and_bridge"
+    assert "图卷积网络(GCN)" in prompt["user_prompt"]
+
+    cards = orchestrator.get_direction_cards(conv_id, db_session).cards
+    assert len(cards) == 5
+
+    # A successful welcome turn marks the context as consumed.
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="你好姜姜，我回来继续做科研了。"),
+        db_session,
+    )
+    state_row = db_session.get(ResearchOrchestratorStateModel, conv_id)
+    ctx = state_row.learning_context or {}
+    assert ctx["consumed_learned_content"] == "图卷积网络(GCN)谱卷积与消息传递"
+    assert ctx["consumed_learning_progress"] == "完成理论推导"
+
+
+def test_reentry_with_consumed_context_does_not_repeat_delta(db_session) -> None:
+    """2. 同一学习上下文再次恢复：不得重复注入“新增学习内容”提示。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-incr-2"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+    _put_learning(orchestrator, conv_id, "GCN 谱方法", None, db_session)
+    # First recovery absorbs the initial learning input.
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="你好姜姜，我回来继续做科研了。"),
+        db_session,
+    )
+    # Real learning progress arrives afterwards.
+    _put_learning(orchestrator, conv_id, "GCN 谱方法；GraphSAGE 邻居采样", "完成 GraphSAGE 推导", db_session)
+    prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
+    assert "新增学习内容" in prompt["user_prompt"]
+    # The recovery turn absorbs the delta exactly once.
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="你好姜姜，我回来继续做科研了。"),
+        db_session,
+    )
+
+    # Re-entry WITHOUT any new learning input (no re-PUT): no repeated delta.
+    prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
+    assert "新增学习内容" not in prompt["user_prompt"]
+
+    # The confirm page re-PUTs the same values on every entry: still no delta,
+    # and the consumed markers must survive the re-PUT.
+    _put_learning(
+        orchestrator,
+        conv_id,
+        "GCN 谱方法；GraphSAGE 邻居采样",
+        "完成 GraphSAGE 推导",
+        db_session,
+    )
+    prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
+    assert "新增学习内容" not in prompt["user_prompt"]
+
+
+def test_real_learning_change_explains_only_the_increment(db_session) -> None:
+    """3. 真实新增后，下一次恢复只说明增量及其与当前研究的关系。"""
+    orchestrator = ResearchConversationOrchestrator(llm_generator=FakeOrchestratorLlmGenerator())
+    conv_id = "conv-incr-3"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+    _put_learning(orchestrator, conv_id, "GCN 谱方法", None, db_session)
+    orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="你好姜姜，我回来继续做科研了。"),
+        db_session,
+    )
+
+    _put_learning(
+        orchestrator,
+        conv_id,
+        "GCN 谱方法；GraphSAGE 邻居采样",
+        "完成 GraphSAGE 推导",
+        db_session,
+    )
+    prompt = _select_welcome_prompt(orchestrator, conv_id, db_session)
+    assert prompt["template_name"] == "welcome_and_bridge"
+    assert "GraphSAGE 邻居采样" in prompt["user_prompt"]
+    # The absorbed baseline stays visible; only the increment is explained.
+    assert "GCN 谱方法" in prompt["user_prompt"]
+    assert "与当前研究方向" in prompt["user_prompt"]
+    assert "不得据此推断掌握度" in prompt["user_prompt"]
+
+    # The historical learning content is preserved in the persisted context.
+    state_row = db_session.get(ResearchOrchestratorStateModel, conv_id)
+    ctx = state_row.learning_context or {}
+    assert "GCN 谱方法" in (ctx.get("learned_content") or "")
