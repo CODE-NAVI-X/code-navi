@@ -608,6 +608,54 @@ class TestKnowledgeGapProjection:
         assert practice_item["gapKind"] == "runtime_error"
         assert practice_item["source"]["workspaceId"] == practice.workspace_id
 
+    def test_learning_knowledge_gaps_merge_duplicates_by_knowledge_point(
+        self, client: TestClient, db: Session
+    ) -> None:
+        """同一知识点的多条缺口记录在画像里合并为一条（合并同类项）。"""
+        now = datetime.now(UTC)
+        _add_attempt(
+            db,
+            knowledge_point="cookie",
+            score=0,
+            max_score=10,
+            created_at=now - timedelta(hours=3),
+        )
+        _add_attempt(
+            db,
+            knowledge_point="Cookie",
+            score=5,
+            max_score=10,
+            created_at=now - timedelta(hours=2),
+        )
+        _add_mark(
+            db,
+            knowledge_point="cookie",
+            source_ref="ppt_page:cookie:4",
+            source_type="ppt_page",
+            status="confused",
+            created_at=now - timedelta(hours=1),
+        )
+
+        response = client.get(
+            "/api/v1/learning/knowledge-gaps"
+            f"?local_profile_id=profile-owner&profile_id={PROFILE_A}"
+        )
+
+        assert response.status_code == 200
+        items = response.json()["items"]
+        cookie_items = [item for item in items if item["topic"].lower() == "cookie"]
+        assert len(cookie_items) == 1
+
+        merged = cookie_items[0]
+        # The most recent original spelling wins as the display name.
+        assert merged["topic"] == "cookie"
+        assert merged["sourceType"] == "confusion_mark"
+        assert "共 3 条记录" in merged["summary"]
+        assert "理解检查×2" in merged["summary"]
+        assert "不懂标记×1" in merged["summary"]
+        # The newest fact keeps full traceability.
+        assert merged["source"]["surfaceRef"] == "ppt_page:cookie:4"
+
     def test_learning_knowledge_gaps_scopes_practice_by_local_profile(
         self, client: TestClient, db: Session
     ) -> None:
@@ -1261,7 +1309,12 @@ class TestProfileCrossAccountDataIsolation:
             f"/api/v1/learning/knowledge-gaps?local_profile_id=browser-local-id&profile_id={shared_profile_id}"
         )
         assert res_a_gaps.status_code == 200
-        assert len(res_a_gaps.json()["items"]) == 3
+        # 三个来源的同名知识点在画像里合并为一条（合并同类项），
+        # 隔离语义不变：只显示 A 自己的事实。
+        items_a = res_a_gaps.json()["items"]
+        assert len(items_a) == 1
+        assert items_a[0]["topic"] == "动态规划"
+        assert "共 3 条记录" in items_a[0]["summary"]
 
         # Account B registers on the SAME browser, sending the SAME shared_profile_id
         client_b = TestClient(app)

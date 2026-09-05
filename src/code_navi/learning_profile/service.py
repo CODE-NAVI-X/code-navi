@@ -8,7 +8,7 @@ percentage.  No LLM participates in these calculations.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -102,6 +102,53 @@ def _by_latest(rows: list[ConfusionMarkModel]) -> dict[tuple[str, str], Confusio
         if prev is None or row.updated_at > prev.updated_at:
             latest[surface] = row
     return latest
+
+
+#: Human-readable Chinese labels for the gap source kinds used in merged summaries.
+_GAP_SOURCE_LABELS = {
+    "quiz_attempt": "理解检查",
+    "confusion_mark": "不懂标记",
+    "practice_outcome": "练习",
+    "code_fill_attempt": "填空判题",
+}
+
+
+def _merge_gap_items(items: list[KnowledgeGapItem]) -> list[KnowledgeGapItem]:
+    """把同一知识点的多条缺口记录合并为一条（合并同类项）。
+
+    输入按 ``occurred_at`` 降序排列。每个知识点保留最近一条的可追溯字段
+    （source_id / label / gap_kind / source），并把合计条数与来源分布写入
+    ``summary``；展示名取该组最近一次出现的原始拼写。纯规则聚合，
+    不调用模型、不改变 ``generated_by: rules`` 语义。
+    """
+    groups: dict[str, list[KnowledgeGapItem]] = {}
+    display = _GroupIndex()
+    for item in items:
+        key = _kp_key(item.topic)
+        display.add(item.topic)
+        groups.setdefault(key, []).append(item)
+
+    merged: list[KnowledgeGapItem] = []
+    for key, group in groups.items():
+        newest = group[0]
+        if len(group) == 1:
+            merged.append(newest)
+            continue
+        counts = Counter(item.source_type for item in group)
+        distribution = "、".join(
+            f"{_GAP_SOURCE_LABELS.get(source_type, source_type)}×{count}"
+            for source_type, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        )
+        summary = f"共 {len(group)} 条记录（{distribution}）；最近：{newest.summary}"
+        merged.append(
+            newest.model_copy(
+                update={
+                    "topic": display.name(key),
+                    "summary": summary[:_MAX_GAP_SUMMARY],
+                }
+            )
+        )
+    return merged
 
 
 class ProfileService:
@@ -249,11 +296,12 @@ class ProfileService:
         code_fill_items = self._code_fill_gap_items(
             profile_id=profile_id, db=db, limit=limit, owned_ids=owned_ids
         )
-        items = sorted(
+        ordered = sorted(
             [*quiz_items, *confusion_items, *practice_items, *code_fill_items],
             key=lambda item: item.occurred_at,
             reverse=True,
-        )[:limit]
+        )
+        items = _merge_gap_items(ordered)[:limit]
         return KnowledgeGapResponse(
             local_profile_id=local_profile_id,
             profile_id=profile_id,
