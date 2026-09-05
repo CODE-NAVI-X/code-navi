@@ -124,7 +124,7 @@ function NavGroupTitle({
   active?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between px-3 py-1.5 text-xs font-bold tracking-wider text-slate-400 uppercase dark:text-zinc-500">
+    <div className="flex items-center justify-between px-3 py-1.5 text-xs font-bold tracking-wider text-slate-500 uppercase dark:text-zinc-400">
       <div className="flex items-center gap-1.5">
         <Icon className="h-3.5 w-3.5 text-blue-500" strokeWidth={1.8} />
         <span>{title}</span>
@@ -162,7 +162,7 @@ function NavigationTree({
               item={subItem}
               pathname={pathname}
               onNavigate={onNavigate}
-              className="py-2 text-xs"
+              compact
             />
           ))}
         </div>
@@ -176,7 +176,7 @@ function NavigationTree({
             item={{ href: "/research", label: "科研引导", icon: Microscope, matchPrefix: "/research" }}
             pathname={pathname}
             onNavigate={onNavigate}
-            className="py-2 text-xs"
+            compact
           />
         </div>
       </div>
@@ -184,7 +184,7 @@ function NavigationTree({
       {/* 4. 组织管理（D5 Q1 拍板：视觉降级，下沉底部次级分区） */}
       <div className="mt-auto pt-3">
         <div className="border-t border-[var(--app-border)] pt-3">
-          <div className="flex items-center px-3 py-1.5 text-xs font-bold tracking-wider text-slate-400 uppercase dark:text-zinc-500">
+          <div className="flex items-center px-3 py-1.5 text-xs font-bold tracking-wider text-slate-500 uppercase dark:text-zinc-400">
             <span>组织管理</span>
           </div>
           <div className="mt-1 flex flex-col gap-1">

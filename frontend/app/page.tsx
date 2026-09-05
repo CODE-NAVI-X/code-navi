@@ -223,7 +223,7 @@ export default function HomePage() {
               <h1 id="resume-hero-title" className="text-xl font-bold tracking-tight text-slate-950 dark:text-zinc-50">
                 继续上次
               </h1>
-              <span className="font-mono text-xs tracking-wider text-blue-500 uppercase">
+              <span className="font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500 uppercase">
                 Resume
               </span>
             </div>
@@ -238,7 +238,7 @@ export default function HomePage() {
                 <ul className="space-y-3">
                   {practiceTopic && (
                     <ResumeRow
-                      icon={<Zap className="h-4 w-4 shrink-0 text-blue-500" />}
+                      icon={<Zap className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-500" />}
                       label="上次停留在 · 动手实践"
                       value={practiceTopic}
                       href="/learning/practice"
@@ -247,7 +247,7 @@ export default function HomePage() {
                   )}
                   {latestTask && (
                     <ResumeRow
-                      icon={<BriefcaseBusiness className="h-4 w-4 shrink-0 text-blue-500" />}
+                      icon={<BriefcaseBusiness className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-500" />}
                       label="最近 Task"
                       value={latestTask.title}
                       href={`/tasks/${latestTask.id}`}
@@ -256,7 +256,7 @@ export default function HomePage() {
                   )}
                   {latestConversation && (
                     <ResumeRow
-                      icon={<Microscope className="h-4 w-4 shrink-0 text-blue-500" />}
+                      icon={<Microscope className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-500" />}
                       label="最近科研"
                       value={latestConversation.topic ?? "未命名科研对话"}
                       href="/research"
@@ -267,7 +267,7 @@ export default function HomePage() {
               ) : (
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="font-mono text-xs tracking-wider text-blue-500 uppercase">
+                    <p className="font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500 uppercase">
                       Quick Start
                     </p>
                     <p className="mt-1 text-base font-semibold text-slate-950 dark:text-zinc-50">
@@ -295,7 +295,7 @@ export default function HomePage() {
               <h2 id="capability-loop-title" className="text-xl font-bold tracking-tight text-slate-950 dark:text-zinc-50">
                 三大能力闭环
               </h2>
-              <span className="font-mono text-xs tracking-wider text-blue-500 uppercase">
+              <span className="font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500 uppercase">
                 Capability Loop
               </span>
             </div>
@@ -312,12 +312,12 @@ export default function HomePage() {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-xs tracking-wider text-blue-500">
+                        <span className="font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500">
                           {`${card.index} // ${card.label}`}
                         </span>
                         <Icon className="h-4 w-4 text-slate-400 dark:text-zinc-500" strokeWidth={1.8} />
                       </div>
-                      <p className="mt-3 text-base font-semibold text-slate-950 dark:text-zinc-50">
+                      <p className="mt-4 text-base font-semibold text-slate-950 dark:text-zinc-50">
                         {card.title}
                       </p>
                       <p className="mt-1 flex-1 text-base text-[var(--app-muted)]">{card.description}</p>
@@ -350,10 +350,10 @@ export default function HomePage() {
             <article className="app-card flex flex-col rounded-card p-5">
               <div className="flex items-baseline justify-between gap-3">
                 <h3 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-zinc-50">
-                  <Target className="h-4 w-4 text-blue-500" />
+                  <Target className="h-4 w-4 text-blue-600 dark:text-blue-500" />
                   薄弱项诊断与组卷
                 </h3>
-                <span className="font-mono text-xs tracking-wider text-blue-500 uppercase">Action Hub</span>
+                <span className="font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500 uppercase">Action Hub</span>
               </div>
 
               {overviewState === "loading" ? (
@@ -411,7 +411,7 @@ export default function HomePage() {
             <article className="app-card flex flex-col rounded-card p-5">
               <div className="flex items-baseline justify-between gap-3">
                 <h3 className="flex items-center gap-2 text-base font-bold text-slate-950 dark:text-zinc-50">
-                  <BriefcaseBusiness className="h-4 w-4 text-blue-500" />
+                  <BriefcaseBusiness className="h-4 w-4 text-blue-600 dark:text-blue-500" />
                   活跃工作区与任务
                 </h3>
                 {loading && <Loader2 className="h-4 w-4 animate-spin text-slate-500" />}
@@ -450,7 +450,7 @@ export default function HomePage() {
 
               {recentTasks.length > 0 && (
                 <div className="mt-4">
-                  <p className="text-xs font-bold tracking-wider text-slate-400 uppercase dark:text-zinc-500">
+                  <p className="text-xs font-bold tracking-wider text-slate-500 uppercase dark:text-zinc-400">
                     最近 Task
                   </p>
                   <ul className="mt-2 space-y-1.5">

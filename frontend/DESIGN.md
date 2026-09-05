@@ -72,7 +72,7 @@
 
 | 语义 | 用色 | 场景 |
 | --- | --- | --- |
-| 交互/科技强调 | Blue-500 / Blue-600 | Mono 标号、焦点、链接、激活光晕 |
+| 交互/科技强调 | 文字用 Blue-600（浅）/ Blue-500（深）；装饰图形可用 Blue-500 | Mono 标号、链接、CTA 等文字强调必须达 WCAG AA 4.5:1（浅色 Blue-600 = 5.17:1，深色 Blue-500 = 5.09:1，视觉走查第一轮收敛 2026-09-05）；焦点环、激活光晕等非文本元素 ≥ 3:1 |
 | 就绪/成功 | Emerald-400 / Emerald-500 | Provider 就绪呼吸灯、进度条收尾色 |
 | 降级/Mock | Amber-400 系列 | Provider 降级或 Mock 态、上下文不可用警示条 |
 | 错误 | Red（沿用 `.app-status-error` 配色） | 执行失败、请求失败 |
@@ -96,7 +96,7 @@
 | 阅读正文 | `text-lg` (18px) | `.reading-area`（`line-height: 1.8`） |
 | 标题 | `text-xl` / `text-2xl` | 页面与区块标题 |
 
-**Mono 排版规则**：编号、指标数字、代码、路径一律 `font-mono`；工程标号格式为 `两位数字 + " // " + 大写英文短语`，类组合 `font-mono text-xs tracking-wider text-blue-500`（例：`01 // UNDERSTAND`、`02 // PRACTICE`、`03 // REVIEW`）。中文标题另起一行，用 `text-base font-semibold`，不塞进标号。
+**Mono 排版规则**：编号、指标数字、代码、路径一律 `font-mono`；工程标号格式为 `两位数字 + " // " + 大写英文短语`，类组合 `font-mono text-xs tracking-wider text-blue-600 dark:text-blue-500`（浅色 5.17:1 / 深色 5.09:1，达 WCAG AA；走查第一轮收敛裁决，2026-09-05）（例：`01 // UNDERSTAND`、`02 // PRACTICE`、`03 // REVIEW`）。中文标题另起一行，用 `text-base font-semibold`，不塞进标号。
 
 ---
 
