@@ -953,6 +953,121 @@ class ResearchConversationOrchestrator:
             updated_at=now_dt,
         )
 
+    def ensure_bridge_welcome(
+        self,
+        conversation_id: str,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> OrchestratorMessageResponse | None:
+        """Idempotently generate the welcome_and_bridge turn for one conversation.
+
+        学习端写入有效学习上下文后由后端调用：首次触发一次新版桥接欢迎语
+        （客观引用学习端记录 + 动态方向卡）；已有桥接欢迎、无有效学习输入或
+        阶段已离开 research_need 时直接跳过，重复 PUT/刷新/恢复不会重复插入。
+        Provider 失败走既有显式 failed 语义，不插入模板伪装成功、不推进阶段。
+        """
+        conv = db.get(ResearchConversationModel, conversation_id)
+        if conv is None:
+            raise ConversationNotFoundError(conversation_id)
+        if (
+            owned_ids is not None
+            and conv.owner_principal_id
+            and conv.owner_principal_id not in owned_ids
+        ):
+            raise ConversationNotFoundError(conversation_id)
+        state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
+        if state_model.current_stage != "research_need":
+            return None
+        learning_ctx = state_model.learning_context or {}
+        if not (learning_ctx.get("learned_content") or learning_ctx.get("learning_progress")):
+            return None
+        existing_messages = list(conv.messages_data or [])
+        if any(
+            message.get("role") == "assistant"
+            and message.get("template") == "welcome_and_bridge"
+            for message in existing_messages
+        ):
+            return None
+
+        prompt_data = self._select_prompt_template(
+            conversation_id,
+            state_model.current_stage,
+            dict(state_model.subtasks or {}),
+            "",
+            False,
+            db,
+            owned_ids,
+        )
+        if prompt_data.get("template_name") != "welcome_and_bridge":
+            return None
+
+        outcome = self.llm_generator.generate(
+            system_prompt=prompt_data["system_prompt"],
+            user_prompt=prompt_data["user_prompt"],
+            conversation_history=existing_messages,
+            conversation_id=conversation_id,
+        )
+
+        def _failed(error: str) -> OrchestratorMessageResponse:
+            state_model.last_status = "failed"
+            state_model.last_error = error
+            db.commit()
+            return OrchestratorMessageResponse(
+                conversation_id=conversation_id,
+                status="failed",
+                reply_message=None,
+                state=self._model_to_state_response(state_model),
+                error=error,
+            )
+
+        if (
+            outcome.status != "generated"
+            or not outcome.reply_text
+            or not outcome.reply_text.strip()
+        ):
+            return _failed(outcome.reason or "Model provider unavailable or failed")
+
+        reply_content = outcome.reply_text.strip()
+        scope_prefix = get_source_scope_prefix("welcome_and_bridge")
+        if not reply_content.startswith(scope_prefix):
+            reply_content = f"{scope_prefix}\n\n{reply_content}"
+        is_learning_mode = bool(prompt_data.get("is_learning_record_mode", False))
+        valid, val_reason = validate_jiangjiang_output(
+            reply_content,
+            evidence_context=self._collect_traceable_evidence_context("", conv),
+            learning_record_mode=is_learning_mode,
+        )
+        if not valid:
+            return _failed(f"Jiang Jiang output boundary validation failure: {val_reason}")
+
+        self._absorb_welcome_learning_input(state_model)
+        return self._finalize_reply(
+            conversation_id,
+            state_model,
+            "",
+            reply_content,
+            None,
+            db,
+            template_name="welcome_and_bridge",
+            include_user_message=False,
+        )
+
+    def _absorb_welcome_learning_input(
+        self, state_model: ResearchOrchestratorStateModel
+    ) -> None:
+        """P2-A: a successfully generated welcome turn absorbs the current
+        learning input exactly once; later recoveries only surface real
+        increments over this consumed baseline."""
+        ctx = dict(state_model.learning_context or {})
+        if (
+            ctx.get("consumed_learned_content") != ctx.get("learned_content")
+            or ctx.get("consumed_learning_progress") != ctx.get("learning_progress")
+        ):
+            ctx["consumed_learned_content"] = ctx.get("learned_content")
+            ctx["consumed_learning_progress"] = ctx.get("learning_progress")
+            state_model.learning_context = ctx
+
     def get_learner_profiles(
         self,
         conversation_id: str,
@@ -1629,14 +1744,7 @@ class ResearchConversationOrchestrator:
         # learning input exactly once; later recoveries only surface real
         # increments over this consumed baseline.
         if template_name == "welcome_and_bridge":
-            ctx = dict(state_model.learning_context or {})
-            if (
-                ctx.get("consumed_learned_content") != ctx.get("learned_content")
-                or ctx.get("consumed_learning_progress") != ctx.get("learning_progress")
-            ):
-                ctx["consumed_learned_content"] = ctx.get("learned_content")
-                ctx["consumed_learning_progress"] = ctx.get("learning_progress")
-                state_model.learning_context = ctx
+            self._absorb_welcome_learning_input(state_model)
 
         return self._finalize_reply(
             conversation_id, state_model, user_message, reply_content, None, db,
@@ -2219,6 +2327,7 @@ class ResearchConversationOrchestrator:
         db: Session,
         template_name: str | None = None,
         plan_layer: str | None = None,
+        include_user_message: bool = True,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -2227,13 +2336,15 @@ class ResearchConversationOrchestrator:
         now_dt = datetime.now(UTC)
         msgs = list(conv.messages_data or [])
 
-        # User message
-        msgs.append({
-            "message_id": str(uuid.uuid4()),
-            "role": "user",
-            "content": user_message,
-            "created_at": now_dt.isoformat(),
-        })
+        # User message (skipped for backend-initiated turns like the bridge
+        # welcome, which must not fabricate a user bubble).
+        if include_user_message:
+            msgs.append({
+                "message_id": str(uuid.uuid4()),
+                "role": "user",
+                "content": user_message,
+                "created_at": now_dt.isoformat(),
+            })
 
         # Assistant message
         assistant_msg_id = str(uuid.uuid4())

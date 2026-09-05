@@ -998,12 +998,15 @@ def test_rebuilt_service_restores_confirmed_context_for_the_next_run() -> None:
         )
 
     sent = provider.calls[0]["messages"]
-    assert [item["role"] for item in sent] == ["system", "user", "assistant", "user"]
+    # 确认上下文创建不再预写 assistant 开场（开场白由学习上下文 PUT 后的
+    # 桥接欢迎语负责），因此此场景的历史只有用户带入记录与本次输入。
+    assert [item["role"] for item in sent] == ["system", "user", "user"]
     payload = json.loads(sent[-1]["content"][0]["text"])
     assert payload["confirmed_learning_context"]["topic"] == "已确认主题"
 
 
-def test_confirmed_context_creates_a_learning_background_opening_summary() -> None:
+def test_confirmed_context_defers_welcome_to_learning_context_bridge() -> None:
+    """确认上下文只登记用户带入记录；开场白由学习上下文 PUT 后的桥接欢迎语负责。"""
     provenance = ConfirmedContextProvenance(
         transfer_id="transfer-opening-summary",
         source_module="learning",
@@ -1019,11 +1022,12 @@ def test_confirmed_context_creates_a_learning_background_opening_summary() -> No
     with SessionLocal() as db:
         created = ResearchConversationService().create_from_confirmed_context(provenance, db)
 
-    opening = created.messages[-1]
-    assert opening.role == "assistant"
-    assert "学习背景开场总结" in opening.content
-    assert provenance.summary in opening.content
-    assert "不会自动成为研究结论" in opening.content
+    assert [message.role for message in created.messages] == ["user"]
+    assert provenance.summary in created.messages[-1].content
+    all_text = "\n".join(message.content for message in created.messages)
+    assert "学习背景开场总结" not in all_text
+    for marker in ("描述想法", "整理科研画像", "主动检索与记录"):
+        assert marker not in all_text
 
 
 def test_entry_branch_choice_does_not_become_a_confirmed_research_topic(

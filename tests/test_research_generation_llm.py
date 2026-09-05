@@ -195,19 +195,21 @@ def test_research_plan_endpoint_does_not_return_rule_template_on_failure(
     assert restored.json()["research_plan"] is None
 
 
-def test_configured_model_welcome_is_persisted_as_agent_message(
+def test_creation_welcome_uses_fixed_template_even_when_model_configured(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """新建会话的开场白是确定性固定模板（rules）：即使配置了模型，
+    创建阶段也不再调用模型生成旧版开场；模型生成只发生在学习上下文
+    PUT 触发的桥接欢迎语上（见 test_research_welcome_entry.py）。"""
     monkeypatch.setenv("CODE_NAVI_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    _conversation_service.decision_generator = ReadyDecisionGenerator()
 
     response = client.post("/api/v1/research/conversations", json={})
 
     assert response.status_code == 201
-    assert response.json()["generation_mode"] == "agent"
-    assert response.json()["messages"][-1]["generation_mode"] == "agent"
+    assert response.json()["generation_mode"] == "rules"
+    assert "欢迎来到科研工作台！我是姜姜" in response.json()["reply"]
+    assert response.json()["messages"][-1]["generation_mode"] == "rules"
 
 
 def _ready_conversation(client: TestClient) -> str:

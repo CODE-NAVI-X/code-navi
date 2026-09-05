@@ -377,18 +377,45 @@ def test_research_entry_exposes_explicit_interest_and_recommendation_branches() 
     service_source = Path("src/code_navi/research/conversation_service.py").read_text(
         encoding="utf-8"
     )
+    templates_source = Path(
+        "src/code_navi/research/conversation_prompt_templates.py"
+    ).read_text(encoding="utf-8")
 
+    # 入口分支选项保留在新建会话的空态欢迎里。
     assert "已有研究兴趣" in service_source
     assert "需要推荐方向" in service_source
+    # 新版开场白模板（固定开场 + 追问想研究的方向）统一放在欢迎模板模块。
+    assert "欢迎来到科研工作台！我是姜姜" in templates_source
+    assert "你现在最想研究什么" in templates_source
 
 
 def test_research_entry_summarizes_confirmed_learning_context_without_promoting_it() -> None:
     service_source = Path("src/code_navi/research/conversation_service.py").read_text(
         encoding="utf-8"
     )
+    templates_source = Path(
+        "src/code_navi/research/conversation_prompt_templates.py"
+    ).read_text(encoding="utf-8")
 
-    assert "学习背景开场总结" in service_source
-    assert "不会自动成为研究结论" in service_source
+    # 旧版学习背景开场总结已被桥接欢迎语取代，service 不再生成任何旧开场。
+    assert "学习背景开场总结" not in service_source
+    # 桥接欢迎必须客观引用学习端记录，并声明记录不等于掌握度或能力。
+    assert "学习端记录显示你已学习" in templates_source
+    assert "当前进度记录为" in templates_source
+    assert "不代表已掌握或具备研究能力" in templates_source
+
+
+def test_research_workspace_refreshes_direction_cards_and_shows_no_legacy_welcome() -> None:
+    """学习桥接后前端恢复会话时刷新方向卡，且不内置任何旧版欢迎文本。"""
+    conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    # 恢复/进入会话时刷新 orchestrator 状态与动态方向卡（学习端 PUT 后的新卡片）。
+    assert "getOrchestratorDirectionCards" in conversation_source
+    assert "getOrchestratorState" in conversation_source
+    for marker in ("描述想法", "整理科研画像", "主动检索与记录", "学习背景开场总结"):
+        assert marker not in conversation_source
 
 
 def test_research_restore_keeps_saved_state_without_creating_again() -> None:

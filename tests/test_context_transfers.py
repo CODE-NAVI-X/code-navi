@@ -375,7 +375,9 @@ def test_research_uses_and_restores_confirmed_learning_context(
         json=final_context,
     ).json()
     assert conversation["profile"]["topic"] == final_context["topic"]
-    assert "研究主题" not in conversation["next_question"]
+    # 确认上下文创建不再预写开场白，next_question 为 None（桥接欢迎语在
+    # 学习上下文 PUT 后生成）；无论是否已有开场，主题都不得被当成已确认结论。
+    assert "研究主题" not in (conversation["next_question"] or "")
 
     generator = CapturingUnavailableDecisionGenerator()
     monkeypatch.setattr(_conversation_service, "decision_generator", generator)

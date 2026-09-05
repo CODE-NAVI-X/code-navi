@@ -1597,7 +1597,7 @@ def update_orchestrator_learning_context(
     """Receive and store learning context inputs."""
     owned_ids = get_owned_principal_ids(principal, db) if principal else None
     try:
-        return _conversation_orchestrator.update_learning_context(
+        state = _conversation_orchestrator.update_learning_context(
             conversation_id,
             request,
             db,
@@ -1608,3 +1608,9 @@ def update_orchestrator_learning_context(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found.",
         ) from error
+    # 首次写入有效学习输入后，幂等触发一次新版桥接欢迎语（welcome_and_bridge）。
+    # 触发失败只体现在会话状态的 failed 语义里，不改变 PUT 的返回契约。
+    _conversation_orchestrator.ensure_bridge_welcome(
+        conversation_id, db, owned_ids=owned_ids
+    )
+    return state
