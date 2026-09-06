@@ -42,6 +42,7 @@ import {
 } from "@/lib/api/research";
 
 import { MarkdownText } from "./MarkdownText";
+import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
 import { ResearchStageProgress } from "./ResearchStageProgress";
 import { JiangJiangAvatar, UserAvatar } from "./JiangJiangAvatar";
@@ -61,6 +62,10 @@ const PASSIVE_TOOL_NAMES: Record<string, string> = {
 };
 
 function friendlyError(error: unknown): string {
+  const rawMsg = error instanceof Error ? error.message : String(error || "");
+  if (rawMsg.includes("absolute hardware-feasibility") || rawMsg.includes("绝对硬件可行性")) {
+    return "方案中包含了未经验证的绝对硬件可行性判断，已被安全边界拦截。你的上下文已完整保留，请点击“重试本轮”重新生成。";
+  }
   if (error instanceof ResearchApiError) {
     if (error.status === 0) return error.message;
     if (error.status === 404) return "这段科研会话已不存在，可以新建会话后继续。";
@@ -68,7 +73,7 @@ function friendlyError(error: unknown): string {
     if (error.status === 422) return `发送内容未通过校验：${error.message}`;
     return `科研服务返回 HTTP ${error.status}：${error.message}`;
   }
-  return error instanceof Error ? error.message : "发生了未知错误，请重试。";
+  return rawMsg || "发生了未知错误，请重试。";
 }
 
 /**
@@ -247,7 +252,10 @@ export function ResearchConversation() {
           void refreshSearchCandidates(conversation.conversation_id);
         },
         onFailed: (response: OrchestratorMessageResponse) => {
-          const errMsg = response.error || "思考未成功完成。请重试本轮。";
+          let errMsg = response.error || "思考未成功完成。请重试本轮。";
+          if (errMsg.includes("absolute hardware-feasibility") || errMsg.includes("绝对硬件可行性")) {
+            errMsg = "方案中包含未验证的绝对硬件可行性判断（已触发安全边界拦截）。你的输入已完整保留，请点击“重试本轮”重新生成。";
+          }
           setFailedTurnError(errMsg);
           if (response.state) {
             setOrchestratorState(response.state);
@@ -588,6 +596,20 @@ export function ResearchConversation() {
             />
           )}
 
+          {/* 选择题快速作答：最后一条是姜姜的消息且含 A/B/C 选项组时显示 */}
+          {(() => {
+            const allMessages = conversation?.messages ?? [];
+            const last = allMessages[allMessages.length - 1];
+            if (!last || last.role !== "assistant") return null;
+            return (
+              <ResearchOptionSelector
+                content={last.content}
+                disabled={disabled}
+                onSend={(message) => void handleSend(message)}
+              />
+            );
+          })()}
+
           {/* Exception 2: Candidate Paper Card (Shown when paper exists) */}
           {papers && (papers.current_paper || papers.paper_history.length > 0) && (
             <CandidatePaperCard
@@ -609,7 +631,9 @@ export function ResearchConversation() {
               <div className="rounded-2xl rounded-tl-xs border border-indigo-200 bg-indigo-50/70 px-4 py-2.5 text-sm dark:border-indigo-900/60 dark:bg-indigo-950/40 shadow-xs flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-600 dark:text-indigo-400" />
                 <span className="font-semibold text-indigo-900 dark:text-indigo-200">
-                  姜姜正在思考……
+                  {currentStage === "research_execution"
+                    ? "姜姜正在结合你的设备条件与选定论文细化实验方案……"
+                    : "姜姜正在思考……"}
                 </span>
               </div>
             </div>

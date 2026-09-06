@@ -118,6 +118,32 @@ function NumberedListPanel({ items }: { items: NumberedItem[] }) {
 
 function renderDefaultLine(line: string, lineIndex: number): ReactNode {
   if (!line) return <div key={lineIndex} className="h-1" aria-hidden="true" />;
+  // 水平分割线（模型常以 --- 分隔章节）
+  if (/^-{3,}$/.test(line)) {
+    return <hr key={lineIndex} className="my-1 border-slate-200/70 dark:border-zinc-700/70" />;
+  }
+  // 【小节标题】整行加粗 + 强调色，形成清晰的视觉层级
+  const bracketHeading = /^【(.+)】$/.exec(line);
+  if (bracketHeading) {
+    return (
+      <h4
+        key={lineIndex}
+        className="flex items-center gap-2 pt-1 text-[15px] font-bold text-indigo-700 dark:text-indigo-300"
+      >
+        <span className="h-3.5 w-1 rounded-full bg-indigo-500/80" aria-hidden="true" />
+        {renderInline(bracketHeading[1])}
+      </h4>
+    );
+  }
+  // “阶段一：…”这类阶段小标题：加粗呈现
+  const stageHeading = /^(阶段[一二三四五六七八九十\d]+[：:].+)$/.exec(line);
+  if (stageHeading) {
+    return (
+      <h4 key={lineIndex} className="pt-1 text-[15px] font-bold text-slate-900 dark:text-zinc-100">
+        {renderInline(line)}
+      </h4>
+    );
+  }
   if (line.startsWith("### ")) {
     return (
       <h4 key={lineIndex} className="pt-1 font-semibold">

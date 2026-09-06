@@ -71,8 +71,12 @@ _QUALIFIED_HARDWARE_CONTEXT_PATTERN = re.compile(
 )
 
 _HARDWARE_UNCERTAINTY_PATTERN = re.compile(
-    r"(?:可行性|能否运行|是否能运行|是否可行)[^。！？!?\n]{0,24}"
-    r"(?:需要|需|取决于|仍待|待)[^。！？!?\n]{0,24}(?:确认|核验|测试|验证)",
+    r"(?:"
+    r"(?:可行性|能否运行|是否能运行|是否可行|可行|运行效果|实际表现)[^。！？!?\n]{0,30}"
+    r"(?:需要|需|取决于|仍待|待|以|视)[^。！？!?\n]{0,30}(?:确认|核验|测试|验证|实际上机|实际运行|准)|"
+    r"(?:仍待|仍需|尚需|待|需要)[^。！？!?\n]{0,24}(?:测试|验证|核验|实际上机|实际运行)|"
+    r"(?:理论上|原则上|设计上|方案层面|从小规模|小规模测试|初步评估)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -526,6 +530,15 @@ _ATTRIBUTED_DECORATION_PATTERN = re.compile(
     r"[「」『』“”‘’《》【】（）()\"'\s]+|^(?:的)?方向[：:]|(?:这个|该|这一|以上)方向$"
 )
 
+# 会话既有状态的通用指代（如"你已确认的研究方向与通用技术概览"）：
+# 这类捕获剥离通用名词后为空，说明模型只是在引用会话状态，而不是
+# 把某个具体选择安到用户头上——放行；编造的具体标题剥离后仍有残留，照拦。
+_GENERIC_STATE_NOUNS_PATTERN = re.compile(
+    r"你已?确认的|你已?选定的|你已?选择的|已确认的|既定的|当前的|这个|该|的|与|和|及"
+    r"|研究方向|通用技术概览|技术概览|研究计划|计划框架|研究目标|科研画像|画像"
+    r"|学习端记录|学习记录|学习内容|来源范围|研究主题|主题|课题|阶段|内容",
+)
+
 
 def _strip_attribution_decorations(value: str) -> str:
     stripped = value.strip()
@@ -898,6 +911,9 @@ def _contains_unsupported_user_attribution(
         attributed = _strip_attribution_decorations(attributed)
         if not attributed:
             continue
+        # 纯通用会话状态指代（剥离通用名词后为空）不构成编造选择。
+        if not _GENERIC_STATE_NOUNS_PATTERN.sub("", attributed).strip():
+            continue
 
         # Check if the attributed value appears in user evidence (substring match)
         if attributed and attributed not in evidence_text:
@@ -911,6 +927,7 @@ def validate_jiangjiang_output(
     *,
     evidence_context: Sequence[str] | str | None = None,
     learning_record_mode: bool = False,
+    exempt_hardware_check: bool = False,
 ) -> tuple[bool, str | None]:
     """Validate model output against persona rules (no emoji/forbidden phrase/false claims)."""
     if _EMOJI_PATTERN.search(text):
@@ -918,23 +935,24 @@ def validate_jiangjiang_output(
     for phrase in _FORBIDDEN_PHRASES:
         if phrase in text:
             return False, f"Output contains forbidden phrase or unproven claim: {phrase}"
-    for hardware_match in _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN.finditer(text):
-        local_prefix = text[: hardware_match.start()]
-        if _NEGATION_PREFIX_PATTERN.search(local_prefix) or _CONDITION_PREFIX_PATTERN.search(
-            local_prefix
-        ):
-            continue
-        sentence_prefix = local_prefix.rsplit("\n", 1)[-1].rsplit("。", 1)[-1]
-        if _QUALIFIED_HARDWARE_CONTEXT_PATTERN.search(sentence_prefix):
-            continue
-        sentence_text = text[local_prefix.rfind("\n") + 1 :].split("\n", 1)[0]
-        if _HARDWARE_UNCERTAINTY_PATTERN.search(sentence_text):
-            continue
-        return (
-            False,
-            "Output makes an absolute hardware-feasibility claim without verified "
-            "experiment evidence",
-        )
+    if not exempt_hardware_check:
+        for hardware_match in _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN.finditer(text):
+            local_prefix = text[: hardware_match.start()]
+            if _NEGATION_PREFIX_PATTERN.search(local_prefix) or _CONDITION_PREFIX_PATTERN.search(
+                local_prefix
+            ):
+                continue
+            sentence_prefix = local_prefix.rsplit("\n", 1)[-1].rsplit("。", 1)[-1]
+            if _QUALIFIED_HARDWARE_CONTEXT_PATTERN.search(sentence_prefix):
+                continue
+            sentence_text = text[local_prefix.rfind("\n") + 1 :].split("\n", 1)[0]
+            if _HARDWARE_UNCERTAINTY_PATTERN.search(sentence_text):
+                continue
+            return (
+                False,
+                "Output makes an absolute hardware-feasibility claim without verified "
+                "experiment evidence",
+            )
     if _requires_natural_source_scope(text):
         if not _has_valid_natural_source_scope(text):
             return (
@@ -1327,6 +1345,7 @@ def build_experiment_design_prompt(
     return {
         "template_name": "experiment_design",
         "plan_layer": plan_layer,
+        "exempt_hardware_check": True,
         "system": JIANGJIANG_SYSTEM_PERSONA,
         "task": task,
         "context": context,
