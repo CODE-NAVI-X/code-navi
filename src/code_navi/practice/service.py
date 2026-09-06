@@ -124,6 +124,10 @@ class PracticeModelGenerationError(Exception):
     """Raised when an explicitly requested model generation cannot be used."""
 
 
+class ContextualPracticeUnavailable(Exception):
+    """Raised when offline rules cannot truthfully generate a contextual exercise."""
+
+
 class DuplicateLearningPracticeSetError(Exception):
     """Raised when the same learning snapshot already has an archived set."""
 
@@ -162,6 +166,7 @@ class PracticeSetService:
         owner_principal_id: str | None = None,
         owned_ids: list[str] | None = None,
         strict_model: bool = False,
+        allow_mock_context: bool = False,
     ) -> PracticeSetResponse:
         self._validate_basis(request)
         self._validate_upload_ids(request, db, owned_ids=owned_ids)
@@ -177,11 +182,24 @@ class PracticeSetService:
                 db,
                 owner_principal_id=owner_principal_id,
             )
+        if (
+            request.context is not None
+            and self._provider_name() == "mock"
+            and not allow_mock_context
+        ):
+            points = "、".join(point.name for point in request.context.knowledge_points)
+            raise ContextualPracticeUnavailable(
+                f"当前为离线 Mock 模式，无法为「{points}」生成可信的代码练习；"
+                "请配置 AI Provider 后重试。"
+            )
 
         knowledge_points = self._bound_knowledge_points(request)
         set_id = str(uuid4())
         code_fill_specs, code_fill_provider, code_fill_used_model = (
-            self._generate_code_fill_specs(request, strict_model=strict_model)
+            self._generate_code_fill_specs(
+                request,
+                strict_model=strict_model or request.context is not None,
+            )
             if request.kind != "concept_quiz"
             else ([], "mock", False)
         )
@@ -347,6 +365,7 @@ class PracticeSetService:
             owner_principal_id=owner_principal_id,
             owned_ids=owned_ids,
             strict_model=self._provider_name() != "mock",
+            allow_mock_context=True,
         )
         set_model = db.get(PracticeSetModel, practice_set.set_id)
         if set_model is None:  # pragma: no cover - generate commits the archive above.

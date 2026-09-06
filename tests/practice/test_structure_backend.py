@@ -66,7 +66,7 @@ def test_structure_topic_generates_code_fill_set(client: TestClient) -> None:
     assert len(payload["items"]) == min(3, len(exercises_for_topic(topic.id)))
 
 
-def test_context_code_practice_binds_every_item_to_learning_knowledge_points(
+def test_context_code_practice_rejects_unrelated_mock_exercises(
     client: TestClient,
 ) -> None:
     context = {
@@ -84,16 +84,9 @@ def test_context_code_practice_binds_every_item_to_learning_knowledge_points(
         json={"kind": "code_practice", "context": context, "count": 5},
     )
 
-    assert generated.status_code == 200, generated.text
-    payload = generated.json()
-    assert payload["effective_context"] == context
-    assert payload["coverage"] == ["卷积", "池化"]
-    assert payload["items"]
-    assert {item["item_kind"] for item in payload["items"]} == {
-        "code_fill",
-        "coding_problem",
-    }
-    assert all(item["knowledge_points"] == ["卷积", "池化"] for item in payload["items"])
+    assert generated.status_code == 409, generated.text
+    assert "离线 Mock 模式" in generated.json()["detail"]
+    assert "卷积、池化" in generated.json()["detail"]
 
 
 def test_structure_topic_set_can_grade_with_code_fill_grade(

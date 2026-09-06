@@ -89,6 +89,8 @@ def test_learning_direct_entry_starts_core_structure_practice() -> None:
     assert "ContextStructureWorkspace" in page
     assert "gatewayItemToContextStructureItem" in page
     assert "题目绑定知识点" in page
+    assert "未显示无关的静态题目" in page
+    assert "已切换到现有静态结构题" not in page
 
 
 def test_no_third_entry_point_assembles_the_structure() -> None:

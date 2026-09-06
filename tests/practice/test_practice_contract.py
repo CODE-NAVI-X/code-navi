@@ -167,7 +167,7 @@ class TestMockGenerateAndRestore:
         assert restored.status_code == 200
         assert restored.json() == payload
 
-    def test_context_driven_request_echoes_effective_context(
+    def test_context_driven_request_rejects_unrelated_mock_exercises(
         self, client: TestClient
     ) -> None:
         context = {
@@ -182,14 +182,9 @@ class TestMockGenerateAndRestore:
             "/api/v1/practice/sets/generate",
             json={"kind": "mixed", "context": context, "count": 3},
         )
-        assert generated.status_code == 200, generated.text
-        payload = generated.json()
-
-        assert payload["effective_context"] == context
-        assert payload["effective_topic"] is None
-        assert payload["coverage"] == ["二叉树遍历"]
-        for item in payload["items"]:
-            assert item["knowledge_points"] == ["二叉树遍历"]
+        assert generated.status_code == 409, generated.text
+        assert "离线 Mock 模式" in generated.json()["detail"]
+        assert "二叉树遍历" in generated.json()["detail"]
 
     def test_mixed_honours_concept_ratio(self, client: TestClient) -> None:
         generated = client.post(
