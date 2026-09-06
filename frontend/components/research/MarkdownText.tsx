@@ -36,17 +36,47 @@ function renderInline(text: string): ReactNode[] {
 }
 
 const DIRECTION_CARD_LINE = /^(\d+)[.、)]\s*【(.+?)】[：:]?\s*(.*)$/;
+// 兜底：模型偶尔违反格式直接输出"【卡片 N】标题"行，也归组为方向卡而不是裸文本。
+const SKELETON_CARD_LINE = /^【卡片\s*(\d+)】\s*(.+)$/;
 
 interface DirectionCardItem {
   index: string;
   title: string;
   description: string;
+  prerequisite?: string;
+  relation?: string;
 }
 
+// 单行卡片格式：序号. 【标题】：简介｜前置缺口：…｜与学习内容的关联：…
+// "｜"后为可选属性段；带引号/括号的修饰由渲染层容忍。
 function parseDirectionCardLine(line: string): DirectionCardItem | null {
-  const match = DIRECTION_CARD_LINE.exec(line);
-  if (!match) return null;
-  return { index: match[1], title: match[2], description: match[3] };
+  const [head, ...attrs] = line.split("｜");
+  const match = DIRECTION_CARD_LINE.exec(head.trim());
+  if (match) {
+    let prerequisite: string | undefined;
+    let relation: string | undefined;
+    for (const raw of attrs) {
+      const sep = raw.indexOf("：");
+      if (sep === -1) continue;
+      const key = raw.slice(0, sep).trim();
+      const value = raw.slice(sep + 1).trim();
+      if (!value) continue;
+      if (key.includes("前置")) prerequisite = value;
+      else if (key.includes("关联")) relation = value;
+    }
+    return {
+      index: match[1],
+      title: match[2],
+      description: match[3].trim(),
+      prerequisite,
+      relation,
+    };
+  }
+  const skeleton = SKELETON_CARD_LINE.exec(line.trim());
+  if (skeleton) {
+    return { index: skeleton[1], title: skeleton[2].trim(), description: "" };
+  }
+  return null;
 }
 
 interface NumberedItem {
@@ -130,27 +160,65 @@ function DirectionCardStack({
   onSelectDirection?: (title: string) => void;
 }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       {cards.map((card) => {
         const content = (
           <>
-            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600/90 text-xs font-bold text-white dark:bg-indigo-500">
-              {card.index}
-            </span>
-            <span>
-              <span className="block text-[15px] font-semibold text-slate-900 group-hover:text-indigo-700 dark:text-zinc-100 dark:group-hover:text-indigo-300">
-                {renderInline(card.title)}
-              </span>
-              {card.description && (
-                <span className="mt-0.5 block text-sm leading-6 text-slate-600 dark:text-zinc-400">
-                  {renderInline(card.description)}
+            {/* 顶部：索引徽标 + 主标题 + 待选标记 */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="inline-flex shrink-0 items-center rounded-full border border-indigo-500/30 bg-indigo-500/15 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/20 dark:text-indigo-300">
+                  方向 {card.index.padStart(2, "0")}
                 </span>
-              )}
-            </span>
+                <h4 className="truncate text-[15px] font-semibold text-slate-900 group-hover:text-indigo-700 dark:text-zinc-100 dark:group-hover:text-indigo-200">
+                  {renderInline(card.title)}
+                </h4>
+              </div>
+              <span
+                aria-hidden="true"
+                className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-slate-300 transition-colors group-hover:border-indigo-400 dark:border-white/20 dark:group-hover:border-indigo-400"
+              >
+                <span className="h-2.5 w-2.5 rounded-full bg-transparent transition-colors group-hover:bg-indigo-400" />
+              </span>
+            </div>
+
+            {/* 中部：方向简述 */}
+            {card.description && (
+              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-zinc-300">
+                {renderInline(card.description)}
+              </p>
+            )}
+
+            {/* 标签行：前置要求以药丸标签呈现 */}
+            {card.prerequisite && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-slate-500 dark:text-neutral-400">前置缺口:</span>
+                <span className="rounded border border-slate-200 bg-slate-100/80 px-2 py-0.5 text-xs text-slate-600 dark:border-zinc-700 dark:bg-zinc-800/80 dark:text-zinc-300">
+                  {renderInline(card.prerequisite)}
+                </span>
+              </div>
+            )}
+
+            {/* 底部：与学习内容的关联（Callout 样式） */}
+            {card.relation && (
+              <div className="mt-3 rounded-lg border-l-2 border-indigo-400 bg-slate-900/[0.04] px-3 py-2 text-xs leading-5 text-slate-600 dark:bg-white/[0.04] dark:text-neutral-400">
+                <span className="font-medium text-slate-800 dark:text-neutral-200">
+                  与学习内容的关联：
+                </span>
+                {renderInline(card.relation)}
+              </div>
+            )}
+
+            {/* 底部操作提示（可点击时显示） */}
+            {onSelectDirection && (
+              <div className="mt-2.5 text-right text-xs font-medium text-indigo-600 opacity-0 transition-opacity group-hover:opacity-100 dark:text-indigo-400">
+                选择该方向 →
+              </div>
+            )}
           </>
         );
         const base =
-          "group flex w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition";
+          "group relative rounded-xl border p-4 text-left transition-all duration-150";
         if (onSelectDirection) {
           return (
             <button
@@ -158,7 +226,7 @@ function DirectionCardStack({
               type="button"
               onClick={() => onSelectDirection(card.title)}
               title={`选择方向：${card.title}`}
-              className={`${base} cursor-pointer border-indigo-200/80 bg-gradient-to-r from-indigo-50/90 to-sky-50/60 shadow-xs hover:-translate-y-px hover:border-indigo-400 hover:shadow-md dark:border-indigo-900/60 dark:from-indigo-950/30 dark:to-sky-950/20 dark:hover:border-indigo-600`}
+              className={`${base} cursor-pointer border-slate-200/90 bg-white/95 shadow-xs hover:border-indigo-500/60 hover:bg-indigo-50/40 hover:shadow-md dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-indigo-500/60 dark:bg-white/[0.03] dark:hover:bg-white/[0.06]`}
             >
               {content}
             </button>
@@ -167,7 +235,7 @@ function DirectionCardStack({
         return (
           <div
             key={card.index}
-            className={`${base} border-indigo-200/70 bg-indigo-50/60 dark:border-indigo-900/50 dark:bg-indigo-950/20`}
+            className={`${base} border-slate-200/80 bg-slate-50/70 dark:border-white/10 dark:bg-white/[0.03]`}
           >
             {content}
           </div>
@@ -284,8 +352,10 @@ export function MarkdownText({
         }
         flushCards();
         flushNumbered();
+        // 方向卡行带【】标题格式，特征明确：单行也渲染为方向卡（模型经常把
+        // 每张卡片用空行隔开，按块归组会漏掉单行块）。
         const hasCardRun = segments.some(
-          (segment) => segment.kind === "cards" && segment.cards.length >= 2,
+          (segment) => segment.kind === "cards" && segment.cards.length >= 1,
         );
         const hasNumberedRun = segments.some(
           (segment) => segment.kind === "numbered" && segment.items.length >= 2,

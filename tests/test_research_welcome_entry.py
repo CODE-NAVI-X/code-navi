@@ -73,15 +73,15 @@ class FakeBridgeWelcomeGenerator:
         if not has_learning_input:
             return OrchestratorLlmOutcome(status="generated", reply_text=EMPTY_WELCOME_REPLY)
         cards = generate_dynamic_direction_cards(learned, progress)
-        card_lines = "\n".join(
-            f"{index}. 【{card.title}】：{card.description}"
-            for index, card in enumerate(cards, start=1)
+        preview = (
+            f"我已经根据你的学习内容准备了 {len(cards)} 个可探索方向，"
+            "可以在下方卡片里挑一个感兴趣的，或直接告诉我你想研究什么。"
         )
         reply = (
             f"{SCOPE_PREFIX}\n\n{WELCOME_OPENING}\n\n"
             f"学习端记录显示你已学习：{learned}，当前进度记录为：{progress}。"
             "这些学习记录不代表已掌握或具备研究能力，实际理解与代码经验仍需确认。\n\n"
-            f"可以探索的方向包括：\n{card_lines}"
+            f"{preview}"
         )
         return OrchestratorLlmOutcome(status="generated", reply_text=reply)
 
@@ -196,7 +196,8 @@ def test_learning_put_triggers_bridge_welcome_with_records_and_cards(
     ).json()["cards"]
     assert len(cards) == 5
     assert all("图" in card["title"] or "gcn" in card["title"].lower() for card in cards)
-    assert cards[0]["title"] in content
+    # 欢迎语预告方向但不逐条罗列标题（卡片由页面确定性地渲染）。
+    assert "可探索方向" in content
 
     state = client.get(
         f"/api/v1/research/conversations/{conversation_id}/orchestrator/state"

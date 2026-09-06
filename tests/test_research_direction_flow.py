@@ -88,6 +88,9 @@ def test_welcome_prompt_forbids_attributing_unconfirmed_choice() -> None:
     assert "严禁" in rules
     assert "你已选择" in rules  # 规则必须点名这类表述
     assert "逐字" in rules  # 引用用户选择时必须使用用户原词
+    # 卡片由页面确定性渲染：模型不逐条罗列，也不得暴露"【卡片 N】"骨架字样
+    assert "【卡片 1】" in rules
+    assert "不要在回复中逐条罗列" in rules
 
 
 def test_validator_accepts_quoted_echo_of_user_confirmed_choice() -> None:
@@ -125,9 +128,9 @@ class FakeBridgeWelcomeGenerator:
         learned = learned_match.group(1).strip() if learned_match else None
         progress = progress_match.group(1).strip() if progress_match else None
         cards = generate_dynamic_direction_cards(learned, progress)
-        card_lines = "\n".join(
-            f"{index}. 【{card.title}】：{card.description}"
-            for index, card in enumerate(cards, start=1)
+        preview = (
+            f"我已经根据你的学习内容准备了 {len(cards)} 个可探索方向，"
+            "可以在下方卡片里挑一个感兴趣的，或直接告诉我你想研究什么。"
         )
         reply = (
             "说明：以下内容基于学习端记录与通用技术概览，"
@@ -135,7 +138,7 @@ class FakeBridgeWelcomeGenerator:
             "(｡･ω･｡) 欢迎来到科研工作台！我是姜姜～\n\n"
             f"学习端记录显示你已学习：{learned}，当前进度记录为：{progress}。"
             "这些学习记录不代表已掌握或具备研究能力，实际理解与代码经验仍需确认。\n\n"
-            f"可以探索的方向包括：\n{card_lines}\n\n"
+            f"{preview}\n\n"
             "你现在最想研究什么？"
         )
         return OrchestratorLlmOutcome(status="generated", reply_text=reply)

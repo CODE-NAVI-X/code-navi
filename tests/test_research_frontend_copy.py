@@ -438,9 +438,11 @@ def test_assistant_messages_render_highlighted_semantic_blocks() -> None:
     assert "欢迎来到科研工作台" in markdown_source
     assert "学习端记录显示" in markdown_source
     assert "说明：" in markdown_source
-    # 方向卡列表按编号+【标题】渲染为高亮卡片
-    assert "dir-card" in markdown_source or "方向卡" in markdown_source
-    # 连续编号行（1. 2. 3.）渲染为独立的提问/清单面板
+    # 方向卡 Surface：胶囊徽标 + 前置缺口药丸 + 关联 Callout + 单选意符 + 操作提示
+    assert "方向 {" in markdown_source or "padStart" in markdown_source
+    assert "前置缺口" in markdown_source
+    assert "与学习内容的关联" in markdown_source
+    assert "选择该方向" in markdown_source
     assert "NumberedListPanel" in markdown_source
 
 
