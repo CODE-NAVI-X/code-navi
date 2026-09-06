@@ -586,6 +586,25 @@ def _has_traceable_experiment_results(user_message: str) -> bool:
     return True
 
 
+# 学习领域分类使用显式标记；拉丁缩写按词边界匹配，避免 aggregate 之类
+# 的英文词误含 "gat" 造成误判。"图像/图片"里的"图"不代表图神经网络，
+# 必须以"图神经网络/图卷积/图注意力"等显式标记识别。
+_GRAPH_LEARNING_PATTERN = re.compile(
+    r"图神经网络|图卷积|图注意力|图网络|图论|图结构|图表示|图采样|图嵌入"
+    r"|知识图谱|引文网络|谱方法|\b(?:gcn|gnn|gat|graph)\b",
+    re.IGNORECASE,
+)
+_VISION_LEARNING_PATTERN = re.compile(
+    r"图像|图片|视觉|vision|vit\b|图像分类|目标检测|语义分割|图像识别"
+    r"|超分辨率|\bcnn\b|\byolo\b|segmentation",
+    re.IGNORECASE,
+)
+_NLP_LEARNING_PATTERN = re.compile(
+    r"transformer|语言模型|自然语言|\bnlp\b|\bbert\b|大模型|大语言|文本|问答|检索增强",
+    re.IGNORECASE,
+)
+
+
 def generate_dynamic_direction_cards(
     learned_content: str | None,
     learning_progress: str | None,
@@ -598,27 +617,9 @@ def generate_dynamic_direction_cards(
     if not content_raw and not progress_raw:
         return []
 
-    content_lower = content_raw.lower()
-    is_gnn = (
-        "图" in content_raw
-        or "gcn" in content_lower
-        or "gnn" in content_lower
-        or "graph" in content_lower
-    )
-    is_nlp = (
-        "transformer" in content_lower
-        or "语言" in content_raw
-        or "nlp" in content_lower
-        or "bert" in content_lower
-        or "大模型" in content_raw
-    )
-    is_cv = (
-        "视觉" in content_raw
-        or "cv" in content_lower
-        or "cnn" in content_lower
-        or "yolo" in content_lower
-        or "segmentation" in content_lower
-    )
+    is_gnn = bool(_GRAPH_LEARNING_PATTERN.search(content_raw))
+    is_cv = bool(_VISION_LEARNING_PATTERN.search(content_raw))
+    is_nlp = bool(_NLP_LEARNING_PATTERN.search(content_raw))
 
     if is_gnn:
         return [
@@ -658,44 +659,6 @@ def generate_dynamic_direction_cards(
                 is_recommended=False,
             ),
         ]
-    elif is_nlp:
-        return [
-            DirectionCard(
-                id="dir-nlp-1",
-                title="语言模型的参数高效微调",
-                description="在有限显存资源下对模型进行下游任务微调并评测表现。",
-                prerequisite_gap="需了解低秩矩阵分解与梯度反向传播原理",
-                is_recommended=True,
-            ),
-            DirectionCard(
-                id="dir-nlp-2",
-                title="检索增强生成 (RAG) 知识召回优化",
-                description="结合密集检索向量库与重排器提升问答准确率。",
-                prerequisite_gap="需了解向量数据库索引与分块策略",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-nlp-3",
-                title="提示工程与思维链推理探索",
-                description="分析不同提示策略对复杂逻辑推理能力的影响。",
-                prerequisite_gap="需掌握 Prompt 评估基准与测试集构建方法",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-nlp-4",
-                title="跨语言迁移与文本分类",
-                description="利用多语言预训练模型评估零样本跨语言迁移能力。",
-                prerequisite_gap="需了解跨语言 Tokenizer 与对齐微调方法",
-                is_recommended=False,
-            ),
-            DirectionCard(
-                id="dir-nlp-5",
-                title="轻量化语义匹配与知识蒸馏",
-                description="通过模型蒸馏将大模型知识转移到小型双塔网络。",
-                prerequisite_gap="需了解 KL 散度蒸馏损失与双塔向量架构",
-                is_recommended=False,
-            ),
-        ]
     elif is_cv:
         return [
             DirectionCard(
@@ -731,6 +694,44 @@ def generate_dynamic_direction_cards(
                 title="弱监督图像语义分割",
                 description="在仅有弱标注情况下实现精细目标分割。",
                 prerequisite_gap="需了解类激活图与伪标签生成技术",
+                is_recommended=False,
+            ),
+        ]
+    elif is_nlp:
+        return [
+            DirectionCard(
+                id="dir-nlp-1",
+                title="语言模型的参数高效微调",
+                description="在有限显存资源下对模型进行下游任务微调并评测表现。",
+                prerequisite_gap="需了解低秩矩阵分解与梯度反向传播原理",
+                is_recommended=True,
+            ),
+            DirectionCard(
+                id="dir-nlp-2",
+                title="检索增强生成 (RAG) 知识召回优化",
+                description="结合密集检索向量库与重排器提升问答准确率。",
+                prerequisite_gap="需了解向量数据库索引与分块策略",
+                is_recommended=False,
+            ),
+            DirectionCard(
+                id="dir-nlp-3",
+                title="提示工程与思维链推理探索",
+                description="分析不同提示策略对复杂逻辑推理能力的影响。",
+                prerequisite_gap="需掌握 Prompt 评估基准与测试集构建方法",
+                is_recommended=False,
+            ),
+            DirectionCard(
+                id="dir-nlp-4",
+                title="跨语言迁移与文本分类",
+                description="利用多语言预训练模型评估零样本跨语言迁移能力。",
+                prerequisite_gap="需了解跨语言 Tokenizer 与对齐微调方法",
+                is_recommended=False,
+            ),
+            DirectionCard(
+                id="dir-nlp-5",
+                title="轻量化语义匹配与知识蒸馏",
+                description="通过模型蒸馏将大模型知识转移到小型双塔网络。",
+                prerequisite_gap="需了解 KL 散度蒸馏损失与双塔向量架构",
                 is_recommended=False,
             ),
         ]
@@ -1760,10 +1761,21 @@ class ResearchConversationOrchestrator:
         owned_ids: list[str] | None = None,
     ) -> OrchestratorMessageResponse:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
-        if state_model.last_status != "failed" or not state_model.last_failed_user_message:
+        if state_model.last_status != "failed":
             raise OrchestratorRetryNotApplicableError(
                 "No failed message to retry in this conversation."
             )
+        if not state_model.last_failed_user_message:
+            # Backend-initiated turn (the bridge welcome) failed: regenerate the
+            # welcome instead of replaying a fabricated user message.
+            retried = self.ensure_bridge_welcome(
+                conversation_id, db, owned_ids=owned_ids
+            )
+            if retried is None or retried.status != "completed":
+                raise OrchestratorRetryNotApplicableError(
+                    "No failed message to retry in this conversation."
+                )
+            return retried
 
         failed_msg = state_model.last_failed_user_message
         return self.process_message(

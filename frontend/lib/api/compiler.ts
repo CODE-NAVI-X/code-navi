@@ -3,7 +3,9 @@
 const API_BASE =
   process.env.NEXT_PUBLIC_CODE_NAVI_API_URL ??
   process.env.NEXT_PUBLIC_API_BASE ??
-  "http://localhost:8000";
+  // 会话 Cookie 按主机隔离：所有客户端必须使用同一个 API 主机，
+  // 否则登录态在部分模块里"消失"（曾导致学习端跳科研端被踢回登录页）。
+  "http://127.0.0.1:8000";
 
 export interface CompilerRuntimeStatus {
   ready: boolean;

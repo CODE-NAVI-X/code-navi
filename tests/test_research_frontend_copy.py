@@ -418,6 +418,49 @@ def test_research_workspace_refreshes_direction_cards_and_shows_no_legacy_welcom
         assert marker not in conversation_source
 
 
+def test_direction_card_click_sends_explicit_selection_message() -> None:
+    """点击方向卡必须把选择作为明确的用户输入发送，形成可追溯的闭环。"""
+    conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "buildDirectionSelectionMessage" in conversation_source
+    assert "我选择的研究方向是：" in conversation_source
+
+
+def test_assistant_messages_render_highlighted_semantic_blocks() -> None:
+    """姜姜长回复按语义分块高亮：开场白/来源说明/学习记录/方向卡/编号提问各有底色。"""
+    markdown_source = Path("frontend/components/research/MarkdownText.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    # 语义分块识别
+    assert "欢迎来到科研工作台" in markdown_source
+    assert "学习端记录显示" in markdown_source
+    assert "说明：" in markdown_source
+    # 方向卡 Surface：胶囊徽标 + 前置缺口药丸 + 关联 Callout + 单选意符 + 操作提示
+    assert "方向 {" in markdown_source or "padStart" in markdown_source
+    assert "前置缺口" in markdown_source
+    assert "与学习内容的关联" in markdown_source
+    assert "选择该方向" in markdown_source
+    assert "NumberedListPanel" in markdown_source
+
+
+def test_all_api_clients_share_one_default_host() -> None:
+    """所有前端 API 客户端默认同一个主机：Cookie 按主机隔离，
+    localhost 与 127.0.0.1 混用会让登录态在部分模块"消失"。"""
+    for name in (
+        "frontend/lib/api/learning.ts",
+        "frontend/lib/api/practice.ts",
+        "frontend/lib/api/compiler.ts",
+        "frontend/lib/api/research.ts",
+        "frontend/lib/api/context-transfers.ts",
+    ):
+        source = Path(name).read_text(encoding="utf-8")
+        assert "http://localhost:8000" not in source, name
+        assert "http://127.0.0.1:8000" in source, name
+
+
 def test_research_restore_keeps_saved_state_without_creating_again() -> None:
     workspace_source = WORKSPACE.read_text(encoding="utf-8")
 
