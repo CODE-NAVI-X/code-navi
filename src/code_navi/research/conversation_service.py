@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -13,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from code_navi.context_transfer.schemas import ConfirmedContextProvenance
 from code_navi.conversations import ContextAssembler, ConversationStateStore
-from code_navi.providers import ProviderSettings
 from kernel.core import ContentBlock, Message
 
 from .conversation_agent import (
@@ -41,6 +39,7 @@ from .conversation_paper_review import (
     parse_paper_sections,
 )
 from .conversation_plan import build_conversation_research_plan, build_llm_research_plan
+from .conversation_prompt_templates import RESEARCH_WELCOME_OPENING
 from .conversation_reference_draft import build_reference_draft_package
 from .conversation_reproduction import build_reproduction_pipeline
 from .conversation_schemas import (
@@ -224,81 +223,26 @@ class ResearchConversationService:
         if request.initial_message:
             self._process_message(conversation, request.initial_message, db)
         else:
-            welcome_decision, welcome_used_llm, welcome_run_id, welcome_events = (
-                self._welcome_decision(conversation.id)
+            # 统一入口：新建会话的空态欢迎使用新版固定开场白（无学习端输入时
+            # 不伪造方向卡、不推断能力），不再生成旧版五步流程说明。
+            welcome_decision = ResearchConversationDecision(
+                reply=RESEARCH_WELCOME_OPENING,
+                intent="explore",
+                next_question="你现在最想研究什么？",
+                suggested_answers=[
+                    "已有研究兴趣：我想围绕一个主题继续研究",
+                    "需要推荐方向：我还没有明确研究主题",
+                    "我有项目背景，但还没有研究问题",
+                ],
             )
-            welcome_mode = "agent" if welcome_used_llm else "rules"
-            if not welcome_decision.suggested_answers:
-                welcome_decision = welcome_decision.model_copy(
-                    update={
-                        "suggested_answers": [
-                            "已有研究兴趣：我想围绕一个主题继续研究",
-                            "需要推荐方向：我还没有明确研究主题",
-                            "我有项目背景，但还没有研究问题",
-                        ]
-                    }
-                )
             self._append_assistant(
                 conversation,
                 welcome_decision,
-                generation_mode=welcome_mode,
-                run_id=welcome_run_id,
-                event_count=welcome_events,
+                generation_mode="rules",
             )
-            conversation.profile_data = _apply_decision(
-                ResearchProfile(), welcome_decision
-            ).model_dump(mode="json")
             db.commit()
             db.refresh(conversation)
         return self._to_response(conversation, db)
-
-    def _welcome_decision(
-        self, conversation_id: str
-    ) -> tuple[ResearchConversationDecision, bool, str | None, int]:
-        """Use the model for the opening guidance when a real provider is configured."""
-        settings = ProviderSettings.resolve()
-        model_configured = (
-            (settings.name == "deepseek" and bool(os.getenv("DEEPSEEK_API_KEY")))
-            or (settings.name == "openai" and bool(os.getenv("OPENAI_API_KEY")))
-        )
-        if model_configured and "PYTEST_CURRENT_TEST" not in os.environ:
-            outcome = self.decision_generator.generate(
-                profile=ResearchProfile(),
-                conversation_history=(),
-                user_message=(
-                    "请作为科研端的开场引导，先用自然中文说明使用流程："
-                    "用户先描述想法，你整理科研画像，用户确认后生成研究计划，"
-                    "再由用户主动检索论文并逐步记录证据。最后只提出一个最适合开场的问题。"
-                ),
-                conversation_id=conversation_id,
-            )
-            if outcome.status == "generated" and outcome.decision is not None:
-                decision = outcome.decision.model_copy(
-                    update={
-                        "intent": "explore",
-                        "profile_patch": ResearchProfilePatch(),
-                        "recommended_action": "continue_dialogue",
-                        "candidate_questions": [],
-                    }
-                )
-                return decision, True, outcome.run_id, outcome.event_count
-            stage = "provider_unavailable" if outcome.status == "unavailable" else "failed"
-            raise ResearchGenerationError(stage, outcome.reason or "welcome generation failed")
-        welcome = ResearchConversationDecision(
-            reply=(
-                "先不用按表格回答。请用自己的话说说你最近想研究的现象、"
-                "困惑或项目背景，我会边聊边整理研究画像。"
-            ),
-            intent="explore",
-            uncertainties=["尚未了解用户的初步研究想法"],
-            next_question="你最近最想弄清楚、比较或解决的事情是什么？",
-            suggested_answers=[
-                "我有一个模糊想法",
-                "我有项目但没有研究问题",
-                "我想先比较几个方向",
-            ],
-        )
-        return welcome, False, None, 0
 
     def create_from_confirmed_context(
         self,
@@ -333,27 +277,8 @@ class ResearchConversationService:
         if selected_labels:
             user_message += f"\n保留内容：{selected_labels}"
         self._append_user(conversation, user_message)
-        self._append_assistant(
-            conversation,
-            ResearchConversationDecision(
-                reply=(
-                    "学习背景开场总结\n"
-                    f"已确认主题：{provenance.topic}\n"
-                    f"学习摘要：{provenance.summary[:1000]}\n\n"
-                    "以上内容来自你在 Learning 中查看、修改并确认的背景，不会自动成为研究结论。"
-                    "接下来可以在此基础上收敛研究问题；原始学习笔记不会被科研会话修改。"
-                ),
-                intent="clarify",
-                uncertainties=list(profile.uncertainties),
-                next_question="你希望围绕这个主题优先比较、解释还是解决什么具体问题？",
-                suggested_answers=[
-                    "比较不同方法的效果",
-                    "解释关键影响因素",
-                    "形成一个可执行实验",
-                ],
-            ),
-            generation_mode="rules",
-        )
+        # 旧版规则开场已移除：开场白统一由学习端 PUT learning-context
+        # 之后幂等触发的 orchestrator welcome_and_bridge 桥接欢迎语负责。
         if commit:
             db.commit()
             db.refresh(conversation)
@@ -1723,8 +1648,8 @@ class ResearchConversationService:
             (message for message in reversed(messages) if message.role == "assistant"),
             None,
         )
-        if assistant is None:
-            raise ValueError("research conversation has no assistant message")
+        # 学习端确认流程先建会话（只有用户带入记录），开场白由 PUT
+        # learning-context 触发的桥接欢迎语补齐，因此允许暂无 assistant 消息。
         readiness = assess_readiness(profile)
         stored = conversation.generated_artifacts or {}
         plan = _stored_artifact(ConversationResearchPlan, stored.get("research_plan"))
@@ -1740,7 +1665,9 @@ class ResearchConversationService:
         return ResearchConversationResponse(
             conversation_id=conversation.id,
             next_skill=(
-                "academic-search" if assistant.recommended_action == "prepare_search" else None
+                "academic-search"
+                if assistant is not None and assistant.recommended_action == "prepare_search"
+                else None
             ),
             profile=profile,
             readiness=readiness,
@@ -1755,14 +1682,20 @@ class ResearchConversationService:
                 ReproductionConditions, stored.get("reproduction_conditions")
             ),
             experiment_design=experiment_design,
-            reply=assistant.content,
-            generation_mode=assistant.generation_mode or "rules",
-            recommended_action=assistant.recommended_action or "continue_dialogue",
-            next_question=assistant.next_question,
-            suggested_answers=assistant.suggested_answers,
+            reply=assistant.content if assistant is not None else "",
+            generation_mode=(
+                (assistant.generation_mode or "rules") if assistant is not None else "rules"
+            ),
+            recommended_action=(
+                (assistant.recommended_action or "continue_dialogue")
+                if assistant is not None
+                else "continue_dialogue"
+            ),
+            next_question=assistant.next_question if assistant is not None else None,
+            suggested_answers=assistant.suggested_answers if assistant is not None else [],
             candidate_questions=profile.candidate_questions,
             messages=messages,
-            last_run_id=assistant.run_id,
+            last_run_id=assistant.run_id if assistant is not None else None,
             context_provenance=(
                 ConfirmedContextProvenance.model_validate(conversation.context_provenance)
                 if conversation.context_provenance
