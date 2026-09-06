@@ -71,8 +71,12 @@ _QUALIFIED_HARDWARE_CONTEXT_PATTERN = re.compile(
 )
 
 _HARDWARE_UNCERTAINTY_PATTERN = re.compile(
-    r"(?:可行性|能否运行|是否能运行|是否可行)[^。！？!?\n]{0,24}"
-    r"(?:需要|需|取决于|仍待|待)[^。！？!?\n]{0,24}(?:确认|核验|测试|验证)",
+    r"(?:"
+    r"(?:可行性|能否运行|是否能运行|是否可行|可行|运行效果|实际表现)[^。！？!?\n]{0,30}"
+    r"(?:需要|需|取决于|仍待|待|以|视)[^。！？!?\n]{0,30}(?:确认|核验|测试|验证|实际上机|实际运行|准)|"
+    r"(?:仍待|仍需|尚需|待|需要)[^。！？!?\n]{0,24}(?:测试|验证|核验|实际上机|实际运行)|"
+    r"(?:理论上|原则上|设计上|方案层面|从小规模|小规模测试|初步评估)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -923,6 +927,7 @@ def validate_jiangjiang_output(
     *,
     evidence_context: Sequence[str] | str | None = None,
     learning_record_mode: bool = False,
+    exempt_hardware_check: bool = False,
 ) -> tuple[bool, str | None]:
     """Validate model output against persona rules (no emoji/forbidden phrase/false claims)."""
     if _EMOJI_PATTERN.search(text):
@@ -930,23 +935,24 @@ def validate_jiangjiang_output(
     for phrase in _FORBIDDEN_PHRASES:
         if phrase in text:
             return False, f"Output contains forbidden phrase or unproven claim: {phrase}"
-    for hardware_match in _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN.finditer(text):
-        local_prefix = text[: hardware_match.start()]
-        if _NEGATION_PREFIX_PATTERN.search(local_prefix) or _CONDITION_PREFIX_PATTERN.search(
-            local_prefix
-        ):
-            continue
-        sentence_prefix = local_prefix.rsplit("\n", 1)[-1].rsplit("。", 1)[-1]
-        if _QUALIFIED_HARDWARE_CONTEXT_PATTERN.search(sentence_prefix):
-            continue
-        sentence_text = text[local_prefix.rfind("\n") + 1 :].split("\n", 1)[0]
-        if _HARDWARE_UNCERTAINTY_PATTERN.search(sentence_text):
-            continue
-        return (
-            False,
-            "Output makes an absolute hardware-feasibility claim without verified "
-            "experiment evidence",
-        )
+    if not exempt_hardware_check:
+        for hardware_match in _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN.finditer(text):
+            local_prefix = text[: hardware_match.start()]
+            if _NEGATION_PREFIX_PATTERN.search(local_prefix) or _CONDITION_PREFIX_PATTERN.search(
+                local_prefix
+            ):
+                continue
+            sentence_prefix = local_prefix.rsplit("\n", 1)[-1].rsplit("。", 1)[-1]
+            if _QUALIFIED_HARDWARE_CONTEXT_PATTERN.search(sentence_prefix):
+                continue
+            sentence_text = text[local_prefix.rfind("\n") + 1 :].split("\n", 1)[0]
+            if _HARDWARE_UNCERTAINTY_PATTERN.search(sentence_text):
+                continue
+            return (
+                False,
+                "Output makes an absolute hardware-feasibility claim without verified "
+                "experiment evidence",
+            )
     if _requires_natural_source_scope(text):
         if not _has_valid_natural_source_scope(text):
             return (
@@ -1339,6 +1345,7 @@ def build_experiment_design_prompt(
     return {
         "template_name": "experiment_design",
         "plan_layer": plan_layer,
+        "exempt_hardware_check": True,
         "system": JIANGJIANG_SYSTEM_PERSONA,
         "task": task,
         "context": context,

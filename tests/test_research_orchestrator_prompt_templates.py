@@ -1009,3 +1009,49 @@ def test_validator_allows_process_validation_language_without_reproduction_claim
         is_valid, reason = validate_jiangjiang_output(text)
         assert is_valid, f"Process-validation language was falsely rejected: {text} ({reason})"
         assert reason is None
+
+
+def test_validate_jiangjiang_output_hardware_exemption_mode() -> None:
+    """Verify hardware check exemption mode allows experiment design proposals
+    while blocking ungrounded assertions when disabled.
+    """
+    plan_text = (
+        "说明：以下内容基于会话状态中已确认的研究方向、当前可用的论文/实验信息及通用技术概览，"
+        "尚未执行正式检索；具体论文细节、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "【实验方案设计】\n"
+        "针对你的 8GB 显存设备配置，采用 LoRA 微调配合 batch size=4 是可行的方案，"
+        "显存消耗预计在 5.5GB 左右，可以运行基线模型训练。"
+    )
+
+    # 1. With exempt_hardware_check=True (experiment design / specific plan mode), output passes
+    valid_exempt, reason_exempt = validate_jiangjiang_output(
+        plan_text, exempt_hardware_check=True
+    )
+    assert valid_exempt is True
+    assert reason_exempt is None
+
+    # 2. With exempt_hardware_check=False, an ungrounded absolute claim is rejected
+    absolute_text = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "你的设备配置完全够用，毫无压力，直接训练即可。"
+    )
+    valid_non_exempt, reason_non_exempt = validate_jiangjiang_output(
+        absolute_text, exempt_hardware_check=False
+    )
+    assert valid_non_exempt is False
+    assert reason_non_exempt is not None
+    assert "hardware-feasibility" in reason_non_exempt
+
+    # 3. Uncertainty hedge passes even with exempt_hardware_check=False
+    hedged_text = (
+        "说明：以下内容基于会话状态中已确认的研究方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节、设备需求和实验结论仍需在你确认后核验。\n\n"
+        "在当前硬件配置下理论上可行，但具体能否运行仍需实际上机测试验证。"
+    )
+    valid_hedged, reason_hedged = validate_jiangjiang_output(
+        hedged_text, exempt_hardware_check=False
+    )
+    assert valid_hedged is True
+    assert reason_hedged is None
+

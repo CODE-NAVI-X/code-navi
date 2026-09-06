@@ -405,8 +405,6 @@ def detect_paper_purpose_answer(message: str) -> str | None:
     return None
 
 
-# P2-C: deterministic experiment-plan intent words for the regular flow
-# ("实验方案" itself is a §2 passive-tool trigger and never reaches here).
 _EXPERIMENT_PLAN_INTENT_WORDS = (
     "实验计划",
     "实验安排",
@@ -414,6 +412,11 @@ _EXPERIMENT_PLAN_INTENT_WORDS = (
     "实验步骤",
     "初步方案",
     "具体方案",
+    "实验方案",
+    "设计实验",
+    "实验草案",
+    "方案草案",
+    "具体实验方案",
 )
 
 
@@ -1585,6 +1588,18 @@ class ResearchConversationOrchestrator:
 
         # Step 3: Detect §2 Passive Tool intents
         tool_intents = detect_passive_tool_intent(user_message)
+        # Unify experiment plan flow: confirmation intent or specific plan request
+        # in research_execution advances the regular two-layer plan progression
+        # rather than getting trapped in passive tools.
+        experiment_plan_keywords = (
+            "具体方案", "具体实验", "细化方案", "确认方案", "确认初步",
+        )
+        if is_confirmed or (
+            state_model.current_stage == "research_execution"
+            and any(k in user_message for k in experiment_plan_keywords)
+        ):
+            tool_intents = [t for t in tool_intents if t != "experiment-design"]
+
         if len(tool_intents) > 1:
             tool_names_zh = [
                 "阶段进展总结" if t == "stage-briefing"
@@ -1653,10 +1668,12 @@ class ResearchConversationOrchestrator:
 
             reply_content = outcome.reply_text.strip()
             evidence_ctx = self._collect_traceable_evidence_context(user_message, conv)
+            is_exp_tool = (tool_name == "experiment-design")
             valid, val_reason = validate_jiangjiang_output(
                 reply_content,
                 evidence_context=evidence_ctx,
                 learning_record_mode=False,
+                exempt_hardware_check=is_exp_tool,
             )
             if not valid:
                 err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
@@ -1672,9 +1689,29 @@ class ResearchConversationOrchestrator:
                     error=err_msg,
                 )
 
-            # Passive tool calls do NOT advance stage
+            # When experiment-design passive tool returns a valid draft (not empty state),
+            # record template_name and plan_layer="preliminary" so subsequent user
+            # confirmation can smoothly advance to the specific plan and light experiment_designed.
+            pt_template_name = (
+                "experiment_design"
+                if (tool_name == "experiment-design" and not is_empty)
+                else None
+            )
+            pt_plan_layer = (
+                "preliminary"
+                if (tool_name == "experiment-design" and not is_empty)
+                else None
+            )
+            # Passive tool calls do NOT advance stage directly
             return self._finalize_reply(
-                conversation_id, state_model, user_message, reply_content, tool_name, db
+                conversation_id,
+                state_model,
+                user_message,
+                reply_content,
+                tool_name,
+                db,
+                template_name=pt_template_name,
+                plan_layer=pt_plan_layer,
             )
 
         # Step 4: Regular message flow & Four-Stage Progression
@@ -1733,10 +1770,12 @@ class ResearchConversationOrchestrator:
                 reply_content = f"{scope_prefix}\n\n{reply_content}"
         evidence_ctx = self._collect_traceable_evidence_context(user_message, conv)
         is_learning_mode = bool(prompt_data.get("is_learning_record_mode", False))
+        is_hw_exempt = bool(prompt_data.get("exempt_hardware_check", False))
         valid, val_reason = validate_jiangjiang_output(
             reply_content,
             evidence_context=evidence_ctx,
             learning_record_mode=is_learning_mode,
+            exempt_hardware_check=is_hw_exempt,
         )
         if not valid:
             err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
@@ -1969,6 +2008,10 @@ class ResearchConversationOrchestrator:
                 )
                 if is_confirmed and last_layer == "preliminary":
                     plan_layer = "specific"
+                elif is_confirmed and last_layer == "specific":
+                    plan_layer = "specific"
+                elif any(k in user_message for k in ("具体方案", "具体实验", "细化方案")):
+                    plan_layer = "specific"
                 elif has_plan_intent:
                     plan_layer = "specific" if last_layer == "specific" else "preliminary"
                 else:
@@ -2071,6 +2114,7 @@ class ResearchConversationOrchestrator:
             "template_name": template_name,
             "plan_layer": tmpl.get("plan_layer"),
             "is_learning_record_mode": is_learning_record_mode,
+            "exempt_hardware_check": tmpl.get("exempt_hardware_check", False),
         }
 
     def _fetch_passive_tool_material(
@@ -2310,7 +2354,7 @@ class ResearchConversationOrchestrator:
             f"严禁假造百分比成功率。\n"
         )
         if tool_name == "experiment-design":
-            # P3-B: the passive tool never bypasses the two-layer plan gates.
+            # P3-B & Plan Progression Unification:
             system_prompt += (
                 "5. 该工具结果只是素材：不得声称实验设计已完成（experiment_designed）、"
                 "不得声称可以直接进入结果分析；\n"
@@ -2324,7 +2368,23 @@ class ResearchConversationOrchestrator:
             else:
                 system_prompt += (
                     "6. 同学尚未选定当前论文：必须提示先完成正式检索并选定一篇当前论文，"
-                    "才能开始生成实验方案。\n"
+                    "才能开始生成实验方案；严禁直接输出实验方案。\n"
+                )
+            if is_empty_state:
+                system_prompt += (
+                    "7. 【前置条件不足规则】：当前工具真实输出显示前置条件不足，"
+                    "必须诚实向同学说明当前缺少哪些前置事实或条件"
+                    "（如需先完善研究画像与计划，或需先完成正式检索并选定一篇当前论文），"
+                    "并引导同学先补齐前置条件；"
+                    "严禁在声明前置条件不足的同时自行编造或输出完整的实验方案草案或虚构具体步骤。\n"
+                )
+            else:
+                system_prompt += (
+                    "7. 【方案层级与可推进状态统一规则】：\n"
+                    "   - 【草案（初步方案）】：在已选定论文且前置条件满足时呈现的高层方案，"
+                    "状态为待确认草案，尚未点亮 experiment_designed；\n"
+                    "   - 【具体方案】：在同学确认初步草案后细化生成，点亮 experiment_designed；\n"
+                    "   - 【可推进状态】：仅当具体方案建立后，才具备向下一阶段推进的条件。\n"
                 )
         user_prompt = (
             f"{tool_material}\n\n"

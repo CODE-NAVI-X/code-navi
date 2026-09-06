@@ -1631,3 +1631,164 @@ def test_passive_experiment_design_without_paper_prompts_selection(
     assert resp.state.subtasks.experiment_designed is False
     assert resp.state.current_stage == "research_execution"
     assert any("选定论文" in p or "检索" in p for p in generator.system_prompts)
+
+
+def test_experiment_plan_unified_preliminary_to_specific_progression(
+    db_session,
+) -> None:
+    """Unify 草案、具体方案与可推进状态:
+    1. Passive tool when paper is selected and ready records preliminary plan_layer;
+    2. Confirmation turn ('确认初步方案，生成具体方案') bypasses passive tool trap
+       and generates specific plan;
+    3. Specific plan lights experiment_designed = True (achieving 可推进状态).
+    """
+    class SpecificPlanGenerator:
+        def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+            from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+            # Specific plan discussing hardware parameters in a legitimate plan
+            return OrchestratorLlmOutcome(
+                status="generated",
+                reply_text=(
+                    "说明：以下内容基于会话状态中已确认的研究方向、当前可用的论文/实验信息及通用技术概览，"
+                    "尚未执行正式检索；具体论文细节、实现细节和实验结论仍需在你确认后核验。\n\n"
+                    "【具体实验方案】\n"
+                    "基于你的 8GB 显存设备，我们将 batch size 设为 4，使用梯度累积，"
+                    "在当前硬件配置下方案可行，满足基线实验条件。\n"
+                    "任务拆分与验收标准已就绪。"
+                ),
+            )
+
+    generator = SpecificPlanGenerator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=generator)
+    conv_id = "conv-unified-plan-progression"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={
+                "topic": "SQL 注入检测",
+                "methods": ["词法分析", "深度学习分类"],
+                "hardware": "RTX 4060 8GB 显存",
+            },
+            messages_data=[
+                {
+                    "message_id": "msg-1",
+                    "role": "assistant",
+                    "content": "【初步实验方案草案】准备复现基线分类器并对比准确率。",
+                    "template": "experiment_design",
+                    "plan_layer": "preliminary",
+                }
+            ],
+        )
+    )
+    state_row = _make_execution_state(db_session, conv_id)
+    _seed_current_paper(db_session, conv_id)
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": True,
+        "paper_selected": True,
+        "experiment_designed": False,
+    }
+    db_session.commit()
+
+    # User confirms preliminary plan and requests specific experiment design:
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="确认初步方案，请生成具体实验方案"),
+        db_session,
+    )
+    assert resp.reply_message is not None
+    # Must NOT be intercepted as a passive tool call
+    assert resp.reply_message.passive_tool_called is None
+    # Must successfully light experiment_designed (可推进状态)
+    assert resp.state.subtasks.experiment_designed is True
+    assert resp.state.current_stage == "research_execution"
+    assert "具体实验方案" in resp.reply_message.content
+
+
+def test_passive_experiment_design_draft_records_preliminary_and_advances_on_confirm(
+    db_session,
+) -> None:
+    """Test passive experiment-design tool when ready records preliminary plan_layer,
+    enabling the next user confirmation to advance to specific plan without getting stuck."""
+    class FlowGenerator:
+        def generate(self, *, system_prompt: str, user_prompt: str, **kwargs):
+            from code_navi.research.conversation_orchestrator import OrchestratorLlmOutcome
+            if "具体实验方案" in system_prompt or "具体方案" in system_prompt:
+                return OrchestratorLlmOutcome(
+                    status="generated",
+                    reply_text=(
+                        "说明：以下内容基于会话状态中已确认的研究方向、当前可用的论文/实验信息及通用技术概览，"
+                        "尚未执行正式检索；具体论文细节、实现细节和实验结论仍需在你确认后核验。\n\n"
+                        "【具体实验方案】\n"
+                        "细化模型结构、数据流、代码流程、日程与验收标准已就绪。"
+                    ),
+                )
+            return OrchestratorLlmOutcome(
+                status="generated",
+                reply_text=(
+                    "说明：以下内容基于会话状态中已确认的研究方向、当前可用的论文/实验信息及通用技术概览，"
+                    "尚未执行正式检索；具体论文细节、实现细节和实验结论仍需在你确认后核验。\n\n"
+                    "【初步实验方案草案】\n"
+                    "根据工具结果，准备复现基线并评估指标。"
+                ),
+            )
+
+    from research_llm_fakes import ContextAwareArtifactGenerator
+
+    generator = FlowGenerator()
+    orchestrator = ResearchConversationOrchestrator(llm_generator=generator)
+    orchestrator.conversation_service.artifact_generator = ContextAwareArtifactGenerator()
+    conv_id = "conv-passive-draft-confirm"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={
+                "topic": "SQL 注入检测",
+                "research_questions": ["如何提高注入攻击的检测准确率？"],
+                "methods": ["词法分析", "深度学习分类"],
+                "constraints": ["显存 8GB 限制"],
+            },
+            messages_data=[],
+        )
+    )
+    state_row = _make_execution_state(db_session, conv_id)
+    _seed_current_paper(db_session, conv_id)
+    state_row.subtasks = {
+        "need_defined": True,
+        "profile_ready": True,
+        "plan_generated": True,
+        "paper_selected": True,
+        "experiment_designed": False,
+    }
+    db_session.commit()
+
+    # Step 1: User asks for experiment design (triggers passive tool)
+    resp1 = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="实验方案怎么做"),
+        db_session,
+    )
+    assert resp1.reply_message is not None
+    assert resp1.reply_message.passive_tool_called == "experiment-design"
+    assert resp1.state.subtasks.experiment_designed is False
+
+    # Check that conv recorded template="experiment_design" and plan_layer="preliminary"
+    conv_row = db_session.get(ResearchConversationModel, conv_id)
+    last_assistant_msg = [m for m in conv_row.messages_data if m.get("role") == "assistant"][-1]
+    assert last_assistant_msg.get("template") == "experiment_design"
+    assert last_assistant_msg.get("plan_layer") == "preliminary"
+
+    # Step 2: User confirms the preliminary draft
+    resp2 = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="好的确认，请给出具体实验方案"),
+        db_session,
+    )
+    assert resp2.reply_message is not None
+    assert resp2.reply_message.passive_tool_called is None
+    # Now in advancing state (可推进状态)
+    assert resp2.state.subtasks.experiment_designed is True
+    assert "具体实验方案" in resp2.reply_message.content
+
+
