@@ -429,7 +429,7 @@ def test_direction_card_click_sends_explicit_selection_message() -> None:
 
 
 def test_assistant_messages_render_highlighted_semantic_blocks() -> None:
-    """姜姜长回复按语义分块高亮：开场白/来源说明/学习记录/方向卡各有底色。"""
+    """姜姜长回复按语义分块高亮：开场白/来源说明/学习记录/方向卡/编号提问各有底色。"""
     markdown_source = Path("frontend/components/research/MarkdownText.tsx").read_text(
         encoding="utf-8"
     )
@@ -440,6 +440,23 @@ def test_assistant_messages_render_highlighted_semantic_blocks() -> None:
     assert "说明：" in markdown_source
     # 方向卡列表按编号+【标题】渲染为高亮卡片
     assert "dir-card" in markdown_source or "方向卡" in markdown_source
+    # 连续编号行（1. 2. 3.）渲染为独立的提问/清单面板
+    assert "NumberedListPanel" in markdown_source
+
+
+def test_all_api_clients_share_one_default_host() -> None:
+    """所有前端 API 客户端默认同一个主机：Cookie 按主机隔离，
+    localhost 与 127.0.0.1 混用会让登录态在部分模块"消失"。"""
+    for name in (
+        "frontend/lib/api/learning.ts",
+        "frontend/lib/api/practice.ts",
+        "frontend/lib/api/compiler.ts",
+        "frontend/lib/api/research.ts",
+        "frontend/lib/api/context-transfers.ts",
+    ):
+        source = Path(name).read_text(encoding="utf-8")
+        assert "http://localhost:8000" not in source, name
+        assert "http://127.0.0.1:8000" in source, name
 
 
 def test_research_restore_keeps_saved_state_without_creating_again() -> None:

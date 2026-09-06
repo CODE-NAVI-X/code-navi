@@ -49,6 +49,43 @@ function parseDirectionCardLine(line: string): DirectionCardItem | null {
   return { index: match[1], title: match[2], description: match[3] };
 }
 
+interface NumberedItem {
+  marker: string;
+  text: string;
+}
+
+// 连续编号行（1. 2. 3.）是姜姜的分点提问/清单；限定一位数序号并要求
+// 后接内容，避免把 "2026年…" 这类普通句子误判成清单项。
+const NUMBERED_LINE = /^([1-9])[.、)）]\s*(.+)$/;
+
+function parseNumberedLine(line: string): NumberedItem | null {
+  const match = NUMBERED_LINE.exec(line);
+  if (!match) return null;
+  return { marker: match[1], text: match[2] };
+}
+
+function NumberedListPanel({ items }: { items: NumberedItem[] }) {
+  return (
+    <div className="rounded-xl border border-violet-200/80 bg-violet-50/70 px-3.5 py-2.5 dark:border-violet-900/60 dark:bg-violet-950/20">
+      {items.map((item, index) => (
+        <div
+          key={index}
+          className={`flex items-start gap-2.5 py-1.5 ${
+            index > 0 ? "border-t border-violet-200/60 dark:border-violet-900/40" : ""
+          }`}
+        >
+          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-600/90 text-xs font-bold text-white dark:bg-violet-500">
+            {item.marker}
+          </span>
+          <p className="text-[15px] leading-7 text-slate-800 dark:text-zinc-200">
+            {renderInline(item.text)}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function renderDefaultLine(line: string, lineIndex: number): ReactNode {
   if (!line) return <div key={lineIndex} className="h-1" aria-hidden="true" />;
   if (line.startsWith("### ")) {
@@ -207,44 +244,75 @@ export function MarkdownText({
         }
 
         // 方向卡列表：块内连续的 “1. 【标题】：描述” 行（≥2 行）归组为高亮
-        // 方向卡栈，引导语等普通行保持常规渲染。
-        const segments: Array<
-          { kind: "cards"; cards: DirectionCardItem[] } | { kind: "line"; line: string }
-        > = [];
+        // 方向卡栈；连续的普通编号行（≥2 行）归组为提问/清单面板；其余行
+        // 保持常规渲染。
+        type Segment =
+          | { kind: "cards"; cards: DirectionCardItem[] }
+          | { kind: "numbered"; items: NumberedItem[] }
+          | { kind: "line"; line: string };
+        const segments: Segment[] = [];
         let pendingCards: DirectionCardItem[] = [];
+        let pendingNumbered: NumberedItem[] = [];
         const flushCards = () => {
           if (pendingCards.length > 0) {
             segments.push({ kind: "cards", cards: pendingCards });
             pendingCards = [];
           }
         };
+        const flushNumbered = () => {
+          if (pendingNumbered.length > 0) {
+            segments.push({ kind: "numbered", items: pendingNumbered });
+            pendingNumbered = [];
+          }
+        };
         for (const line of lines) {
           const card = parseDirectionCardLine(line);
           if (card) {
+            flushNumbered();
             pendingCards.push(card);
             continue;
           }
+          const numbered = parseNumberedLine(line);
+          if (numbered) {
+            flushCards();
+            pendingNumbered.push(numbered);
+            continue;
+          }
           flushCards();
+          flushNumbered();
           segments.push({ kind: "line", line });
         }
         flushCards();
+        flushNumbered();
         const hasCardRun = segments.some(
           (segment) => segment.kind === "cards" && segment.cards.length >= 2,
         );
-        if (hasCardRun) {
+        const hasNumberedRun = segments.some(
+          (segment) => segment.kind === "numbered" && segment.items.length >= 2,
+        );
+        if (hasCardRun || hasNumberedRun) {
           return (
             <div key={blockIndex} className="space-y-3">
-              {segments.map((segment, segmentIndex) =>
-                segment.kind === "cards" ? (
-                  <DirectionCardStack
-                    key={segmentIndex}
-                    cards={segment.cards}
-                    onSelectDirection={onSelectDirection}
-                  />
-                ) : (
-                  <Fragment key={segmentIndex}>{renderDefaultLine(segment.line, segmentIndex)}</Fragment>
-                ),
-              )}
+              {segments.map((segment, segmentIndex) => {
+                if (segment.kind === "cards") {
+                  return (
+                    <DirectionCardStack
+                      key={segmentIndex}
+                      cards={segment.cards}
+                      onSelectDirection={onSelectDirection}
+                    />
+                  );
+                }
+                if (segment.kind === "numbered" && segment.items.length >= 2) {
+                  return <NumberedListPanel key={segmentIndex} items={segment.items} />;
+                }
+                const lineSegment = segment as { kind: "line"; line: string };
+                return (
+                  <Fragment key={segmentIndex}>
+                    {renderDefaultLine(lineSegment.line, segmentIndex)}
+                  </Fragment>
+                );
+              })}
             </div>
           );
         }
