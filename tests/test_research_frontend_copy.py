@@ -814,3 +814,32 @@ def test_search_candidate_cards_come_from_real_bundles_and_never_auto_select() -
     assert "真实检索结果" in cards
     # No selection logic inside the card component.
     assert "selectOrchestratorPaper" not in cards
+
+
+def test_research_option_selector_parses_and_submits_choices() -> None:
+    """选择题快速作答：解析 A/B/C 选项组，提交时组合成明确的用户消息。"""
+    selector_source = Path(
+        "frontend/components/research/ResearchOptionSelector.tsx"
+    ).read_text(encoding="utf-8")
+    conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    # 选项解析：A. / A、 / A： / A 端： 连续 ≥2 行归组
+    assert "parseOptionGroups" in selector_source
+    assert "我选 " in selector_source
+    assert "补充说明（可选）" in selector_source
+    assert "提交选择" in selector_source
+    # 仅最后一条是姜姜的消息且含选项组时挂载
+    assert "ResearchOptionSelector" in conversation_source
+
+
+def test_markdown_renders_bracket_headings_and_stage_subheadings() -> None:
+    """【小节标题】整行加粗强调；阶段小标题与 --- 分隔线有独立样式。"""
+    markdown_source = Path("frontend/components/research/MarkdownText.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "bracketHeading" in markdown_source
+    assert "stageHeading" in markdown_source
+    assert "border-slate-200/70 dark:border-zinc-700/70" in markdown_source

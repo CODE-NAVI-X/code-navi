@@ -603,6 +603,29 @@ _NLP_LEARNING_PATTERN = re.compile(
     r"transformer|语言模型|自然语言|\bnlp\b|\bbert\b|大模型|大语言|文本|问答|检索增强",
     re.IGNORECASE,
 )
+_SECURITY_LEARNING_PATTERN = re.compile(
+    r"注入|攻击|漏洞|渗透|防火墙|\bwaf\b|Web安全|网络安全|恶意样本?|\bsql\b|xss|csrf|xxe"
+    r"|越权|命令执行|安全加固|攻防",
+    re.IGNORECASE,
+)
+
+
+def _adaptive_topic_label(content: str, limit: int = 20) -> str:
+    """Return a clean topic label: no mid-token/mid-parenthesis truncation."""
+    label = content.strip()
+    if len(label) <= limit:
+        return label.rstrip("（(，。、；：: ")
+    cut = label[:limit]
+    best = -1
+    for separator in ("，", "。", "、", "；", "：", "（", "(", " ", "）", ")"):
+        pos = cut.rfind(separator)
+        if pos >= 8:
+            best = max(best, pos)
+    label = cut[:best] if best >= 8 else cut
+    # 去掉因截断而失去配对的末尾括号
+    while label and label[-1] in "（(":
+        label = label[:-1].rstrip()
+    return label.rstrip("，。、；：: ")
 
 
 def generate_dynamic_direction_cards(
@@ -620,6 +643,7 @@ def generate_dynamic_direction_cards(
     is_gnn = bool(_GRAPH_LEARNING_PATTERN.search(content_raw))
     is_cv = bool(_VISION_LEARNING_PATTERN.search(content_raw))
     is_nlp = bool(_NLP_LEARNING_PATTERN.search(content_raw))
+    is_security = bool(_SECURITY_LEARNING_PATTERN.search(content_raw))
 
     if is_gnn:
         return [
@@ -735,14 +759,52 @@ def generate_dynamic_direction_cards(
                 is_recommended=False,
             ),
         ]
+    elif is_security:
+        return [
+            DirectionCard(
+                id="dir-sec-1",
+                title="SQL 注入检测基线复现与评测",
+                description="在公开注入检测数据集上复现传统机器学习与深度学习检测基线并公平对比。",
+                prerequisite_gap="需掌握文本向量化与分类评估流程",
+                is_recommended=True,
+            ),
+            DirectionCard(
+                id="dir-sec-2",
+                title="基于语法解析的注入语义检测",
+                description="利用 SQL/命令语法树与语义特征识别注入变体，评估对混淆样本的鲁棒性。",
+                prerequisite_gap="需了解语法解析树与特征工程方法",
+                is_recommended=False,
+            ),
+            DirectionCard(
+                id="dir-sec-3",
+                title="Web 请求异常检测的无监督方法",
+                description="仅用正常流量建模，把偏离正常分布的请求识别为可疑注入。",
+                prerequisite_gap="需熟悉无监督异常检测与阈值标定",
+                is_recommended=False,
+            ),
+            DirectionCard(
+                id="dir-sec-4",
+                title="命令注入过滤机制的有效性评测",
+                description="系统评测转义、白名单与参数化等防御在不同输入下的真实有效性。",
+                prerequisite_gap="需了解命令注入原理并搭建隔离测试环境",
+                is_recommended=False,
+            ),
+            DirectionCard(
+                id="dir-sec-5",
+                title="大模型时代的注入防御边界探究",
+                description="研究提示注入与传统注入的异同，评测预训练模型场景下的防御思路。",
+                prerequisite_gap="需了解提示注入与大模型应用边界",
+                is_recommended=False,
+            ),
+        ]
     else:
         # General adaptive directions based on user's text
-        base_title = content_raw[:15]
+        base_title = _adaptive_topic_label(content_raw)
         return [
             DirectionCard(
                 id="dir-adp-1",
                 title=f"{base_title} 基础算法复现与评测",
-                description=f"围绕「{content_raw[:30]}」构建基础模型并完成标准评测。",
+                description=f"围绕「{base_title}」构建基础模型并完成标准评测。",
                 prerequisite_gap="需熟悉相关基础理论与 Python 深度学习框架",
                 is_recommended=True,
             ),
@@ -806,6 +868,11 @@ class ResearchConversationOrchestrator:
                 content = msg.get("content")
                 if content and isinstance(content, str):
                     evidence.append(content)
+        # 会话中已确认的研究主题也是可追溯状态：模型引用"你已确认的研究方向
+        # = <topic>"属于事实陈述，不应被归因校验当作编造选择拦截。
+        profile_topic = ((conv.profile_data or {}) if conv else {}).get("topic")
+        if profile_topic and isinstance(profile_topic, str) and profile_topic.strip():
+            evidence.append(f"已确认研究主题：{profile_topic.strip()}")
         return evidence
 
     def get_or_create_state(

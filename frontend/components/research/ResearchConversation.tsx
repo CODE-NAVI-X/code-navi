@@ -42,6 +42,7 @@ import {
 } from "@/lib/api/research";
 
 import { MarkdownText } from "./MarkdownText";
+import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
 import { ResearchStageProgress } from "./ResearchStageProgress";
 import { JiangJiangAvatar, UserAvatar } from "./JiangJiangAvatar";
@@ -587,6 +588,20 @@ export function ResearchConversation() {
               }
             />
           )}
+
+          {/* 选择题快速作答：最后一条是姜姜的消息且含 A/B/C 选项组时显示 */}
+          {(() => {
+            const allMessages = conversation?.messages ?? [];
+            const last = allMessages[allMessages.length - 1];
+            if (!last || last.role !== "assistant") return null;
+            return (
+              <ResearchOptionSelector
+                content={last.content}
+                disabled={disabled}
+                onSend={(message) => void handleSend(message)}
+              />
+            );
+          })()}
 
           {/* Exception 2: Candidate Paper Card (Shown when paper exists) */}
           {papers && (papers.current_paper || papers.paper_history.length > 0) && (

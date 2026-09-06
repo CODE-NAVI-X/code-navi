@@ -526,6 +526,15 @@ _ATTRIBUTED_DECORATION_PATTERN = re.compile(
     r"[「」『』“”‘’《》【】（）()\"'\s]+|^(?:的)?方向[：:]|(?:这个|该|这一|以上)方向$"
 )
 
+# 会话既有状态的通用指代（如"你已确认的研究方向与通用技术概览"）：
+# 这类捕获剥离通用名词后为空，说明模型只是在引用会话状态，而不是
+# 把某个具体选择安到用户头上——放行；编造的具体标题剥离后仍有残留，照拦。
+_GENERIC_STATE_NOUNS_PATTERN = re.compile(
+    r"你已?确认的|你已?选定的|你已?选择的|已确认的|既定的|当前的|这个|该|的|与|和|及"
+    r"|研究方向|通用技术概览|技术概览|研究计划|计划框架|研究目标|科研画像|画像"
+    r"|学习端记录|学习记录|学习内容|来源范围|研究主题|主题|课题|阶段|内容",
+)
+
 
 def _strip_attribution_decorations(value: str) -> str:
     stripped = value.strip()
@@ -897,6 +906,9 @@ def _contains_unsupported_user_attribution(
         # is recognized while an invented title is still rejected.
         attributed = _strip_attribution_decorations(attributed)
         if not attributed:
+            continue
+        # 纯通用会话状态指代（剥离通用名词后为空）不构成编造选择。
+        if not _GENERIC_STATE_NOUNS_PATTERN.sub("", attributed).strip():
             continue
 
         # Check if the attributed value appears in user evidence (substring match)
