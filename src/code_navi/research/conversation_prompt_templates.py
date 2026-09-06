@@ -484,12 +484,12 @@ def _extract_evidence_text(evidence_context: Sequence[str] | str | None) -> str:
     return " \n ".join(str(item) for item in evidence_context if item)
 
 
-def _extract_user_asserted_evidence_text(
+def _extract_user_asserted_evidence_items(
     evidence_context: Sequence[str] | str | None,
-) -> str:
-    """Extract only user-asserted text from evidence context, excluding learning records."""
+) -> list[str]:
+    """Return only user-asserted evidence items, excluding learning records."""
     if evidence_context is None:
-        return ""
+        return []
     if isinstance(evidence_context, str):
         items = [evidence_context]
     else:
@@ -510,7 +510,30 @@ def _extract_user_asserted_evidence_text(
         ):
             continue
         user_items.append(s)
-    return " \n ".join(user_items)
+    return user_items
+
+
+def _extract_user_asserted_evidence_text(
+    evidence_context: Sequence[str] | str | None,
+) -> str:
+    """Extract only user-asserted text from evidence context, excluding learning records."""
+    return " \n ".join(_extract_user_asserted_evidence_items(evidence_context))
+
+
+# 引号/括号与方向连接词只是模型的修辞装饰；剥离后再比对用户原词，
+# 既不误拦合法回声，也不放过任何编造的选择值。
+_ATTRIBUTED_DECORATION_PATTERN = re.compile(
+    r"[「」『』“”‘’《》【】（）()\"'\s]+|^(?:的)?方向[：:]|(?:这个|该|这一|以上)方向$"
+)
+
+
+def _strip_attribution_decorations(value: str) -> str:
+    stripped = value.strip()
+    while True:
+        updated = _ATTRIBUTED_DECORATION_PATTERN.sub("", stripped).strip()
+        if updated == stripped:
+            return stripped
+        stripped = updated
 
 
 def _contains_ungrounded_reproduction_success_claim(
@@ -869,6 +892,13 @@ def _contains_unsupported_user_attribution(
         if not attributed:
             continue
 
+        # Quote marks, brackets, and 方向 connectors are rhetoric around the
+        # choice value; strip them so a verbatim echo of the user's own words
+        # is recognized while an invented title is still rejected.
+        attributed = _strip_attribution_decorations(attributed)
+        if not attributed:
+            continue
+
         # Check if the attributed value appears in user evidence (substring match)
         if attributed and attributed not in evidence_text:
             return True, attributed
@@ -997,7 +1027,11 @@ def build_welcome_prompt(
         "3. 若上方给出了 5 个推荐研究方向，必须逐一清晰展示每个卡片的完整标题与描述；\n"
         "   若推荐研究方向为空（空态），不得虚构方向卡，直接以固定开场白的追问结束；\n"
         "4. 鼓励同学从这 5 个卡片中选择一个感兴趣的方向，或者自由输入自己想做的其他方向；\n"
-        "5. 事实边界红线与严格学习记录模式约束（绝对遵守）：\n"
+        "5. 方向卡片只是可选项展示：用户明确选择前，"
+        "严禁把任何方向卡片说成用户已选（严禁出现'你已选择'、'你选定了'、'你已确认'、"
+        "'你的方向是'等表述，即使学习内容与某个卡片高度相关也不例外）；\n"
+        "   引用用户已确认的选择时，必须逐字使用用户输入中的原词，不得改写、增删或加前后缀；\n"
+        "6. 事实边界红线与严格学习记录模式约束（绝对遵守）：\n"
         "   - 提及学习端输入时，必须严格表述为‘学习端记录显示你已学习...，当前进度记录为...’；\n"
         "   - 严禁将学习记录改写为‘你已经完成了...’、‘你已掌握...’、‘你在学习端打下了扎实的基础’、"
         "‘说明你已经对...有了系统/深入理解’、‘具备了开展科研的能力’等任何主谓判断或能力肯定；\n"

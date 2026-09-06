@@ -71,6 +71,14 @@ function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "发生了未知错误，请重试。";
 }
 
+/**
+ * 点击方向卡时发送明确的选择陈述，而不是裸标题：
+ * 这条消息会成为用户历史里可追溯的“已确认选择”，姜姜后续基于它继续。
+ */
+export function buildDirectionSelectionMessage(title: string): string {
+  return `我选择的研究方向是：${title}`;
+}
+
 export function ResearchConversation() {
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [orchestratorState, setOrchestratorState] = useState<OrchestratorStateResponse | null>(null);
@@ -538,7 +546,12 @@ export function ResearchConversation() {
                     {isUser ? (
                       <p className="whitespace-pre-wrap">{message.content}</p>
                     ) : (
-                      <MarkdownText content={message.content} />
+                      <MarkdownText
+                        content={message.content}
+                        onSelectDirection={(title) =>
+                          void handleSend(buildDirectionSelectionMessage(title))
+                        }
+                      />
                     )}
                   </div>
                 </div>
@@ -558,7 +571,7 @@ export function ResearchConversation() {
             <DirectionCardsBox
               cards={directionCards}
               disabled={disabled}
-              onSelectDirection={(dir) => void handleSend(dir)}
+              onSelectDirection={(dir) => void handleSend(buildDirectionSelectionMessage(dir))}
             />
           )}
 
