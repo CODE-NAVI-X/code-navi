@@ -8,49 +8,133 @@ import { ListChecks, Send } from "lucide-react";
  * 连续 ≥2 个选项归为一组。
  * 返回按出现顺序排列的选项组；没有选项组时返回空数组。
  */
-export function parseOptionGroups(
-  content: string,
-): { title?: string; options: { key: string; text: string }[] }[] {
+export interface ParsedOption {
+  key: string;
+  text: string;
+  fillValue?: string;
+}
+
+export interface ParsedOptionGroup {
+  title?: string;
+  options: ParsedOption[];
+}
+
+/**
+ * 解析姜姜回复中真正需要用户作答的选项：
+ * 1. 明确的字母标号选项（A. / · A. / - **A.** / A、 / A： 等）；
+ * 2. 决策分支（如“· 如果纳入：...” / “· 如果跳过：...”等待拍板事项）；
+ * 3. 计划/执行阶段的确认提问（如“四、计划确认：如果你确认无误...对计划有任何调整需求...”）；
+ * 4. 严格排除正文中的普通数字执行步骤（1. / 2. / 3.）与限制说明条目。
+ */
+export function parseOptionGroups(content: string): ParsedOptionGroup[] {
   const lines = content
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  // 匹配行首可选的列表符号（·、•、-、*、+、数字序号等）、可选加粗、选项标号（A-Z 或 1-9）、分隔符及内容
-  const OPTION_LINE =
-    /^(?:[-*•·+]\s*|(?:\d+[.、)）]\s*))?(?:\*\*)?([A-Za-z]|[0-9]+)(?:\*\*)?\s*(?:端)?[.、：:\s]\s*(.+)$/;
+  const groups: ParsedOptionGroup[] = [];
 
-  const groups: { title?: string; options: { key: string; text: string }[] }[] = [];
-  let pending: { key: string; text: string }[] = [];
-  let pendingTitle: string | undefined = undefined;
+  // --- 模式 1：明确字母标号选择题（严格限定为英文字母 A-G，严禁匹配普通纯数字序号） ---
+  const LETTER_OPTION_LINE =
+    /^(?:[-*•·+]\s*)?(?:\*\*)?([A-Ga-g])(?:\*\*)?\s*(?:端)?[.、：:\s]\s*(.+)$/;
+
+  let pendingLetter: ParsedOption[] = [];
+  let pendingLetterTitle: string | undefined = undefined;
   let lastNonOptionLine: string | undefined = undefined;
 
-  const flush = () => {
-    if (pending.length >= 2) {
-      groups.push({ title: pendingTitle, options: pending });
+  const flushLetter = () => {
+    if (pendingLetter.length >= 2) {
+      groups.push({ title: pendingLetterTitle, options: pendingLetter });
     }
-    pending = [];
-    pendingTitle = undefined;
+    pendingLetter = [];
+    pendingLetterTitle = undefined;
   };
 
   for (const line of lines) {
-    const match = OPTION_LINE.exec(line);
+    const match = LETTER_OPTION_LINE.exec(line);
     if (match) {
-      const rawKey = match[1].trim();
+      const rawKey = match[1].trim().toUpperCase();
       const rawText = match[2].trim().replace(/^\*\*(.*?)\*\*/, "$1");
-      // 仅当 key 是单个字母或 1-2 位数字时视为有效选项标号
-      if (/^[A-Za-z]$/.test(rawKey) || /^\d{1,2}$/.test(rawKey)) {
-        if (pending.length === 0 && lastNonOptionLine) {
-          pendingTitle = lastNonOptionLine.replace(/^[#*·•\s-]+/, "").trim();
+      if (/^[A-G]$/.test(rawKey)) {
+        if (pendingLetter.length === 0 && lastNonOptionLine) {
+          pendingLetterTitle = lastNonOptionLine.replace(/^[#*·•\s->]+/, "").trim();
         }
-        pending.push({ key: rawKey.toUpperCase(), text: rawText });
+        pendingLetter.push({
+          key: rawKey,
+          text: rawText,
+          fillValue: `我选 ${rawKey}：${rawText}`,
+        });
         continue;
       }
     }
-    flush();
+    flushLetter();
     lastNonOptionLine = line;
   }
-  flush();
+  flushLetter();
+
+  // --- 模式 2：决策拍板分支（图一场景：如“如果纳入：...” / “如果跳过：...”等） ---
+  const BRANCH_LINE =
+    /^(?:[-*•·+]\s*)?(?:\*\*)?(如果(?:纳入|跳过|保留|暂缓|增加|减少|采用|执行|同意|不同意|是|否)|(?:方案|选项|路径|分支)[一二三四1234ABC]|纳入|跳过|保留|暂缓)(?:\*\*)?[：:]\s*(.+)$/;
+
+  let pendingBranch: ParsedOption[] = [];
+  let pendingBranchTitle: string | undefined = undefined;
+  let lastNonBranchLine: string | undefined = undefined;
+
+  const flushBranch = () => {
+    if (pendingBranch.length >= 2) {
+      groups.push({ title: pendingBranchTitle || "拍板决策事项", options: pendingBranch });
+    }
+    pendingBranch = [];
+    pendingBranchTitle = undefined;
+  };
+
+  for (const line of lines) {
+    const branchMatch = BRANCH_LINE.exec(line);
+    if (branchMatch) {
+      const branchTag = branchMatch[1].trim();
+      const branchDesc = branchMatch[2].trim();
+      if (pendingBranch.length === 0 && lastNonBranchLine) {
+        pendingBranchTitle = lastNonBranchLine.replace(/^[#*·•\s->]+/, "").trim();
+      }
+      const charKey = String.fromCharCode(65 + pendingBranch.length); // A, B, C...
+      pendingBranch.push({
+        key: charKey,
+        text: `${branchTag}：${branchDesc}`,
+        fillValue: `我选择【${branchTag}】：${branchDesc}`,
+      });
+      continue;
+    }
+    flushBranch();
+    lastNonBranchLine = line;
+  }
+  flushBranch();
+
+  // --- 模式 3：计划确认 / 阶段执行确认（图二场景：末尾提出计划确认无误后进入执行） ---
+  if (groups.length === 0) {
+    const tailContent = content.slice(-600);
+    const isPlanConfirmation =
+      /(?:计划确认|需要你确认的事项|确认计划|执行确认|方案确认)/i.test(tailContent) &&
+      /(?:确认无误.*(?:进入|开始)|对计划有任何调整需求.*开始执行|如果你确认|确认后，我们开始执行)/i.test(tailContent);
+
+    if (isPlanConfirmation) {
+      groups.push({
+        title: "计划执行确认",
+        options: [
+          {
+            key: "A",
+            text: "确认无误，正式开始执行",
+            fillValue: "计划已经确认无误，我们可以正式进入 Day 1 的执行阶段！",
+          },
+          {
+            key: "B",
+            text: "我需要微调计划（时间/范围/环境）",
+            fillValue: "我对计划有一些微调需求：",
+          },
+        ],
+      });
+    }
+  }
+
   return groups;
 }
 
@@ -62,7 +146,7 @@ interface ResearchOptionSelectorProps {
 }
 
 /**
- * 姜姜提出选择题时，把选项渲染为可点选的卡片：
+ * 姜姜提出选择题或拍板/确认事项时，把选项渲染为可点选的卡片：
  * 1. 点击选项直接将回答格式化填入输入框（支持用户继续编辑或回车发送）；
  * 2. 也支持在卡片内点选并点击右下角“提交选择”直接发送。
  */
@@ -83,12 +167,13 @@ export function ResearchOptionSelector({
     (_, index) => hasSelection(index) || (supplements[index] ?? "").trim(),
   );
 
-  const handleSelectOption = (groupIndex: number, option: { key: string; text: string }) => {
+  const handleSelectOption = (groupIndex: number, option: ParsedOption) => {
     const nextKey = selected[groupIndex] === option.key ? "" : option.key;
     setSelected((prev) => ({ ...prev, [groupIndex]: nextKey }));
     if (nextKey && onFillInput) {
       const supplement = (supplements[groupIndex] ?? "").trim();
-      const textToFill = `我选 ${option.key}：${option.text}${supplement ? `（补充：${supplement}）` : ""}`;
+      const baseFill = option.fillValue || `我选 ${option.key}：${option.text}`;
+      const textToFill = `${baseFill}${supplement ? `（补充：${supplement}）` : ""}`;
       onFillInput(textToFill);
     }
   };
@@ -99,7 +184,8 @@ export function ResearchOptionSelector({
       const chosen = group.options.find((option) => option.key === selected[index]);
       const supplement = (supplements[index] ?? "").trim();
       if (chosen) {
-        lines.push(`我选 ${chosen.key}：${chosen.text}${supplement ? `（补充：${supplement}）` : ""}`);
+        const baseFill = chosen.fillValue || `我选 ${chosen.key}：${chosen.text}`;
+        lines.push(`${baseFill}${supplement ? `（补充：${supplement}）` : ""}`);
       } else if (supplement) {
         lines.push(`第 ${index + 1} 组补充：${supplement}`);
       }
