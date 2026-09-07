@@ -825,8 +825,11 @@ def test_research_option_selector_parses_and_submits_choices() -> None:
         encoding="utf-8"
     )
 
-    # 选项解析：A. / A、 / A： / A 端： 连续 ≥2 行归组
+    # 选项解析：A. / A、 / A： / A 端： 连续 ≥2 行归组；支持决策分支与计划确认
     assert "parseOptionGroups" in selector_source
+    assert "ParsedOptionGroup" in selector_source
+    assert "BRANCH_LINE" in selector_source
+    assert "计划执行确认" in selector_source
     assert "我选 " in selector_source
     assert "补充说明（可选）" in selector_source
     assert "提交选择" in selector_source
