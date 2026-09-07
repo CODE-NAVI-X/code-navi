@@ -88,6 +88,7 @@ export function ResearchConversation() {
   const [conversation, setConversation] = useState<ResearchConversationResponse | null>(null);
   const [orchestratorState, setOrchestratorState] = useState<OrchestratorStateResponse | null>(null);
   const [directionCards, setDirectionCards] = useState<DirectionCard[]>([]);
+  const [directionSelectedByUser, setDirectionSelectedByUser] = useState(false);
   const [searchCandidates, setSearchCandidates] = useState<AcademicPaperResult[]>([]);
   const [papers, setPapers] = useState<OrchestratorPapersResponse | null>(null);
   const [phase, setPhase] = useState<Phase>("initializing");
@@ -426,8 +427,19 @@ export function ResearchConversation() {
 
   const currentStage = orchestratorState?.current_stage || "research_need";
   const completedStages = orchestratorState?.completed_stages || [];
+  const hasConfirmedDirection = Boolean(
+    directionSelectedByUser ||
+      (orchestratorState?.direction_history?.length ?? 0) > 0 ||
+      orchestratorState?.subtasks?.need_defined ||
+      (conversation?.messages ?? []).some(
+        (m) =>
+          m.role === "user" &&
+          (m.content.includes("我选择的研究方向是：") ||
+            m.content.includes("我选")),
+      ),
+  );
   const showDirectionCards =
-    currentStage === "research_need" && directionCards.length > 0;
+    currentStage === "research_need" && !hasConfirmedDirection && directionCards.length > 0;
   const isThinking = phase === "thinking";
   const disabled = phase !== "idle";
 
@@ -579,7 +591,10 @@ export function ResearchConversation() {
             <DirectionCardsBox
               cards={directionCards}
               disabled={disabled}
-              onSelectDirection={(dir) => void handleSend(buildDirectionSelectionMessage(dir))}
+              onSelectDirection={(dir) => {
+                setDirectionSelectedByUser(true);
+                void handleSend(buildDirectionSelectionMessage(dir));
+              }}
             />
           )}
 
@@ -606,6 +621,7 @@ export function ResearchConversation() {
                 content={last.content}
                 disabled={disabled}
                 onSend={(message) => void handleSend(message)}
+                onFillInput={(text) => setDraft(text)}
               />
             );
           })()}
@@ -675,46 +691,65 @@ export function ResearchConversation() {
         <div className="mx-auto max-w-4xl">
           {/* Quick Action Pills for Conversation Progression */}
           <div className="mb-2.5 flex flex-wrap gap-1.5">
-            {currentStage === "research_need" && (
-              <>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => void handleSend("我已明确研究需求，就这样，可以进入下一步。")}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
-                >
-                  确认需求并进入计划
-                </button>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => void handleSend("这个方向难吗？有什么难点？")}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
-                >
-                  询问方向难点
-                </button>
-              </>
-            )}
-            {currentStage === "research_plan" && (
-              <>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => void handleSend("研究计划没问题，可以继续进入研究开展。")}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
-                >
-                  确认计划并开展研究
-                </button>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => void handleSend("我该先学什么？有什么补学建议？")}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
-                >
-                  获取补学建议
-                </button>
-              </>
-            )}
+            {currentStage === "research_need" && (() => {
+              const canConfirmNeed = Boolean(orchestratorState?.subtasks?.need_defined);
+              return (
+                <>
+                  <button
+                    type="button"
+                    disabled={disabled || !canConfirmNeed}
+                    title={canConfirmNeed ? undefined : "请先在对话中与姜姜明确研究课题与需求后再进入计划"}
+                    onClick={() => void handleSend("我已明确研究需求，就这样，可以进入下一步。")}
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                      canConfirmNeed
+                        ? "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                        : "border-slate-200/50 bg-slate-100/50 text-slate-400 cursor-not-allowed opacity-50 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-500"
+                    }`}
+                  >
+                    确认需求并进入计划
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => void handleSend("这个方向难吗？有什么难点？")}
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
+                  >
+                    询问方向难点
+                  </button>
+                </>
+              );
+            })()}
+            {currentStage === "research_plan" && (() => {
+              const canConfirmPlan = Boolean(
+                orchestratorState?.subtasks?.plan_generated &&
+                  orchestratorState?.subtasks?.profile_ready,
+              );
+              return (
+                <>
+                  <button
+                    type="button"
+                    disabled={disabled || !canConfirmPlan}
+                    title={canConfirmPlan ? undefined : "请等待画像与研究计划在对话中生成完毕后再确认"}
+                    onClick={() => void handleSend("研究计划没问题，可以继续进入研究开展。")}
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                      canConfirmPlan
+                        ? "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                        : "border-slate-200/50 bg-slate-100/50 text-slate-400 cursor-not-allowed opacity-50 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-500"
+                    }`}
+                  >
+                    确认计划并开展研究
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => void handleSend("我该先学什么？有什么补学建议？")}
+                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
+                  >
+                    获取补学建议
+                  </button>
+                </>
+              );
+            })()}
             {currentStage === "research_execution" && (
               <>
                 <button

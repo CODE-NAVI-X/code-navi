@@ -55,6 +55,7 @@ from .conversation_prompt_templates import (
     build_stage_transition_prompt,
     build_welcome_prompt,
     get_source_scope_prefix,
+    remediate_hardware_assertions,
     validate_jiangjiang_output,
 )
 from .conversation_schemas import CreateConversationEvidenceBundleRequest
@@ -1675,6 +1676,18 @@ class ResearchConversationOrchestrator:
                 learning_record_mode=False,
                 exempt_hardware_check=is_exp_tool,
             )
+            if not valid and val_reason and "hardware-feasibility" in val_reason:
+                remediated_content = remediate_hardware_assertions(reply_content)
+                re_valid, re_reason = validate_jiangjiang_output(
+                    remediated_content,
+                    evidence_context=evidence_ctx,
+                    learning_record_mode=False,
+                    exempt_hardware_check=is_exp_tool,
+                )
+                if re_valid:
+                    reply_content = remediated_content
+                    valid = True
+                    val_reason = None
             if not valid:
                 err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
                 state_model.last_status = "failed"
@@ -1777,6 +1790,18 @@ class ResearchConversationOrchestrator:
             learning_record_mode=is_learning_mode,
             exempt_hardware_check=is_hw_exempt,
         )
+        if not valid and val_reason and "hardware-feasibility" in val_reason:
+            remediated_content = remediate_hardware_assertions(reply_content)
+            re_valid, re_reason = validate_jiangjiang_output(
+                remediated_content,
+                evidence_context=evidence_ctx,
+                learning_record_mode=is_learning_mode,
+                exempt_hardware_check=is_hw_exempt,
+            )
+            if re_valid:
+                reply_content = remediated_content
+                valid = True
+                val_reason = None
         if not valid:
             err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
             state_model.last_status = "failed"
@@ -2114,7 +2139,10 @@ class ResearchConversationOrchestrator:
             "template_name": template_name,
             "plan_layer": tmpl.get("plan_layer"),
             "is_learning_record_mode": is_learning_record_mode,
-            "exempt_hardware_check": tmpl.get("exempt_hardware_check", False),
+            "exempt_hardware_check": (
+                tmpl.get("exempt_hardware_check", False)
+                or (current_stage == "research_need")
+            ),
         }
 
     def _fetch_passive_tool_material(

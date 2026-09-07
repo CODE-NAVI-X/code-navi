@@ -830,8 +830,16 @@ def test_research_option_selector_parses_and_submits_choices() -> None:
     assert "我选 " in selector_source
     assert "补充说明（可选）" in selector_source
     assert "提交选择" in selector_source
-    # 仅最后一条是姜姜的消息且含选项组时挂载
+    assert "填入输入框" in selector_source
+    assert "onFillInput" in selector_source
+    # 仅最后一条是姜姜的消息且含选项组时挂载，且支持输入框自动填充
     assert "ResearchOptionSelector" in conversation_source
+    assert "onFillInput={(text) => setDraft(text)}" in conversation_source
+    # 动态探索方向在定方向后自动隐藏
+    assert "hasConfirmedDirection" in conversation_source
+    # 推进按钮在信息未完成前变灰防呆
+    assert "canConfirmNeed" in conversation_source
+    assert "canConfirmPlan" in conversation_source
 
 
 def test_markdown_renders_bracket_headings_and_stage_subheadings() -> None:

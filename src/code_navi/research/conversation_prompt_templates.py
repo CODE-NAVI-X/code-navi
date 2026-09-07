@@ -61,9 +61,27 @@ _FORBIDDEN_PHRASES = [
 _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN = re.compile(
     r"(?:显存|GPU|算力|设备|配置|CPU|RTX\s*\d+|这个条件|这个配置|当前条件|你的设备)"
     r"[^。！？!?\n]{0,80}"
-    r"(?:完全够用|够用|完全可以|肯定可以|一定可以|绝对可以|毫无压力|直接训练即可|可行|能跑|可以运行)",
+    r"(?:"
+    r"(?:绝对|必定|肯定|一定|完全|百分之百|100%|毫无疑问)(?:可以|可行|能跑|够用|支持)|"
+    r"完全够用|绝对够用|是够用的|够用|完全可以|肯定可以|一定可以|绝对可以|绝对能跑|毫无压力|直接训练即可|百分之百可行|100%可行"
+    r")",
     re.IGNORECASE,
 )
+
+
+def remediate_hardware_assertions(text: str) -> str:
+    """Safely append scientific uncertainty hedges to lines making absolute hardware
+    feasibility claims, allowing exploratory conversation to flow without disruptive crashes.
+    """
+    lines = text.split("\n")
+    remediated = []
+    for line in lines:
+        if _ABSOLUTE_HARDWARE_FEASIBILITY_PATTERN.search(line):
+            if not _HARDWARE_UNCERTAINTY_PATTERN.search(line):
+                hedge = "（注：具体算力消耗与能否稳定运行仍需在选定论文后以实际环境测试为准。）"
+                line = line.rstrip() + hedge
+        remediated.append(line)
+    return "\n".join(remediated)
 
 _QUALIFIED_HARDWARE_CONTEXT_PATTERN = re.compile(
     r"(?:很多|部分|某些)[^。！？!?\n]{0,40}(?:数据集|任务|场景)",

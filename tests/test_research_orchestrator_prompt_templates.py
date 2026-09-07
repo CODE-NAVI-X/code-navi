@@ -1055,3 +1055,28 @@ def test_validate_jiangjiang_output_hardware_exemption_mode() -> None:
     assert valid_hedged is True
     assert reason_hedged is None
 
+
+def test_remediate_hardware_assertions_heals_unhedged_claims() -> None:
+    from code_navi.research.conversation_prompt_templates import (
+        remediate_hardware_assertions,
+    )
+
+    unhedged = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "你的设备配置完全够用，毫无压力，直接训练即可。"
+    )
+    # 1. Originally rejected
+    valid_orig, reason_orig = validate_jiangjiang_output(unhedged, exempt_hardware_check=False)
+    assert valid_orig is False
+    assert reason_orig is not None
+
+    # 2. Auto-remediated with uncertainty hedge
+    healed = remediate_hardware_assertions(unhedged)
+    assert "实际环境测试为准" in healed
+
+    # 3. Healed text passes validation
+    valid_healed, reason_healed = validate_jiangjiang_output(healed, exempt_hardware_check=False)
+    assert valid_healed is True
+    assert reason_healed is None
+
