@@ -1321,6 +1321,11 @@ class FakeSearchService:
             raise self.error
         return self.bundle
 
+    def list_bundles(self, conversation_id, db):
+        if self.bundle is not None:
+            return [self.bundle]
+        return getattr(self, "saved_bundles", [])
+
 
 def _make_evidence_bundle(conv_id: str, papers: list) -> ConversationEvidenceBundle:
     return ConversationEvidenceBundle(
@@ -1790,5 +1795,123 @@ def test_passive_experiment_design_draft_records_preliminary_and_advances_on_con
     # Now in advancing state (可推进状态)
     assert resp2.state.subtasks.experiment_designed is True
     assert "具体实验方案" in resp2.reply_message.content
+
+
+def test_authorization_or_confirm_search_auto_resolves_query_and_executes(
+    db_session,
+) -> None:
+    """3. 用户输入'授权检索'，系统从历史上下文解析真实检索词并立即执行检索，主动回复论文候选。"""
+    paper = _real_paper(PAPER_TITLE, PAPER_URL)
+    search_service = FakeSearchService(
+        bundle=_make_evidence_bundle("conv-search-auth-1", [paper])
+    )
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-auth-1"
+    guidance_content = (
+        "【建议检索词】\n- `SQL injection detection CNN TextCNN`\n"
+        "【支持学术数据源】OpenAlex"
+    )
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "注入攻击"},
+            messages_data=[
+                {
+                    "role": "assistant",
+                    "content": guidance_content,
+                    "template": "search_guidance",
+                }
+            ],
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="授权检索"),
+        db_session,
+    )
+    assert len(search_service.calls) == 1
+    assert "SQL injection detection CNN TextCNN" in search_service.calls[0]
+    assert PAPER_TITLE in resp.reply_message.content
+    assert PAPER_URL in resp.reply_message.content
+    assert "尚未生成" not in resp.reply_message.content
+    assert "请稍候" not in resp.reply_message.content
+
+
+def test_query_status_inquiry_returns_existing_bundle_verbatim(db_session) -> None:
+    """4. 用户询问'告知我结果'，系统主动返回已有检索结果，不输出'尚未生成请继续等待'。"""
+    paper = _real_paper(PAPER_TITLE, PAPER_URL)
+    search_service = FakeSearchService()
+    bundle = _make_evidence_bundle("conv-search-status-1", [paper])
+    search_service.saved_bundles = [bundle]
+
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-status-1"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "SQL injection detection"},
+            messages_data=[],
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="告知我结果"),
+        db_session,
+    )
+    assert PAPER_TITLE in resp.reply_message.content
+    assert "检索结果已就绪" in resp.reply_message.content
+    assert "尚未生成" not in resp.reply_message.content
+
+
+def test_search_request_in_research_plan_advances_stage(db_session) -> None:
+    """5. research_plan 阶段计划生成后，用户回复授权检索，直接推进到 execution 并执行检索。"""
+    paper = _real_paper(PAPER_TITLE, PAPER_URL)
+    search_service = FakeSearchService(
+        bundle=_make_evidence_bundle("conv-search-plan-1", [paper])
+    )
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-search-plan-1"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "SQL 注入检测", "methods": ["CNN", "TextCNN"]},
+            messages_data=[
+                {
+                    "role": "assistant",
+                    "content": "已为你制定研究计划。\n关键词：SQL injection detection CNN",
+                    "template": "profile_and_plan",
+                }
+            ],
+        )
+    )
+    state = db_session.get(ResearchOrchestratorStateModel, conv_id)
+    if not state:
+        state = ResearchOrchestratorStateModel(
+            conversation_id=conv_id,
+            current_stage="research_plan",
+            subtasks={"need_defined": True, "profile_ready": False, "plan_generated": True},
+            completed_stages=["research_need"],
+        )
+        db_session.add(state)
+        db_session.commit()
+
+    resp = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="授权检索"),
+        db_session,
+    )
+    assert resp.state.current_stage == "research_execution"
+    assert len(search_service.calls) == 1
+    assert PAPER_TITLE in resp.reply_message.content
 
 

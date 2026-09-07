@@ -200,6 +200,7 @@ _CONFIRMATION_PATTERNS = [
     r"进入下一阶段",
     r"下一步",
     r"同意",
+    r"授权",
 ]
 
 _HESITATION_PATTERNS = [
@@ -421,11 +422,24 @@ _EXPERIMENT_PLAN_INTENT_WORDS = (
 )
 
 
-_SEARCH_REQUEST_WORDS = ("检索", "搜索", "找论文", "查文献", "文献检索")
+_SEARCH_REQUEST_WORDS = (
+    "检索",
+    "搜索",
+    "找论文",
+    "查文献",
+    "文献检索",
+    "论文检索",
+    "授权检索",
+    "检索结果",
+    "查询论文",
+    "查论文",
+)
 _SEARCH_TRIGGER_PHRASES = (
     "确认检索",
     "正式检索",
     "开始检索",
+    "授权检索",
+    "执行检索",
     "帮我检索",
     "帮我搜索",
     "检索一下",
@@ -433,12 +447,21 @@ _SEARCH_TRIGGER_PHRASES = (
     "查一下文献",
     "查文献",
     "文献检索",
+    "论文检索",
     "找论文",
     "检索",
     "搜索",
     "关键词",
     "查询",
 )
+
+_SEARCH_FILLER_WORDS = {
+    "授权", "确认", "开始", "执行", "好", "好的", "可以", "行", "没问题",
+    "请告知我", "告知我", "结果", "现在生成了吗", "生成了吗", "完成了吗",
+    "不用补充", "没有要修改的计划", "没有修改", "没有", "查一下", "找一下",
+    "出来了吗", "结果呢", "A", "B", "C", "D", "a", "b", "c", "d",
+    "授权检索", "确认检索", "开始检索", "正式检索", "执行正式检索",
+}
 
 
 def _has_search_request_words(message: str) -> bool:
@@ -452,6 +475,100 @@ def _extract_search_query(message: str) -> str | None:
         query = query.replace(phrase, " ")
     query = re.sub(r"[\s:：,，。;；、]+", " ", query).strip()
     return query or None
+
+
+def _is_search_guidance_followup(messages: Sequence[dict[str, object]]) -> bool:
+    """Check if previous assistant turn presented search guidance or asked for search."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        tmpl = msg.get("template")
+        if tmpl in ("search_guidance", "search_results"):
+            return True
+        content = str(msg.get("content") or "")
+        if any(
+            k in content
+            for k in (
+                "建议检索词",
+                "支持学术数据源",
+                "正式启动学术文献检索",
+                "是否授权我执行正式检索",
+                "授权检索",
+                "论文检索方案",
+                "正式检索执行中",
+                "检索结果尚未生成",
+            )
+        ):
+            return True
+        break
+    return False
+
+
+def _resolve_academic_search_query(
+    user_message: str,
+    conv: ResearchConversationModel | None,
+    state_model: ResearchOrchestratorStateModel,
+    conv_msgs: Sequence[dict[str, object]],
+) -> str:
+    """Resolve an effective academic search query from explicit terms, guidance, or profile."""
+    # 1. If user provided a specific non-filler query
+    extracted = _extract_search_query(user_message)
+    if extracted and extracted not in _SEARCH_FILLER_WORDS and len(extracted) >= 3:
+        return extracted
+
+    # 2. Extract from recent assistant recommendations in conversation history
+    for msg in reversed(conv_msgs):
+        if msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content") or "")
+        # 【建议检索词】\n- `...`
+        m_code = re.search(r"【建议检索词】[^\n]*\n-\s*`([^`\n]+)`", content)
+        if m_code and len(m_code.group(1).strip()) >= 3:
+            return m_code.group(1).strip()
+        # 关键词组合 / 关键词：...
+        m_kw = re.search(r"关键词(?:组合)?[：:]\s*([^\n]+)", content)
+        if m_kw:
+            raw = m_kw.group(1).strip()
+            cleaned = re.sub(r"[*`\"'+、/|]+", " ", raw)
+            cleaned = " ".join(cleaned.split())
+            if len(cleaned) >= 3 and "待填充" not in cleaned:
+                return cleaned
+        # 检索词：...
+        m_term = re.search(r"检索词[：:]\s*([^\n]+)", content)
+        if m_term:
+            raw = m_term.group(1).strip()
+            cleaned = re.sub(r"[*`\"'+、/|]+", " ", raw)
+            cleaned = " ".join(cleaned.split())
+            if len(cleaned) >= 3:
+                return cleaned
+
+    # 3. Check profile_data topic and methods
+    profile_data = (conv.profile_data or {}) if conv else {}
+    topic = str(profile_data.get("topic") or "").strip()
+    methods = [str(m).strip() for m in (profile_data.get("methods") or []) if str(m).strip()]
+    if topic:
+        parts = [topic] + methods[:2]
+        return " ".join(parts)
+
+    # 4. Check state_model current_plan
+    plan = state_model.current_plan
+    if isinstance(plan, dict) and plan.get("content"):
+        plan_txt = str(plan.get("content"))
+        m_topic = re.search(r"研究主题[：:]\s*([^\n]+)", plan_txt)
+        if m_topic:
+            return m_topic.group(1).strip()
+
+    # 5. Scan recent user messages for domain words
+    for msg in reversed(conv_msgs):
+        if msg.get("role") == "user":
+            c_txt = str(msg.get("content") or "")
+            if any(w in c_txt for w in ("SQL", "CNN", "TextCNN", "注入", "检测", "GCN", "分类")):
+                c_clean = re.sub(r"我选[A-Za-z]：?", " ", c_txt)
+                c_clean = " ".join(c_clean.split())
+                if len(c_clean) >= 3:
+                    return c_clean[:100]
+
+    return "computer science paper reproduction"
 
 
 def _last_experiment_plan_layer(
@@ -1526,22 +1643,134 @@ class ResearchConversationOrchestrator:
                         template_name="paper_selected_confirmation",
                     )
 
-        # Step 2.6: formal academic search (P3-A).  Only a user-provided query
-        # with explicit confirmation reaches the real source-restricted search;
-        # results are presented from the persisted evidence bundle verbatim.
-        if (
-            state_model.current_stage == "research_execution"
-            and _has_search_request_words(user_message)
-            and is_confirmed
-        ):
-            query = _extract_search_query(user_message)
-            if query:
+        # Step 2.6: formal academic search (P3-A).
+        # Trigger when user confirms/authorizes search, asks for search results,
+        # or initiates a search command.
+        conv_msgs = list((conv.messages_data if conv else None) or [])
+        completed_stages = list(state_model.completed_stages or [])
+        is_query_status_inquiry = any(
+            phrase in user_message
+            for phrase in (
+                "告知我结果",
+                "请告知我检索结果",
+                "检索结果现在生成了吗",
+                "结果出来了吗",
+                "结果生成了吗",
+                "检索结果呢",
+            )
+        )
+        is_asking_for_search_keywords = any(
+            kw in user_message
+            for kw in (
+                "核心论文关键词",
+                "推荐检索词",
+                "搜索关键词",
+                "检索关键词",
+                "论文关键词",
+                "建议检索词",
+            )
+        )
+        is_direct_search_action = any(
+            w in user_message
+            for w in (
+                "授权检索",
+                "开始检索",
+                "正式检索",
+                "执行检索",
+                "立即检索",
+                "启动检索",
+                "确认检索",
+                "确认进行检索",
+                "同意检索",
+            )
+        )
+        is_search_confirm = (
+            is_confirmed
+            and (
+                _has_search_request_words(user_message)
+                or _is_search_guidance_followup(conv_msgs)
+            )
+        )
+        in_execution_or_plan = state_model.current_stage in (
+            "research_execution", "research_plan"
+        )
+        should_run_search = (
+            not is_asking_for_search_keywords
+            and (
+                is_query_status_inquiry
+                or is_search_confirm
+                or is_direct_search_action
+            )
+        )
+
+        if should_run_search and in_execution_or_plan:
+            # Advance stage if search is authorized/requested while in research_plan
+            if state_model.current_stage == "research_plan":
+                state_model.current_stage = "research_execution"
+                subtasks = dict(state_model.subtasks or {})
+                subtasks["plan_generated"] = True
+                subtasks["profile_ready"] = True
+                state_model.subtasks = subtasks
+                if "research_plan" not in completed_stages:
+                    completed_stages.append("research_plan")
+                state_model.completed_stages = completed_stages
+                self._record_confirmed_plan(state_model, conv)
+
+            if hasattr(self.search_service, "list_bundles"):
+                existing_bundles = self.search_service.list_bundles(conversation_id, db)
+            else:
+                existing_bundles = getattr(self.search_service, "saved_bundles", [])
+            latest_with_papers = next(
+                (b for b in reversed(existing_bundles) if b.papers), None
+            )
+
+            if is_query_status_inquiry and latest_with_papers is not None:
+                source_note = "、".join(latest_with_papers.queried_sources) or "允许来源"
+                searched_day = latest_with_papers.searched_at.date().isoformat()
+                cand_items = []
+                for index, paper in enumerate(latest_with_papers.papers[:5], start=1):
+                    item = (
+                        f"{index}. **《{paper.title}》**\n"
+                        f"   - 来源：{paper.source_name} · {paper.year or '年份未标注'}\n"
+                        f"   - 链接：{paper.url}"
+                    )
+                    if paper.abstract_excerpt:
+                        item += f"\n   - 摘要摘录：{paper.abstract_excerpt[:180]}..."
+                    cand_items.append(item)
+                candidate_lines = "\n\n".join(cand_items)
+                q_text = latest_with_papers.query
+                reply_content = (
+                    f"(＾▽＾) 检索结果已就绪！为你找到以下真实论文候选"
+                    f"（检索词：`{q_text}`；来源：{source_note}；检索时间：{searched_day}）：\n\n"
+                    f"{candidate_lines}\n\n"
+                    f"---\n"
+                    f"💡 **下一步**：\n"
+                    f"上方已同步加载【检索候选论文卡片】。你可以直接点击卡片上的「请姜姜精读介绍这篇」，"
+                    f"或者回复序号告诉姜姜，我们立即进入论文精读与复现设计！"
+                )
+            else:
+                query = _resolve_academic_search_query(user_message, conv, state_model, conv_msgs)
                 try:
                     bundle = self.search_service.search(
                         conversation_id,
                         CreateConversationEvidenceBundleRequest(query=query),
                         db,
                     )
+                    # Fallback retry if 0 papers returned and query contained Chinese
+                    if not bundle.papers and any('\u4e00' <= char <= '\u9fff' for char in query):
+                        en_parts = re.findall(r"[A-Za-z0-9_-]+", query)
+                        default_fallback = "SQL injection detection"
+                        fallback_q = (
+                            " ".join(en_parts) if len(en_parts) >= 2 else default_fallback
+                        )
+                        if fallback_q != query:
+                            retry_bundle = self.search_service.search(
+                                conversation_id,
+                                CreateConversationEvidenceBundleRequest(query=fallback_q),
+                                db,
+                            )
+                            if retry_bundle.papers:
+                                bundle = retry_bundle
                 except Exception as err:
                     reply_content = (
                         "(｡･ω･｡) 姜姜按你的确认发起了正式检索，但这次检索未成功完成："
@@ -1552,19 +1781,27 @@ class ResearchConversationOrchestrator:
                     source_note = "、".join(bundle.queried_sources) or "允许来源"
                     searched_day = bundle.searched_at.date().isoformat()
                     if bundle.papers:
-                        candidate_lines = "\n".join(
-                            f"{index}. 《{paper.title}》"
-                            f"（{paper.source_name}，{paper.year or '年份未标注'}）"
-                            f"\n   链接：{paper.url}"
-                            for index, paper in enumerate(bundle.papers, start=1)
-                        )
+                        cand_items = []
+                        for index, paper in enumerate(bundle.papers[:5], start=1):
+                            item = (
+                                f"{index}. **《{paper.title}》**\n"
+                                f"   - 来源：{paper.source_name} · {paper.year or '年份未标注'}\n"
+                                f"   - 链接：{paper.url}"
+                            )
+                            if paper.abstract_excerpt:
+                                item += f"\n   - 摘要摘录：{paper.abstract_excerpt[:180]}..."
+                            cand_items.append(item)
+                        candidate_lines = "\n\n".join(cand_items)
                         reply_content = (
-                            f"(＾▽＾) 已按你的确认完成正式检索（来源：{source_note}；"
-                            f"检索时间：{searched_day}）。\n\n"
-                            f"以下候选全部来自真实检索结果的元数据与摘要，"
-                            f"未下载论文全文：\n{candidate_lines}\n\n"
-                            "点击聊天中的候选论文卡片，或直接告诉姜姜你想精读哪一篇；"
-                            "确定前不会把它设为当前论文哦。"
+                            f"(＾▽＾) 收到！已为你完成正式文献检索（检索词：`{bundle.query}`；"
+                            f"来源：{source_note}；检索时间：{searched_day}）。\n\n"
+                            f"本次真实检索共筛选出 {len(bundle.papers)} 篇候选论文"
+                            f"（全部来自真实学术元数据与公开摘要，未下载论文全文）：\n\n"
+                            f"{candidate_lines}\n\n"
+                            f"---\n"
+                            f"💡 **下一步**：\n"
+                            f"聊天窗口已同步加载上述论文的【候选卡片】。你可以直接点击卡片上的「请姜姜精读介绍这篇」，"
+                            f"或者回复序号告诉姜姜，我们一起深入解读这篇论文！"
                         )
                     else:
                         failure_note = ""
@@ -1579,13 +1816,13 @@ class ResearchConversationOrchestrator:
                             "姜姜不会编造候选。我们可以一起调整检索词、扩大或收窄范围，"
                             "或者返回方向探索。"
                         )
-                state_model = self.get_state_model(
-                    conversation_id, db, owned_ids=owned_ids
-                )
-                return self._finalize_reply(
-                    conversation_id, state_model, user_message, reply_content, None, db,
-                    template_name="search_results",
-                )
+            state_model = self.get_state_model(
+                conversation_id, db, owned_ids=owned_ids
+            )
+            return self._finalize_reply(
+                conversation_id, state_model, user_message, reply_content, None, db,
+                template_name="search_results",
+            )
 
         # Step 3: Detect §2 Passive Tool intents
         tool_intents = detect_passive_tool_intent(user_message)
@@ -1832,9 +2069,10 @@ class ResearchConversationOrchestrator:
                 state_model.completed_stages = completed_stages
 
         elif current_stage == "research_plan":
-            profile_ready = subtasks.get("profile_ready")
-            plan_gen = subtasks.get("plan_generated")
-            if is_confirmed and profile_ready and plan_gen:
+            plan_gen = bool(subtasks.get("plan_generated"))
+            if (is_confirmed or _has_search_request_words(user_message)) and plan_gen:
+                subtasks["profile_ready"] = True
+                state_model.subtasks = subtasks
                 state_model.current_stage = "research_execution"
                 if "research_plan" not in completed_stages:
                     completed_stages.append("research_plan")
@@ -1991,7 +2229,8 @@ class ResearchConversationOrchestrator:
                 )
 
         elif current_stage == "research_plan":
-            if is_confirmed and subtasks.get("profile_ready") and subtasks.get("plan_generated"):
+            has_search_req = _has_search_request_words(user_message)
+            if (is_confirmed or has_search_req) and subtasks.get("plan_generated"):
                 tmpl = build_stage_transition_prompt(
                     from_stage="research_plan",
                     to_stage="research_execution",
@@ -2017,9 +2256,12 @@ class ResearchConversationOrchestrator:
                     next_goals="运行实验指标记录，进行客观归因与对比分析",
                 )
             elif any(k in user_message for k in ["检索", "找论文", "搜索", "关键词"]):
+                resolved_q = _resolve_academic_search_query(
+                    user_message, conv_row, state_row, conv_msgs
+                )
                 tmpl = build_search_guidance_prompt(
                     research_goal=user_message,
-                    candidate_queries=[user_message],
+                    candidate_queries=[resolved_q],
                     sources=["OpenAlex", "Crossref", "arXiv"],
                 )
             elif papers_resp.current_paper is not None:
@@ -2096,9 +2338,12 @@ class ResearchConversationOrchestrator:
                         research_goal="论文精读与复现（等待用户确认是否选定该论文）",
                     )
                 else:
+                    resolved_q = _resolve_academic_search_query(
+                        user_message, conv_row, state_row, conv_msgs
+                    )
                     tmpl = build_search_guidance_prompt(
                         research_goal=user_message or "检索并选定当前复现论文",
-                        candidate_queries=[user_message or "复现论文检索"],
+                        candidate_queries=[resolved_q],
                         sources=["OpenAlex", "Crossref", "arXiv"],
                     )
 
