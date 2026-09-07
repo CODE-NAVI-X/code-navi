@@ -721,15 +721,14 @@ export function ResearchConversation() {
             })()}
             {currentStage === "research_plan" && (() => {
               const canConfirmPlan = Boolean(
-                orchestratorState?.subtasks?.plan_generated &&
-                  orchestratorState?.subtasks?.profile_ready,
+                orchestratorState?.subtasks?.plan_generated,
               );
               return (
                 <>
                   <button
                     type="button"
                     disabled={disabled || !canConfirmPlan}
-                    title={canConfirmPlan ? undefined : "请等待画像与研究计划在对话中生成完毕后再确认"}
+                    title={canConfirmPlan ? undefined : "请等待研究计划在对话中生成完毕后再确认"}
                     onClick={() => void handleSend("研究计划没问题，可以继续进入研究开展。")}
                     className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                       canConfirmPlan
