@@ -626,18 +626,35 @@ function parseGapSourceType(value: unknown): KnowledgeGapSourceType {
 
 /**
  * Delete a profile record (quiz attempt or confusion mark) to manage and correct profile facts.
+ * Throws ProfileApiError on non-OK status or network error so callers can roll back optimistic state.
  */
 export async function deleteProfileRecord(recordId: string): Promise<boolean> {
   const url = `${API_BASE}/api/v1/profile/records/${encodeURIComponent(recordId)}`;
+  const csrf = getStoredCsrfToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+
+  let response: Response;
   try {
-    const response = await fetch(url, {
+    response = await fetch(url, {
       method: "DELETE",
       credentials: "include",
-      headers: { Accept: "application/json" },
+      headers,
     });
-    return response.ok;
-  } catch (error) {
-    console.error("Failed to delete profile record:", error);
-    return false;
+  } catch (networkError) {
+    throw new ProfileApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
   }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new ProfileApiError(
+      response.status,
+      detail ?? `删除记录失败 (${response.status})`,
+    );
+  }
+
+  return true;
 }

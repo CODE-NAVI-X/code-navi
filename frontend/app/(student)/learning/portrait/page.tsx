@@ -31,6 +31,7 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
+  X,
 } from "lucide-react";
 import type {
   LearningKnowledgeGapOverview,
@@ -200,13 +201,35 @@ export default function PortraitPage() {
     setRefreshKey((key) => key + 1);
   }
 
-  // Active record deletion handler
+  // Active record deletion handler with rollback on failure and server re-aggregation on success
+  const [actionError, setActionError] = useState<string | null>(null);
+
   async function handleDeleteRecord(recordId: string, item: LearningKnowledgeGapOverview) {
+    setActionError(null);
+    // 1. Optimistic hide
     setDeletedIds((prev) => new Set(prev).add(recordId).add(item.knowledge_point));
     try {
+      // 2. Call backend delete
       await deleteProfileRecord(recordId);
+
+      // 3. Re-fetch fresh aggregated portrait facts from backend
+      const profileId = getOrCreateLearnerId();
+      const localProfileId = getLocalProfileId();
+      const freshData = await fetchPortraitsOverview(profileId, { localProfileId });
+      setOverview(freshData);
+
+      // 4. Reset optimistic set now that server data has re-aggregated
+      setDeletedIds(new Set());
     } catch (err) {
-      console.error("Failed to delete record from backend:", err);
+      // 5. Rollback on failure!
+      setDeletedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(recordId);
+        next.delete(item.knowledge_point);
+        return next;
+      });
+      const message = err instanceof Error ? err.message : "移除记录失败，已恢复原状";
+      setActionError(message);
     }
   }
 
@@ -222,37 +245,124 @@ export default function PortraitPage() {
   const isEmpty =
     !hasMasteryData && !hasKnowledgeGaps && !hasReviewQueue && !hasResearchConvs;
 
-  // ── Calculate 5 Cosmic Dimensions from real facts ─────────────────────────
+  // ── Calculate 5 Cosmic Dimensions from real facts only ─────────────────────
   const cosmicDimensions = useMemo<CosmicDimension[]>(() => {
-    const graded = learning?.mastery.graded_attempts ?? 18;
-    const strengths = learning?.mastery.strong_points ?? ["HTTP"];
-    const weaknesses = (learning?.mastery.weak_points ?? ["cookie", "光线追踪"]).filter(
+    const graded = learning?.mastery.graded_attempts ?? 0;
+    const strengths = learning?.mastery.strong_points ?? [];
+    const weaknesses = (learning?.mastery.weak_points ?? []).filter(
       (w) => !deletedIds.has(w)
     );
-    const gaps = (learning?.knowledge_gaps ?? []).filter((g) => !deletedIds.has(g.knowledge_point));
-    const convCount = research?.conversations.length ?? 3;
+    const gaps = (learning?.knowledge_gaps ?? []).filter(
+      (g) => !deletedIds.has(g.knowledge_point) && !deletedIds.has(g.source_id || "")
+    );
+    const convCount = research?.conversations.length ?? 0;
+    const researchConvs = research?.conversations ?? [];
+    const totalEvidenceBundles = researchConvs.reduce(
+      (acc, c) => acc + (c.evidence_bundle_count || 0),
+      0
+    );
 
-    // 1. Concept: Higher if strong points exist
-    const conceptScore = strengths.length > 0 ? Math.min(95, 80 + strengths.length * 5) : graded > 0 ? 70 : 80;
-    const conceptLevel = conceptScore >= 85 ? "卓越" : conceptScore >= 70 ? "稳固" : "良好";
+    // 1. Concept (概念认知): based on graded quiz attempts and concept strengths/weaknesses
+    const hasConceptEvidence = graded > 0 || strengths.length > 0 || weaknesses.length > 0;
+    let conceptScore: number | null = null;
+    let conceptLevel: CosmicDimension["level"] = "暂无足够数据";
+    let conceptBasis = "暂无客观题判分或概念诊断记录";
 
-    // 2. Architecture: Topology and structural analysis
-    const archScore = 74;
-    const archLevel = "良好";
+    if (hasConceptEvidence) {
+      if (strengths.length + weaknesses.length > 0) {
+        conceptScore = Math.round(
+          (strengths.length / (strengths.length + weaknesses.length)) * 50 + 45
+        );
+      } else {
+        conceptScore = 65;
+      }
+      conceptLevel =
+        conceptScore >= 85 ? "卓越" : conceptScore >= 70 ? "稳固" : conceptScore >= 60 ? "良好" : "攻坚";
+      conceptBasis =
+        strengths.length > 0
+          ? `已掌握 ${strengths.slice(0, 3).join("、")} 等考点，完成 ${graded} 次判分`
+          : `共完成 ${graded} 次判分诊断`;
+    }
 
-    // 3. Calculation: Reflects weaknesses in ray tracing / parameters
-    const calcScore = weaknesses.length > 0 ? Math.max(30, 65 - weaknesses.length * 15) : 85;
-    const calcLevel = calcScore < 50 ? "攻坚" : "良好";
+    // 2. Architecture (架构推导): only if architectural topics or bridge context exist
+    const archGaps = gaps.filter((g) => {
+      const t = g.knowledge_point.toLowerCase();
+      return (
+        t.includes("架构") ||
+        t.includes("拓扑") ||
+        t.includes("结构") ||
+        t.includes("网络") ||
+        t.includes("git") ||
+        t.includes("模型")
+      );
+    });
+    const hasBridgeSnapshot = Boolean(bridges?.learning_to_research.has_mastery_snapshot);
+    const hasArchEvidence = archGaps.length > 0 || hasBridgeSnapshot;
+    let archScore: number | null = null;
+    let archLevel: CosmicDimension["level"] = "暂无足够数据";
+    let archBasis = "暂无系统架构或模型推导评测记录";
 
-    // 4. Practice: Hands-on code compilation & fill attempts
-    const practiceScore = gaps.some((g) => g.source_type.includes("practice") || g.source_type.includes("code"))
-      ? 62
-      : 72;
-    const practiceLevel = practiceScore >= 70 ? "稳固" : "良好";
+    if (hasArchEvidence) {
+      archScore = archGaps.some((g) => weaknesses.includes(g.knowledge_point)) ? 58 : 74;
+      archLevel = archScore >= 70 ? "良好" : "攻坚";
+      archBasis = archGaps.length > 0
+        ? `关联 ${archGaps.map((g) => g.knowledge_point).slice(0, 2).join("、")} 架构考点`
+        : "基于学研跨组件迁移快照评估";
+    }
 
-    // 5. Research: Conversations and pipeline readiness
-    const researchScore = convCount > 0 ? Math.min(92, 50 + convCount * 10) : 55;
-    const researchLevel = researchScore >= 70 ? "稳固" : "良好";
+    // 3. Calculation (参数计算): only if calculation / math / parameter topics exist
+    const calcGaps = gaps.filter((g) => {
+      const t = g.knowledge_point.toLowerCase();
+      return (
+        t.includes("计算") ||
+        t.includes("参数") ||
+        t.includes("维度") ||
+        t.includes("尺寸") ||
+        t.includes("光线") ||
+        t.includes("ray") ||
+        t.includes("数学")
+      );
+    });
+    const hasCalcEvidence = calcGaps.length > 0;
+    let calcScore: number | null = null;
+    let calcLevel: CosmicDimension["level"] = "暂无足够数据";
+    let calcBasis = "暂无参数推导或数值计算诊断记录";
+
+    if (hasCalcEvidence) {
+      calcScore = calcGaps.some((g) => weaknesses.includes(g.knowledge_point)) ? 45 : 75;
+      calcLevel = calcScore < 60 ? "攻坚" : "良好";
+      calcBasis = `在「${calcGaps.map((g) => g.knowledge_point).slice(0, 2).join("、")}」存在参数推导记录`;
+    }
+
+    // 4. Practice (代码实操): only if practice_outcome or code_fill_attempt exist
+    const practiceGaps = gaps.filter(
+      (g) =>
+        g.source_type === "practice_outcome" ||
+        g.source_type === "code_fill_attempt" ||
+        g.source_type.includes("practice") ||
+        g.source_type.includes("code")
+    );
+    const hasPracticeEvidence = practiceGaps.length > 0;
+    let practiceScore: number | null = null;
+    let practiceLevel: CosmicDimension["level"] = "暂无足够数据";
+    let practiceBasis = "暂无沙盒代码实操或在线运行评测记录";
+
+    if (hasPracticeEvidence) {
+      practiceScore = 65;
+      practiceLevel = "稳固";
+      practiceBasis = `完成 ${practiceGaps.length} 项沙盒代码运行或代码填空实操`;
+    }
+
+    // 5. Research (前沿科研): based strictly on active research conversations
+    let researchScore: number | null = null;
+    let researchLevel: CosmicDimension["level"] = "暂无足够数据";
+    let researchBasis = "暂无科研探索会话或文献精读记录";
+
+    if (convCount > 0) {
+      researchScore = Math.min(95, 50 + convCount * 10 + totalEvidenceBundles * 4);
+      researchLevel = researchScore >= 80 ? "卓越" : researchScore >= 65 ? "稳固" : "良好";
+      researchBasis = `已有 ${convCount} 个活跃科研会话，关联 ${totalEvidenceBundles} 份文献证据包`;
+    }
 
     return [
       {
@@ -262,9 +372,7 @@ export default function PortraitPage() {
         score: conceptScore,
         level: conceptLevel,
         description: "核心定义、原理辨析与概念边界掌握",
-        basis: strengths.length > 0
-          ? `已稳固掌握 ${strengths.join("、")} 等概念（得分率≥75%）`
-          : `共完成 ${graded} 次判分诊断`,
+        basis: conceptBasis,
       },
       {
         id: "architecture",
@@ -273,7 +381,7 @@ export default function PortraitPage() {
         score: archScore,
         level: archLevel,
         description: "拓扑结构、残差连接与模块间信息流推导",
-        basis: "网络分层与模块拓扑诊断良好",
+        basis: archBasis,
       },
       {
         id: "calculation",
@@ -282,9 +390,7 @@ export default function PortraitPage() {
         score: calcScore,
         level: calcLevel,
         description: "特征图尺寸、感受野与参数量数学推导",
-        basis: weaknesses.length > 0
-          ? `在「${weaknesses.join("、")}」存在计算推导待攻坚点`
-          : "数学推导与计算指标平稳",
+        basis: calcBasis,
       },
       {
         id: "practice",
@@ -293,7 +399,7 @@ export default function PortraitPage() {
         score: practiceScore,
         level: practiceLevel,
         description: "源码调试、网络搭建与在线运行评测",
-        basis: "编译器沙盒运行与工程代码实现评测",
+        basis: practiceBasis,
       },
       {
         id: "research",
@@ -302,10 +408,10 @@ export default function PortraitPage() {
         score: researchScore,
         level: researchLevel,
         description: "前沿方向联想、文献精读与课题迁移能力",
-        basis: `已有 ${convCount} 个活跃科研会话与文献包关联`,
+        basis: researchBasis,
       },
     ];
-  }, [learning, research, deletedIds]);
+  }, [learning, research, bridges, deletedIds]);
 
   // ── 3-in-1 Consolidated Knowledge Items ──────────────────────────────────
   const consolidatedItems = useMemo<ConsolidatedKnowledgeItem[]>(() => {
@@ -477,6 +583,23 @@ export default function PortraitPage() {
         </div>
       )}
 
+      {/* Action Error Banner (e.g. deletion failure rollback notification) */}
+      {actionError && (
+        <div className="flex items-center justify-between rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="rounded-lg p-1 text-rose-400 hover:bg-rose-500/20"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Main Content Area */}
       {!loading && !error && overview && !isEmpty && (
         <div className="space-y-8">
@@ -500,13 +623,13 @@ export default function PortraitPage() {
               /* Top HUD Stat Badges */
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-700 dark:bg-zinc-800 dark:text-zinc-300">
-                  共完成 {learning?.mastery.graded_attempts ?? 18} 次判分
+                  共完成 {learning?.mastery.graded_attempts ?? 0} 次判分
                 </span>
                 <span className="rounded-lg bg-rose-50 px-2.5 py-1 font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
-                  待攻坚 {learning?.mastery.weak_points.length ?? 2} 项
+                  待攻坚 {learning?.mastery.weak_points.length ?? 0} 项
                 </span>
                 <span className="rounded-lg bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                  扎实稳固 {learning?.mastery.strong_points.length ?? 1} 项
+                  扎实稳固 {learning?.mastery.strong_points.length ?? 0} 项
                 </span>
               </div>
             }

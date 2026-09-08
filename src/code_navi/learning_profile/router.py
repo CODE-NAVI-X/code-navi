@@ -8,7 +8,7 @@ cross-session aggregation boundary.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from code_navi.auth.dependencies import (
@@ -57,5 +57,10 @@ async def delete_profile_record(
     success = _profile_service.delete_record(
         record_id, db, owner_principal_id=principal_id, owned_ids=owned_ids
     )
-    return {"success": success, "record_id": record_id}
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Record '{record_id}' not found or not owned by the current user",
+        )
+    return {"success": True, "record_id": record_id}
 

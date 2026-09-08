@@ -184,7 +184,7 @@ export function QuizView({
   const [withAnswer, setWithAnswer] = useState(false);
   const [showProfile, setShowProfile] = useState(true);
   const [profileSummary, setProfileSummary] = useState<string>(
-    "已掌握核心基础概念，近期在「光线追踪」与「Cookie」存在薄弱错题与标记，本次出题将定向巩固弱项。"
+    "正在根据学情画像加载最新掌握概况..."
   );
 
   useEffect(() => {
@@ -214,7 +214,9 @@ export function QuizView({
         if (summary) setProfileSummary(summary);
       })
       .catch(() => {
-        // Fallback default is retained
+        if (!cancelled) {
+          setProfileSummary("近期诊断记录较少，组卷将依据核心考点均匀覆盖基础概念与推导题型。");
+        }
       });
     return () => {
       cancelled = true;

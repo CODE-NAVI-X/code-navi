@@ -7,8 +7,8 @@ export interface CosmicDimension {
   id: string;
   name: string;
   enName: string;
-  score: number; // 0 - 100
-  level: "卓越" | "稳固" | "良好" | "攻坚" | "起步";
+  score: number | null; // null indicates not evaluable / insufficient facts
+  level: "卓越" | "稳固" | "良好" | "攻坚" | "起步" | "暂无足够数据";
   description: string;
   basis: string;
 }
@@ -26,67 +26,55 @@ const DEFAULT_DIMENSIONS: CosmicDimension[] = [
     id: "concept",
     name: "概念认知",
     enName: "Concepts",
-    score: 88,
-    level: "卓越",
+    score: null,
+    level: "暂无足够数据",
     description: "核心定义、原理辨析与概念边界掌握",
-    basis: "基于 8 次客观题判分与辨析，概念理解扎实",
+    basis: "暂无客观题判分或概念诊断记录",
   },
   {
     id: "architecture",
     name: "架构推导",
     enName: "Architecture",
-    score: 74,
-    level: "良好",
+    score: null,
+    level: "暂无足够数据",
     description: "拓扑结构、残差连接与模块间信息流推导",
-    basis: "基于网络结构分析与连接关系诊断",
+    basis: "暂无网络拓扑与架构推导记录",
   },
   {
     id: "calculation",
     name: "参数计算",
     enName: "Computation",
-    score: 42,
-    level: "攻坚",
+    score: null,
+    level: "暂无足够数据",
     description: "特征图尺寸、感受野与参数量数学推导",
-    basis: "光线衰减与参数计算存在 2 处薄弱错题",
+    basis: "暂无参数推导或数值计算记录",
   },
   {
     id: "practice",
     name: "代码实操",
     enName: "Practice",
-    score: 65,
-    level: "稳固",
+    score: null,
+    level: "暂无足够数据",
     description: "源码调试、网络搭建与在线运行评测",
-    basis: "完成 3 次代码填空与编译器沙盒实战",
+    basis: "暂无沙盒实操或在线运行评测记录",
   },
   {
     id: "research",
     name: "前沿科研",
     enName: "Research",
-    score: 55,
-    level: "良好",
+    score: null,
+    level: "暂无足够数据",
     description: "前沿方向联想、文献精读与课题迁移能力",
-    basis: "已开启 2 次科研探索会话，关联文献与复现",
+    basis: "暂无科研探索会话或文献精读记录",
   },
 ];
 
 // Helper to provide concise (<50 Chinese characters) description and details
 function getDimensionDetailSummary(dim: CosmicDimension): string {
-  switch (dim.id) {
-    case "concept":
-      return "考查核心定义与原理辨析。当前基础掌握稳固，判分得分率高，无显著认知缺口。";
-    case "architecture":
-      return "考查模型拓扑与信息流推导。网络分层与模块连接掌握良好，逻辑推理平稳。";
-    case "calculation":
-      return dim.score < 60
-        ? "考查特征尺寸与数学推导。在光线衰减与参数计算存在错题，为近期重点攻坚项。"
-        : "考查特征尺寸与数学推导。公式运用与参数计算平稳，未发现明显缺口。";
-    case "practice":
-      return "考查编译器沙盒与源码调试。已完成多轮填空实战，在线运行与实操能力稳固。";
-    case "research":
-      return "考查文献关联与前沿课题迁移。已关联科研会话与文献包，探索准备度良好。";
-    default:
-      return `${dim.name}维度掌握评分为${dim.score}分，状态${dim.level}，建议持续稳固。`;
+  if (dim.score === null || dim.score === undefined || dim.level === "暂无足够数据") {
+    return dim.basis || "当前维度暂无评测记录，完成相关学习实操后自动生成。";
   }
+  return dim.basis || dim.description || `${dim.name}维度掌握状态为${dim.level}。`;
 }
 
 // 5 vertices positioned radially starting from top (-90 deg)
@@ -138,27 +126,40 @@ export function CosmicRadarChart({
     });
   }, [dimensions]);
 
-  // Overall score
+  // Overall score: only over dimensions that have facts/scores
   const overallScore = useMemo(() => {
-    return Math.round(dims.reduce((acc, cur) => acc + cur.score, 0) / dims.length);
+    const evaluable = dims.filter((d) => d.score !== null && d.score !== undefined);
+    if (evaluable.length === 0) return null;
+    return Math.round(
+      evaluable.reduce((acc, cur) => acc + (cur.score as number), 0) / evaluable.length
+    );
   }, [dims]);
 
-  // Coordinates for the polygon vertices
+  // Coordinates for the polygon vertices (null if not evaluable)
   const polygonPoints = useMemo(() => {
     return dims.map((dim, idx) => {
       const angle = ANGLES[idx];
+      if (dim.score === null || dim.score === undefined) {
+        return null;
+      }
       const r = (Math.max(12, Math.min(100, dim.score)) / 100) * MAX_RADIUS;
       return polarToCartesian(CENTER_X, CENTER_Y, r, angle);
     });
   }, [dims]);
 
+  const evaluableCount = useMemo(() => {
+    return dims.filter((d) => d.score !== null && d.score !== undefined).length;
+  }, [dims]);
+
   const polygonPath = useMemo(() => {
-    if (polygonPoints.length === 0) return "";
+    if (evaluableCount < 3) return "";
+    const validPts = polygonPoints.filter((p): p is { x: number; y: number } => p !== null);
+    if (validPts.length < 3) return "";
     return (
-      polygonPoints.map((pt, i) => `${i === 0 ? "M" : "L"} ${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ") +
+      validPts.map((pt, i) => `${i === 0 ? "M" : "L"} ${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ") +
       " Z"
     );
-  }, [polygonPoints]);
+  }, [polygonPoints, evaluableCount]);
 
   // Label coordinates (outside max radius)
   const labelPositions = useMemo(() => {
@@ -186,17 +187,27 @@ export function CosmicRadarChart({
   // Render a dimension text card
   const renderDimensionCard = (dim: CosmicDimension, idx: number, cardClassName = "") => {
     const isHovered = hoveredIndex === idx;
+    const isEvaluable = dim.score !== null && dim.score !== undefined && dim.level !== "暂无足够数据";
     const detailSummary = getDimensionDetailSummary(dim);
-    const levelColor =
-      dim.level === "卓越"
-        ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
-        : dim.level === "稳固"
-        ? "text-sky-400 border-sky-500/30 bg-sky-500/10"
-        : dim.level === "良好"
-        ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/10"
-        : dim.level === "攻坚"
-        ? "text-rose-400 border-rose-500/30 bg-rose-500/10"
-        : "text-amber-400 border-amber-500/30 bg-amber-500/10";
+    const levelColor = !isEvaluable
+      ? "text-slate-400 border-slate-700/60 bg-slate-800/40"
+      : dim.level === "卓越"
+      ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+      : dim.level === "稳固"
+      ? "text-sky-400 border-sky-500/30 bg-sky-500/10"
+      : dim.level === "良好"
+      ? "text-indigo-300 border-indigo-500/30 bg-indigo-500/10"
+      : dim.level === "攻坚"
+      ? "text-rose-400 border-rose-500/30 bg-rose-500/10"
+      : "text-amber-400 border-amber-500/30 bg-amber-500/10";
+
+    const dotColor = !isEvaluable
+      ? "bg-slate-500"
+      : (dim.score ?? 0) >= 75
+      ? "bg-emerald-400"
+      : (dim.score ?? 0) >= 60
+      ? "bg-cyan-400"
+      : "bg-rose-400";
 
     return (
       <div
@@ -212,15 +223,11 @@ export function CosmicRadarChart({
       >
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span
-              className={`h-2.5 w-2.5 rounded-full ${
-                dim.score >= 75 ? "bg-emerald-400" : dim.score >= 60 ? "bg-cyan-400" : "bg-rose-400"
-              }`}
-            />
+            <span className={`h-2.5 w-2.5 rounded-full ${dotColor}`} />
             <span className="text-sm font-bold text-white tracking-wide">{dim.name}</span>
           </div>
           <span className={`rounded-md border px-2.5 py-0.5 text-xs font-bold ${levelColor}`}>
-            {dim.score}分 · {dim.level}
+            {isEvaluable ? `${dim.score}分 · ${dim.level}` : "暂无足够数据"}
           </span>
         </div>
         <p className="mt-2.5 text-xs leading-relaxed text-slate-200">
@@ -246,9 +253,15 @@ export function CosmicRadarChart({
         <div className="flex items-center gap-2 rounded-2xl bg-slate-800/80 px-5 py-2 text-sm text-slate-200 border border-slate-700/60 shadow-inner">
           <Sparkles className="h-4 w-4 text-cyan-400" />
           <span className="font-medium text-slate-300">综合能力得分：</span>
-          <span className="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-violet-400">
-            {overallScore}分
-          </span>
+          {overallScore !== null ? (
+            <span className="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-violet-400">
+              {overallScore}分
+            </span>
+          ) : (
+            <span className="text-sm font-semibold text-slate-400">
+              待评测（暂无足够数据）
+            </span>
+          )}
         </div>
       </div>
 
@@ -378,32 +391,39 @@ export function CosmicRadarChart({
                 );
               })}
 
-              {/* Constellation polygon fill & stroke */}
-              <polygon
-                points={polygonPoints.map((p) => `${p.x},${p.y}`).join(" ")}
-                fill="url(#nebulaGradient)"
-                stroke="#a855f7"
-                strokeWidth="2"
-                filter="url(#cosmicGlow)"
-                className="transition-all duration-500 ease-out"
-              />
-
-              {/* Second highlight perimeter wire */}
-              <path
-                d={polygonPath}
-                fill="none"
-                stroke="#38bdf8"
-                strokeWidth="1.5"
-                opacity={0.7}
-                className="transition-all duration-500 ease-out"
-              />
+              {/* Constellation polygon fill & stroke (only if at least 3 evaluable dimensions) */}
+              {polygonPath && (
+                <>
+                  <polygon
+                    points={polygonPoints
+                      .filter((p): p is { x: number; y: number } => p !== null)
+                      .map((p) => `${p.x},${p.y}`)
+                      .join(" ")}
+                    fill="url(#nebulaGradient)"
+                    stroke="#a855f7"
+                    strokeWidth="2"
+                    filter="url(#cosmicGlow)"
+                    className="transition-all duration-500 ease-out"
+                  />
+                  {/* Second highlight perimeter wire */}
+                  <path
+                    d={polygonPath}
+                    fill="none"
+                    stroke="#38bdf8"
+                    strokeWidth="1.5"
+                    opacity={0.7}
+                    className="transition-all duration-500 ease-out"
+                  />
+                </>
+              )}
 
               {/* Center core pulse */}
               <circle cx={CENTER_X} cy={CENTER_Y} r="5" fill="#38bdf8" opacity="0.8" />
               <circle cx={CENTER_X} cy={CENTER_Y} r="12" fill="#818cf8" opacity="0.25" />
 
-              {/* Star nodes (vertices) */}
+              {/* Star nodes (vertices) - only for evaluable dimensions */}
               {polygonPoints.map((pt, i) => {
+                if (!pt) return null;
                 const isHovered = hoveredIndex === i;
                 const dim = dims[i];
                 return (
@@ -453,21 +473,23 @@ export function CosmicRadarChart({
               {dims.map((dim, i) => {
                 const pos = labelPositions[i];
                 const isHovered = hoveredIndex === i;
+                const isEvaluable = dim.score !== null && dim.score !== undefined && dim.level !== "暂无足够数据";
 
                 let textAnchor: "start" | "middle" | "end" = "middle";
                 if (pos.x < CENTER_X - 25) textAnchor = "end";
                 else if (pos.x > CENTER_X + 25) textAnchor = "start";
 
-                const levelColor =
-                  dim.level === "卓越"
-                    ? "#34d399"
-                    : dim.level === "稳固"
-                    ? "#38bdf8"
-                    : dim.level === "良好"
-                    ? "#818cf8"
-                    : dim.level === "攻坚"
-                    ? "#f43f5e"
-                    : "#fbbf24";
+                const levelColor = !isEvaluable
+                  ? "#64748b"
+                  : dim.level === "卓越"
+                  ? "#34d399"
+                  : dim.level === "稳固"
+                  ? "#38bdf8"
+                  : dim.level === "良好"
+                  ? "#818cf8"
+                  : dim.level === "攻坚"
+                  ? "#f43f5e"
+                  : "#fbbf24";
 
                 return (
                   <g
@@ -481,7 +503,7 @@ export function CosmicRadarChart({
                       x={pos.x}
                       y={pos.y - 8}
                       textAnchor={textAnchor}
-                      fill={isHovered ? "#38bdf8" : "#f8fafc"}
+                      fill={isHovered ? "#38bdf8" : isEvaluable ? "#f8fafc" : "#94a3b8"}
                       fontSize="15"
                       fontWeight="700"
                       letterSpacing="0.04em"
@@ -497,7 +519,7 @@ export function CosmicRadarChart({
                       fontFamily="monospace"
                       fontWeight="700"
                     >
-                      {dim.score}分 · {dim.level}
+                      {isEvaluable ? `${dim.score}分 · ${dim.level}` : "暂无足够数据"}
                     </text>
                   </g>
                 );
