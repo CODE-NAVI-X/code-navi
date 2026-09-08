@@ -2143,22 +2143,6 @@ class ResearchConversationOrchestrator:
                         db,
                         **({"force_refresh": True} if force_refresh else {}),
                     )
-                    # Fallback retry if 0 papers returned and query contained Chinese
-                    if not bundle.papers and any('\u4e00' <= char <= '\u9fff' for char in query):
-                        en_parts = re.findall(r"[A-Za-z0-9_-]+", query)
-                        default_fallback = "SQL injection detection"
-                        fallback_q = (
-                            " ".join(en_parts) if len(en_parts) >= 2 else default_fallback
-                        )
-                        if fallback_q != query:
-                            retry_bundle = self.search_service.search(
-                                conversation_id,
-                                CreateConversationEvidenceBundleRequest(query=fallback_q),
-                                db,
-                                **({"force_refresh": True} if force_refresh else {}),
-                            )
-                            if retry_bundle.papers:
-                                bundle = retry_bundle
                 except Exception as err:
                     reply_content = (
                         "(｡･ω･｡) 姜姜按你的确认发起了正式检索，但这次检索未成功完成："

@@ -516,6 +516,7 @@ def _deduplicate_and_rank(
         )
         for group in groups
     ]
+    merged = [item for item in merged if _is_displayable_english_title(item[0].title)]
     query_tokens = _relevance_tokens(query)
     if query.strip():
         merged = [item for item in merged if _has_relevance_match(item[0], query_tokens)]
@@ -638,6 +639,31 @@ def _title_overlap(left: str, right: str) -> float:
 
 def _author_tokens(paper: PaperMetadata) -> list[str]:
     return [token for author in paper.authors for token in _tokens(author)]
+
+
+_CJK_IDEOGRAPH_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_ASCII_WORD_PATTERN = re.compile(r"[A-Za-z]{2,}")
+
+
+def _is_displayable_english_title(title: str | None) -> bool:
+    """Determine whether a paper title qualifies for user-facing English candidate display.
+
+    Transparent, conservative display qualification rules:
+    1. Returns False if title is None, empty, or whitespace.
+    2. Returns False if title contains any CJK ideographs
+       (\u3400-\u4dbf, \u4e00-\u9fff, \uf900-\ufaff).
+    3. Returns True only if title contains at least one ASCII word of length >= 2
+       (e.g. 'GCN', 'Network').
+    4. Formulas, numbers, symbols, punctuation, or single-letter tokens alone do not qualify.
+    """
+    if not title:
+        return False
+    compact_title = _compact(title)
+    if not compact_title:
+        return False
+    if _CJK_IDEOGRAPH_PATTERN.search(compact_title):
+        return False
+    return bool(_ASCII_WORD_PATTERN.search(compact_title))
 
 
 def _relevance_tokens(value: str) -> set[str]:

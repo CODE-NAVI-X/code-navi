@@ -64,24 +64,23 @@ export function pickLatestCandidatePapers<T>(
   return newest.papers.slice(0, limit);
 }
 
-/** 中文/日文字符占「中文字符 + 拉丁字母」的比例上限。 */
-const CJK_RATIO_LIMIT = 0.2;
-const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
-const LATIN_PATTERN = /[A-Za-z]/g;
+const CJK_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+const ASCII_WORD_PATTERN = /[A-Za-z]{2,}/;
 
 /**
  * 保守判断候选题名是否为英文。
  *
- * 这里只看标题本身：没有拉丁字母、标题为空、或中文字符占主导时都过滤；
+ * 这里只看标题本身：没有英文词、标题为空、或包含中文字符时都过滤；
  * 不根据来源名称推断语言，也不翻译或改写题名。
  */
 export function isEnglishCandidateTitle(title: unknown): boolean {
   const text = typeof title === "string" ? title.trim() : "";
   if (!text) return false;
-  const latinCount = (text.match(LATIN_PATTERN) ?? []).length;
-  if (latinCount === 0) return false;
-  const cjkCount = (text.match(CJK_PATTERN) ?? []).length;
-  return cjkCount / (cjkCount + latinCount) <= CJK_RATIO_LIMIT;
+  return !CJK_PATTERN.test(text) && ASCII_WORD_PATTERN.test(text);
+}
+
+export function isDisplayableEnglishTitle(title: string | null | undefined): boolean {
+  return isEnglishCandidateTitle(title);
 }
 
 /**
@@ -98,6 +97,12 @@ export function filterEnglishCandidatePapers<T>(papers: readonly T[] | null | un
         : undefined;
     return isEnglishCandidateTitle(title);
   });
+}
+
+export function filterDisplayableEnglishCandidates<T extends { title?: string | null }>(
+  candidates: T[],
+): T[] {
+  return candidates.filter((candidate) => isDisplayableEnglishTitle(candidate.title));
 }
 
 /** 一次候选读取的归属票据。 */
