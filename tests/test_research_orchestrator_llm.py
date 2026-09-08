@@ -38,7 +38,8 @@ class FakeOrchestratorLlmGenerator:
         self,
         responses: list[str | Exception | OrchestratorLlmOutcome] | None = None,
     ) -> None:
-        self.responses = list(responses or [])
+        self.explicit_responses = responses is not None
+        self.responses = list(responses) if responses is not None else []
         self.calls: list[dict[str, object]] = []
 
     def generate(
@@ -55,7 +56,12 @@ class FakeOrchestratorLlmGenerator:
             "conversation_history": list(conversation_history),
             "conversation_id": conversation_id,
         })
-        if not self.responses:
+        if self.explicit_responses and not self.responses:
+            return OrchestratorLlmOutcome(
+                status="unavailable",
+                reason="Fake provider responses exhausted.",
+            )
+        if not self.explicit_responses and not self.responses:
             return OrchestratorLlmOutcome(
                 status="generated",
                 reply_text="[Fake LLM Reply] 这是来自 Fake Provider 的专业回复 (＾▽＾)。",
@@ -1751,3 +1757,126 @@ def test_regular_prompt_includes_final_boundary_self_check(db_session: Session) 
         owned_ids=None,
     )
     assert "最终输出自检" in prompt["system_prompt"]
+
+
+def test_issue_122_controlled_rewrite_on_reproduction_claim(db_session: Session) -> None:
+    """Issue #122 Task 2: Provider output violating red-line is safely rewritten
+
+    with bounded context.
+    """
+    conv_id = "conv-issue-122-rewrite-ok"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "GCN 节点分类"},
+            messages_data=[
+                {"role": "user", "content": "这是此前的未确认聊天信息1"},
+                {"role": "assistant", "content": "这是此前的未确认聊天信息2"},
+            ],
+        )
+    )
+    db_session.commit()
+
+    # First output violates with ungrounded reproduction success claim;
+    # Second output is compliant and safe.
+    first_output = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "太棒了！你的实验指标达到 83.5%，本次实验已复现成功 (•̀ᴗ•́)و ̑̑"
+    )
+    second_output = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "收到你的实验指标 83.5%！当前指标已完成第一轮记录，但尚未确认复现成功，"
+        "仍需核验随机种子与数据划分 (•̀ᴗ•́)و ̑̑"
+    )
+    fake_gen = FakeOrchestratorLlmGenerator(responses=[first_output, second_output])
+    orch = ResearchConversationOrchestrator(llm_generator=fake_gen)
+
+    resp = orch.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="这是我刚跑完的第一组实验结果：Accuracy=83.5%"),
+        db_session,
+    )
+
+    # Must be completed with rewritten Provider output (not local template)
+    assert resp.status == "completed"
+    assert resp.reply_message is not None
+    assert "收到你的实验指标 83.5%" in resp.reply_message.content
+    assert "尚未确认复现成功" in resp.reply_message.content
+    assert len(fake_gen.calls) == 2
+
+    # Verify rewrite call has minimal bounded context (NO unconfirmed chat conversation history)
+    rewrite_call = fake_gen.calls[1]
+    assert rewrite_call["conversation_history"] == []
+    prompt_str = str(rewrite_call["user_prompt"])
+    assert "待受控改写" in prompt_str or "改写" in prompt_str
+    assert "复现成功" in prompt_str
+
+
+def test_issue_122_controlled_rewrite_fails_if_second_output_still_violates(
+    db_session: Session,
+) -> None:
+    """Issue #122 Task 2: Second output still invalid -> fails cleanly without state changes."""
+    conv_id = "conv-issue-122-rewrite-fail"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "GCN 复现"},
+            messages_data=[],
+        )
+    )
+    db_session.commit()
+
+    first_output = "本次实验已复现成功！"
+    second_output = "改写后：指标达到论文基线，因此可以视为复现成功。"
+    fake_gen = FakeOrchestratorLlmGenerator(responses=[first_output, second_output])
+    orch = ResearchConversationOrchestrator(llm_generator=fake_gen)
+
+    resp = orch.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="看下我的实验结果"),
+        db_session,
+    )
+
+    # Clean failure: no advancement, exactly 2 calls (1 main + 1 rewrite retry)
+    assert resp.status == "failed"
+    assert resp.reply_message is None
+    assert resp.state.current_stage == "research_need"
+    assert resp.state.last_status == "failed"
+    assert "Controlled rewrite boundary validation failure" in str(resp.error)
+    assert len(fake_gen.calls) == 2
+    # Verify rewrite call does not send conversation history
+    assert fake_gen.calls[1]["conversation_history"] == []
+
+    # Verify state model did not record unverified plan or paper
+    state = orch.get_state_model(conv_id, db_session)
+    assert state.current_stage == "research_need"
+    assert state.current_plan is None
+    assert state.plan_history == []
+
+
+def test_issue_122_no_controlled_rewrite_for_compliant_negation(db_session: Session) -> None:
+    """Issue #122 Task 2: Compliant negations should NOT trigger extra rewrite call."""
+    conv_id = "conv-issue-122-no-rewrite"
+    db_session.add(ResearchConversationModel(id=conv_id, profile_data={}, messages_data=[]))
+    db_session.commit()
+
+    valid_output = (
+        "说明：以下内容基于你提出的探索方向与通用技术概览，尚未执行正式检索；"
+        "具体论文、实现细节和实验结论仍需在你确认后核验。\n\n"
+        "目前暂不能保证复现成功，仍需核验数据划分和随机种子。我们一步一步来 (•̀ᴗ•́)و ̑̑"
+    )
+    fake_gen = FakeOrchestratorLlmGenerator(responses=[valid_output])
+    orch = ResearchConversationOrchestrator(llm_generator=fake_gen)
+
+    resp = orch.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="我们要怎样规划实验？"),
+        db_session,
+    )
+
+    assert resp.status == "completed"
+    assert resp.reply_message is not None
+    assert "暂不能保证复现成功" in resp.reply_message.content
+    assert len(fake_gen.calls) == 1

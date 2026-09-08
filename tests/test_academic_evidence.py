@@ -17,6 +17,8 @@ from code_navi.research.academic import (  # noqa: E402
     AcademicSourceResult,
     ArxivMetadataClient,
     PaperMetadata,
+    _has_relevance_match,
+    _relevance_tokens,
 )
 from code_navi.research.router import _evidence_service  # noqa: E402
 from code_navi.research_tools import academic_search_spec, register_research_tools  # noqa: E402
@@ -194,7 +196,9 @@ def test_academic_search_prioritizes_and_deduplicates_original_gcn_paper() -> No
                         source_name="arXiv",
                         url="https://arxiv.org/abs/2101.00001",
                         identifier="arXiv:2101.00001",
-                        abstract_excerpt="This survey reviews graph convolutional network methods.",
+                        abstract_excerpt=(
+                            "This survey reviews GCN and graph convolutional network methods."
+                        ),
                         accessed_at=accessed_at,
                     ),
                 ],
@@ -371,3 +375,222 @@ def test_api_rejects_search_for_incomplete_session(client: TestClient) -> None:
     )
 
     assert response.status_code == 409
+
+
+def test_issue_122_chinese_and_mixed_cjk_token_extraction() -> None:
+    from code_navi.research.academic import _tokens
+
+    cjk_tokens = _tokens("卷积神经网络 图像分类")
+    assert "卷积" in cjk_tokens
+    assert "网络" in cjk_tokens
+    assert "图像" in cjk_tokens
+    assert "分类" in cjk_tokens
+    assert "卷" in cjk_tokens
+    assert "积" in cjk_tokens
+
+    mixed_tokens = _tokens("SQL注入检测 CNN")
+    assert "sql" in mixed_tokens
+    assert "cnn" in mixed_tokens
+    assert "注入" in mixed_tokens
+    assert "检测" in mixed_tokens
+    assert "注" in mixed_tokens
+
+
+def test_issue_122_chinese_search_ranking_and_relevance_gate() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper_high_rel = PaperMetadata(
+        title="基于卷积神经网络的图像分类算法研究",
+        authors=["张三", "李四"],
+        year=2023,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2301.00001",
+        identifier="arXiv:2301.00001",
+        abstract_excerpt="本文提出了一种改进的卷积神经网络用于图像分类任务。",
+        accessed_at=accessed_at,
+    )
+    paper_irrelevant = PaperMetadata(
+        title="自然语言处理中的BERT预训练模型",
+        authors=["王五"],
+        year=2024,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2401.00001",
+        identifier="arXiv:2401.00001",
+        abstract_excerpt="本文探讨无监督语言建模与自注意力机制在机器翻译上的表现。",
+        accessed_at=accessed_at,
+    )
+    paper_moderate_rel = PaperMetadata(
+        title="深度学习在图像识别领域的应用实践",
+        authors=["赵六"],
+        year=2022,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2201.00001",
+        identifier="arXiv:2201.00001",
+        abstract_excerpt="讨论图像特征提取和分类器性能。",
+        accessed_at=accessed_at,
+    )
+
+    source = FakeArxivSource(
+        AcademicSourceResult.success(
+            "arxiv", [paper_irrelevant, paper_high_rel, paper_moderate_rel]
+        )
+    )
+    tool = AcademicSearchTool({"arxiv": source})
+
+    bundle = tool.search("session-cjk", "卷积神经网络 图像分类", ["arxiv"])
+
+    assert bundle["query"] == "卷积神经网络 图像分类"
+    # Gating: completely irrelevant paper (0 matching tokens) is filtered out
+    assert len(bundle["papers"]) == 2
+    # Highly relevant paper must be ranked first
+    assert bundle["papers"][0]["title"] == "基于卷积神经网络的图像分类算法研究"
+    # Moderately relevant paper ranked second
+    assert bundle["papers"][1]["title"] == "深度学习在图像识别领域的应用实践"
+    assert all(p["title"] != "自然语言处理中的BERT预训练模型" for p in bundle["papers"])
+
+
+def test_issue_122_mixed_chinese_english_query_ranking() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper_mixed = PaperMetadata(
+        title="基于CNN与深度学习的SQL注入检测方法",
+        authors=["Alice", "Bob"],
+        year=2023,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2303.00001",
+        identifier="arXiv:2303.00001",
+        abstract_excerpt="采用CNN模型进行Web流量中的SQL注入行为特征分析与实时检测。",
+        accessed_at=accessed_at,
+    )
+    paper_survey = PaperMetadata(
+        title="A Survey of SQL Injection Vulnerabilities",
+        authors=["Charlie"],
+        year=2021,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2103.00001",
+        identifier="arXiv:2103.00001",
+        abstract_excerpt="This survey covers common SQL injection attacks.",
+        accessed_at=accessed_at,
+    )
+    paper_unrelated = PaperMetadata(
+        title="Quantum Computing Foundations and Algorithms",
+        authors=["David"],
+        year=2025,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2503.00001",
+        identifier="arXiv:2503.00001",
+        abstract_excerpt="An introduction to qubits and quantum gates.",
+        accessed_at=accessed_at,
+    )
+
+    source = FakeArxivSource(
+        AcademicSourceResult.success("arxiv", [paper_survey, paper_unrelated, paper_mixed])
+    )
+    tool = AcademicSearchTool({"arxiv": source})
+
+    bundle = tool.search("session-mixed", "SQL注入检测 CNN", ["arxiv"])
+
+    assert bundle["query"] == "SQL注入检测 CNN"
+    # Gating: unrelated quantum paper filtered out
+    assert len(bundle["papers"]) == 2
+    assert bundle["papers"][0]["title"] == "基于CNN与深度学习的SQL注入检测方法"
+    assert bundle["papers"][1]["title"] == "A Survey of SQL Injection Vulnerabilities"
+    assert all(
+        p["title"] != "Quantum Computing Foundations and Algorithms" for p in bundle["papers"]
+    )
+
+
+def test_issue_122_all_irrelevant_candidates_return_empty_list() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper_1 = PaperMetadata(
+        title="自然语言处理中的BERT预训练模型",
+        authors=["王五"],
+        year=2024,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2401.00001",
+        identifier="arXiv:2401.00001",
+        abstract_excerpt="探讨自注意力机制在机器翻译上的表现。",
+        accessed_at=accessed_at,
+    )
+    paper_2 = PaperMetadata(
+        title="Quantum Computing Foundations and Algorithms",
+        authors=["David"],
+        year=2025,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2503.00001",
+        identifier="arXiv:2503.00001",
+        abstract_excerpt="An introduction to qubits and quantum gates.",
+        accessed_at=accessed_at,
+    )
+
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [paper_1, paper_2]))
+    tool = AcademicSearchTool({"arxiv": source})
+
+    bundle = tool.search("session-zero-rel", "量子计算超导量子比特", ["arxiv"])
+
+    assert bundle["query"] == "量子计算超导量子比特"
+    assert bundle["papers"] == []
+    assert bundle["allowed_sources"] == ["arxiv"]
+    assert bundle["source_statuses"][0]["status"] == "success"
+    assert "searched_at" in bundle
+    assert "provenance_note" in bundle
+
+
+def test_issue_122_cjk_single_char_overlap_not_relevant() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper_graph_db = PaperMetadata(
+        title="图数据库的分布式查询优化",
+        authors=["张三"],
+        year=2023,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2301.00001",
+        identifier="arXiv:2301.00001",
+        abstract_excerpt="研究图数据存储与查询优化算法。",
+        accessed_at=accessed_at,
+    )
+    paper_cnn_image = PaperMetadata(
+        title="基于卷积神经网络的图像分类研究",
+        authors=["李四"],
+        year=2024,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2401.00001",
+        identifier="arXiv:2401.00001",
+        abstract_excerpt="提出一种新型卷积神经网络进行图像分类任务。",
+        accessed_at=accessed_at,
+    )
+
+    query = "卷积神经网络 图像分类"
+    # Direct relevance match test
+    # "图数据库的分布式查询优化" only shares single characters ('分', '图'), NOT bigrams
+    query_tokens = _relevance_tokens(query)
+    assert _has_relevance_match(paper_graph_db, query_tokens) is False
+    assert _has_relevance_match(paper_cnn_image, query_tokens) is True
+
+    # Search tool gating test: graph db paper must NOT appear in results
+    source = FakeArxivSource(
+        AcademicSourceResult.success("arxiv", [paper_graph_db, paper_cnn_image])
+    )
+    tool = AcademicSearchTool({"arxiv": source})
+    bundle = tool.search("session-cjk-gating", query, ["arxiv"])
+
+    assert len(bundle["papers"]) == 1
+    assert bundle["papers"][0]["title"] == "基于卷积神经网络的图像分类研究"
+    assert all(p["title"] != "图数据库的分布式查询优化" for p in bundle["papers"])
+
+
+def test_issue_122_single_cjk_char_query_insufficient_info() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper = PaperMetadata(
+        title="图数据库的分布式查询优化",
+        authors=["张三"],
+        year=2023,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2301.00001",
+        identifier="arXiv:2301.00001",
+        abstract_excerpt="研究图数据存储与查询优化算法。",
+        accessed_at=accessed_at,
+    )
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [paper]))
+    tool = AcademicSearchTool({"arxiv": source})
+
+    # Pure single Chinese character query is insufficient info, must not match
+    bundle = tool.search("session-single-cjk", "图", ["arxiv"])
+    assert bundle["papers"] == []

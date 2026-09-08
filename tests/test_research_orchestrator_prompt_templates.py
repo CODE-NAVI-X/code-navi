@@ -222,6 +222,7 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
     # Compliant statements with explicit negation / boundary limitation -> MUST PASS
     compliant_cases = [
         "目前还不能下“复现成功”的结论，仍需核验数据划分、训练动态与论文描述。",
+        "尚未确认复现成功；当前指标仅作待核验对照。",
         "尚未确认复现成功；当前指标只能作为与论文基线的待核验对照。",
         "evidence_linked 不等于复现成功，仍需要人工核验。",
         "指标接近论文并不代表复现成功，仍需核验随机种子与实验环境。",
@@ -268,13 +269,46 @@ def test_validate_jiangjiang_output_reproduction_success_boundary_semantics() ->
     safe_boundary_cases = [
         "复现成功不代表论文结论正确，仍需人工核验。",
         "即使复现成功，也不等于论文可投稿。",
+        "哪怕复现成功，也需要进一步消融验证。",
+        "如果复现成功，我们再讨论下一步扩展实验。",
         "如果未来形成复现闭环，仍需导师核验论文结论。",
-        "尚未确认复现成功；当前指标仅作待核验对照。",
     ]
     for text in safe_boundary_cases:
         is_valid, reason = validate_jiangjiang_output(text)
-        assert is_valid, f"Safe boundary text was falsely rejected: {text} (reason: {reason})"
+        assert is_valid, f"Safe boundary was falsely rejected: {text} (reason: {reason})"
         assert reason is None
+
+
+def test_issue_122_reproduction_context_validation() -> None:
+    """Issue #122 Task 1: Contextual validation of reproduction success claims."""
+    # Must fail and remain strictly blocked
+    strictly_blocked = [
+        "已经复现成功",
+        "本次实验已复现成功",
+        "指标达到论文基线，因此可以视为复现成功",
+        "复现成功率达到 100%",
+        "尚未确认复现成功，但本次实验已复现成功。",
+    ]
+    for text in strictly_blocked:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert not is_valid, f"Expected rejection for '{text}', but passed"
+        assert reason is not None
+        assert "复现成功" in reason
+
+    # Must pass without false positives
+    strictly_allowed = [
+        "暂不能保证复现成功，仍需核验数据划分和随机种子。",
+        "是否能够复现成功需要验证。",
+        "为了验证能否复现成功，需要补充训练日志。",
+        "复现成功不代表论文结论正确，仍需人工核验。",
+        "如果未来形成复现闭环，仍需导师核验论文结论。",
+        "尚未确认复现成功；当前指标仅作待核验对照。",
+    ]
+    for text in strictly_allowed:
+        is_valid, reason = validate_jiangjiang_output(text)
+        assert is_valid, f"Expected pass for '{text}', but rejected with reason: {reason}"
+        assert reason is None
+
 
     # Semantic reproduction-claim and percentage violations -> MUST FAIL
     semantic_violation_cases = [

@@ -61,6 +61,10 @@ import { JiangJiangAvatar, UserAvatar } from "./JiangJiangAvatar";
 import { DirectionCardsBox } from "./DirectionCardsBox";
 import { CandidatePaperCard } from "./CandidatePaperCard";
 import { SearchCandidateCards } from "./SearchCandidateCards";
+import {
+  shouldRefreshSearchCandidates,
+  shouldShowSearchCandidates,
+} from "@/lib/research-candidates";
 
 type Phase = "initializing" | "idle" | "thinking";
 
@@ -182,8 +186,10 @@ export function ResearchConversation() {
       if (papersRes) {
         setPapers(papersRes);
       }
-      if (activeConversationId) {
+      if (activeConversationId && shouldRefreshSearchCandidates(papersRes)) {
         await refreshSearchCandidates(activeConversationId);
+      } else {
+        setSearchCandidates([]);
       }
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -254,9 +260,17 @@ export function ResearchConversation() {
             .then((res) => setDirectionCards(res.cards))
             .catch(() => {});
           void getOrchestratorPapers(conversation.conversation_id)
-            .then((res) => setPapers(res))
-            .catch(() => {});
-          void refreshSearchCandidates(conversation.conversation_id);
+            .then((res) => {
+              setPapers(res);
+              if (shouldRefreshSearchCandidates(res)) {
+                void refreshSearchCandidates(conversation.conversation_id);
+              } else {
+                setSearchCandidates([]);
+              }
+            })
+            .catch(() => {
+              void refreshSearchCandidates(conversation.conversation_id);
+            });
         },
         onFailed: (response: OrchestratorMessageResponse) => {
           let errMsg = response.error || "思考未成功完成。请重试本轮。";
@@ -325,6 +339,9 @@ export function ResearchConversation() {
         purpose,
       });
       setPapers(res);
+      if (res?.current_paper) {
+        setSearchCandidates([]);
+      }
       // Also update orchestrator state subtask
       const updatedState = await getOrchestratorState(conversation.conversation_id);
       setOrchestratorState(updatedState);
@@ -644,7 +661,7 @@ export function ResearchConversation() {
           )}
 
           {/* P3-A: candidate paper cards from the latest real search bundle */}
-          {searchCandidates.length > 0 && (
+          {shouldShowSearchCandidates(searchCandidates, papers) && (
             <SearchCandidateCards
               papers={searchCandidates}
               disabled={disabled}

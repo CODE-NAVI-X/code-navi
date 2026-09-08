@@ -180,3 +180,38 @@ export async function loadSearchCandidates<T>(
   options.apply(papers);
   return true;
 }
+
+export interface HasCurrentPaper {
+  current_paper?: unknown | null;
+  paper_history?: unknown[] | null;
+}
+
+/**
+ * Candidate cards are hidden once a paper is selected so that a later bundle
+ * response cannot suggest switching away from the user's current choice.
+ */
+export function shouldShowSearchCandidates<T extends { title?: string | null }>(
+  candidates: T[] | null | undefined,
+  papers: HasCurrentPaper | null | undefined,
+): boolean {
+  if (!Array.isArray(candidates) || candidates.length === 0 || papers?.current_paper) {
+    return false;
+  }
+  return filterEnglishCandidatePapers(candidates).length > 0;
+}
+
+/** Do not refresh cards after a paper has been selected. */
+export function shouldRefreshSearchCandidates(
+  papers: HasCurrentPaper | null | undefined,
+): boolean {
+  return !papers?.current_paper;
+}
+
+/** A selected paper clears the effective candidate list. */
+export function resolveEffectiveCandidates<T extends { title?: string | null }>(
+  candidates: T[],
+  papers: HasCurrentPaper | null | undefined,
+): T[] {
+  if (papers?.current_paper) return [];
+  return filterEnglishCandidatePapers(candidates);
+}

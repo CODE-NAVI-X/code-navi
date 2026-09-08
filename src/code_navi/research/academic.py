@@ -516,7 +516,19 @@ def _deduplicate_and_rank(
         )
         for group in groups
     ]
+    query_tokens = _relevance_tokens(query)
+    if query.strip():
+        merged = [item for item in merged if _has_relevance_match(item[0], query_tokens)]
     return sorted(merged, key=lambda item: _ranking_key(item[0], query))
+
+
+def _has_relevance_match(paper: PaperMetadata, query_tokens: set[str]) -> bool:
+    if not query_tokens:
+        return False
+    title_tokens = _relevance_tokens(paper.title)
+    abstract_tokens = _relevance_tokens(paper.abstract_excerpt or "")
+    author_tokens = set(_author_relevance_tokens(paper))
+    return bool(query_tokens & (title_tokens | abstract_tokens | author_tokens))
 
 
 def _same_paper(left: PaperMetadata, right: PaperMetadata) -> bool:
@@ -547,22 +559,36 @@ def _paper_quality(paper: PaperMetadata) -> tuple[int, int, int, int, str]:
     )
 
 
-def _ranking_key(paper: PaperMetadata, query: str) -> tuple[int, int, int, int, int, str, str]:
-    query_tokens = _tokens(query)
-    title_tokens = _tokens(paper.title)
-    author_tokens = set(_author_tokens(paper))
+def _author_relevance_tokens(paper: PaperMetadata) -> list[str]:
+    return [token for author in paper.authors for token in _relevance_tokens(author)]
+
+
+def _ranking_key(
+    paper: PaperMetadata, query: str
+) -> tuple[int, int, int, int, int, int, str, str]:
+    query_tokens = _relevance_tokens(query)
+    title_tokens = _relevance_tokens(paper.title)
+    author_tokens = set(_author_relevance_tokens(paper))
     kind_score = {"original_paper": 3, "review": 2, "downstream_application": 1}[
         _paper_kind(paper)
     ]
     title_matches = len(query_tokens & title_tokens)
     author_matches = len(query_tokens & author_tokens)
-    keyword_coverage = len(query_tokens & _tokens(f"{paper.title} {paper.abstract_excerpt or ''}"))
+    keyword_coverage = len(
+        query_tokens & _relevance_tokens(f"{paper.title} {paper.abstract_excerpt or ''}")
+    )
+    has_match = (
+        int(bool(title_matches or keyword_coverage or author_matches))
+        if query_tokens
+        else 1
+    )
     year_score = int(paper.year is not None and 1800 <= paper.year <= 2100)
     return (
-        -kind_score,
+        -has_match,
         -title_matches,
-        -author_matches,
         -keyword_coverage,
+        -author_matches,
+        -kind_score,
         -year_score,
         _normalized_title(paper.title),
         paper.url.casefold(),
@@ -614,8 +640,26 @@ def _author_tokens(paper: PaperMetadata) -> list[str]:
     return [token for author in paper.authors for token in _tokens(author)]
 
 
+def _relevance_tokens(value: str) -> set[str]:
+    lowered = value.casefold()
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    cjk_blocks = re.findall(r"[\u4e00-\u9fff]+", lowered)
+    for block in cjk_blocks:
+        for i in range(len(block) - 1):
+            tokens.add(block[i : i + 2])
+    return tokens
+
+
 def _tokens(value: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", value.casefold()))
+    lowered = value.casefold()
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    cjk_blocks = re.findall(r"[\u4e00-\u9fff]+", lowered)
+    for block in cjk_blocks:
+        for char in block:
+            tokens.add(char)
+        for i in range(len(block) - 1):
+            tokens.add(block[i : i + 2])
+    return tokens
 
 
 def _text(element: ElementTree.Element, path: str, namespace: dict[str, str]) -> str | None:
