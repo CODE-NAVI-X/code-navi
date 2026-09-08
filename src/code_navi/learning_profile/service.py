@@ -9,7 +9,11 @@ percentage.  No LLM participates in these calculations.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import datetime, timezone
+    UTC = timezone.utc
 
 from sqlalchemy.orm import Session
 
@@ -632,6 +636,64 @@ class ProfileService:
             source_ref=request.source_ref,
             status=target,
         )
+
+    def delete_record(
+        self,
+        record_id: str,
+        db: Session,
+        *,
+        owner_principal_id: str | None = None,
+        owned_ids: list[str] | None = None,
+    ) -> bool:
+        """Remove a quiz attempt or confusion mark record to manage profile facts."""
+        # 1. Try deleting from confusion marks
+        mark_query = db.query(ConfusionMarkModel).filter(ConfusionMarkModel.id == record_id)
+        if owned_ids:
+            mark_query = mark_query.filter(ConfusionMarkModel.owner_principal_id.in_(owned_ids))
+        elif owner_principal_id:
+            mark_query = mark_query.filter(ConfusionMarkModel.owner_principal_id == owner_principal_id)
+        mark = mark_query.first()
+        if mark:
+            db.delete(mark)
+            db.commit()
+            return True
+
+        # 2. Try deleting from quiz attempts (by attempt_id or id)
+        attempt_query = db.query(QuizAttemptModel).filter(
+            (QuizAttemptModel.id == record_id) | (QuizAttemptModel.attempt_id == record_id)
+        )
+        if owned_ids:
+            attempt_query = attempt_query.filter(QuizAttemptModel.owner_principal_id.in_(owned_ids))
+        elif owner_principal_id:
+            attempt_query = attempt_query.filter(QuizAttemptModel.owner_principal_id == owner_principal_id)
+        attempts = attempt_query.all()
+        if attempts:
+            for att in attempts:
+                db.delete(att)
+            db.commit()
+            return True
+
+        return False
+
+
+def build_student_profile_summary(profile: ProfileResponse) -> str:
+    """Generate a concise 30-50 words summary of the user's learning profile.
+
+    Suitable for lightweight prompt injection and transparent UI presentation.
+    """
+    parts: list[str] = []
+    if profile.strengths:
+        parts.append(f"基础巩固：{'、'.join(profile.strengths[:2])}（表现扎实）")
+    if profile.weaknesses:
+        parts.append(f"重点薄弱：{'、'.join(profile.weaknesses[:2])}（待加强）")
+    elif profile.confusion:
+        confused_points = [c.knowledge_point for c in profile.confusion[:2]]
+        parts.append(f"待复习标记：{'、'.join(confused_points)}")
+
+    if not parts:
+        return "近期诊断记录较少，组卷将依据核心考点均匀覆盖基础理论与综合辨析。"
+
+    return "；".join(parts) + "。本次出题将定向巩固薄弱点，强化综合理解。"
 
 
 def build_student_profile_prompt(profile: ProfileResponse) -> str | None:

@@ -635,9 +635,13 @@ export default function LearningPage(): JSX.Element {
   const searchParams = useSearchParams();
   const workspaceId = searchParams.get("workspace_id");
   const taskId = searchParams.get("task_id");
+  const modeParam = searchParams.get("mode");
+  const kpParam = searchParams.get("knowledgePoint");
+  const profileParam = searchParams.get("targetProfile");
+  const autoStartParam = searchParams.get("autoStart");
 
   // Explain state (the single source of truth for the concept under study)
-  const [query, setQuery] = useState(savedSnapshot?.query ?? "");
+  const [query, setQuery] = useState(kpParam ?? savedSnapshot?.query ?? "");
   const [activeDomainId, setActiveDomainId] = useState(COMPUTER_DOMAINS[0].id);
   const [selectedDirectionIds, setSelectedDirectionIds] = useState<Set<string>>(() => new Set());
   const [recentLearning, setRecentLearning] = useState<RecentLearningItem[]>([]);
@@ -923,18 +927,19 @@ export default function LearningPage(): JSX.Element {
    * 学情诊断 view. This stays on the learning page — the quiz module is a
    * second view of this page, not a route into another module.
    */
-  async function handleGenerateQuiz() {
-    const knowledgePoint = (result?.knowledge_point || query).trim();
+  async function handleGenerateQuiz(customKp?: string, customParams?: Partial<QuizGenerateParams>) {
+    const knowledgePoint = (customKp || result?.knowledge_point || query).trim();
     if (!knowledgePoint) return;
 
     setView("quiz");
     setQuizLoading(true);
     setQuizError(null);
     try {
+      const merged = { ...quizParams, ...(customParams ?? {}) };
       const data = await generateQuiz({
         knowledge_point: knowledgePoint,
         session_id: activeSessionId,
-        ...quizParams,
+        ...merged,
       });
       setQuizResponse(data);
     } catch (err) {
@@ -945,6 +950,28 @@ export default function LearningPage(): JSX.Element {
       setQuizLoading(false);
     }
   }
+
+  // Auto-handle jump from 学情画像下钻弹窗「复习薄弱知识点」
+  const autoHandledRef = useRef(false);
+  useEffect(() => {
+    if (modeParam === "quiz" && kpParam && !autoHandledRef.current) {
+      autoHandledRef.current = true;
+      setQuery(kpParam);
+      setStep("check");
+      setView("quiz");
+
+      const targetedParams: QuizGenerateParams = {
+        ...quizParams,
+        profile_id: null, // 隔离全局宽泛画像，专注单点薄弱知识点专项突破
+        student_profile: profileParam ?? null,
+      };
+      setQuizParams(targetedParams);
+
+      if (autoStartParam === "1") {
+        void handleGenerateQuiz(kpParam, targetedParams);
+      }
+    }
+  }, [modeParam, kpParam, profileParam, autoStartParam]);
 
   /** Download the latest generated paper as a Word exam (.docx). */
   async function handleExportQuiz(withAnswer: boolean) {

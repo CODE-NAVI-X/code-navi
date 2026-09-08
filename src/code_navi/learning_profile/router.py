@@ -44,3 +44,18 @@ async def get_profile(
     owned_ids = get_owned_principal_ids(principal, db) if principal else None
     return _profile_service.get_profile(profile_id, db, owned_ids=owned_ids)
 
+
+@router.delete("/records/{record_id}", status_code=200)
+async def delete_profile_record(
+    record_id: str,
+    principal: CurrentPrincipal | None = _opt_principal_dep,
+    db: Session = _db_dependency,
+) -> dict:
+    """Delete a confusion mark or quiz attempt record to manage and correct profile facts."""
+    owned_ids = get_owned_principal_ids(principal, db) if principal else None
+    principal_id = principal.principal_id if principal else None
+    success = _profile_service.delete_record(
+        record_id, db, owner_principal_id=principal_id, owned_ids=owned_ids
+    )
+    return {"success": success, "record_id": record_id}
+

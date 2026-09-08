@@ -13,7 +13,11 @@ cross-session aggregation key.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import datetime, timezone
+    UTC = timezone.utc
 
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text
 

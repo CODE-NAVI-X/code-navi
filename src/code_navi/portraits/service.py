@@ -10,7 +10,11 @@ Pure rules, no model invocations, no network requests, and no second set of fact
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+try:
+    from datetime import UTC, datetime
+except ImportError:
+    from datetime import datetime, timezone
+    UTC = timezone.utc
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -136,6 +140,7 @@ class PortraitsOverviewService:
                 knowledge_point=item.topic,
                 source_type=item.source_type,
                 summary=item.summary,
+                source_id=item.source_id,
             )
             for item in gaps_response.items[:8]
         ]
