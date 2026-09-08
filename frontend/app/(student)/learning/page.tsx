@@ -968,9 +968,13 @@ export default function LearningPage(): JSX.Element {
       setQuizParams(targetedParams);
 
       if (autoStartParam === "1") {
-        void handleGenerateQuiz(kpParam, targetedParams);
+        const timer = setTimeout(() => {
+          void handleGenerateQuiz(kpParam, targetedParams);
+        }, 0);
+        return () => clearTimeout(timer);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeParam, kpParam, profileParam, autoStartParam]);
 
   /** Download the latest generated paper as a Word exam (.docx). */

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Sparkles, Compass, ShieldCheck } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 export interface CosmicDimension {
   id: string;
@@ -93,7 +93,7 @@ function getDimensionDetailSummary(dim: CosmicDimension): string {
 const ANGLES = [-90, -18, 54, 126, 198]; // degrees
 const CENTER_X = 250;
 const CENTER_Y = 250;
-const MAX_RADIUS = 152;
+const MAX_RADIUS = 192;
 
 function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
   const angleInRadians = ((angleInDegrees - 0) * Math.PI) / 180.0;
@@ -162,7 +162,7 @@ export function CosmicRadarChart({
 
   // Label coordinates (outside max radius)
   const labelPositions = useMemo(() => {
-    return ANGLES.map((angle) => polarToCartesian(CENTER_X, CENTER_Y, MAX_RADIUS + 38, angle));
+    return ANGLES.map((angle) => polarToCartesian(CENTER_X, CENTER_Y, MAX_RADIUS + 28, angle));
   }, []);
 
   // Background orbital rings radii
@@ -280,8 +280,8 @@ export function CosmicRadarChart({
             className="relative flex w-full items-center justify-center py-1"
           >
             <svg
-              viewBox="-60 0 620 500"
-              className="h-auto w-full max-w-[540px] select-none overflow-visible"
+              viewBox="-80 0 660 500"
+              className="h-auto w-full max-w-[580px] select-none overflow-visible"
               aria-label="认知能力星轨雷达图"
             >
               <defs>
@@ -482,7 +482,7 @@ export function CosmicRadarChart({
                       y={pos.y - 8}
                       textAnchor={textAnchor}
                       fill={isHovered ? "#38bdf8" : "#f8fafc"}
-                      fontSize="14"
+                      fontSize="15"
                       fontWeight="700"
                       letterSpacing="0.04em"
                     >
@@ -490,10 +490,10 @@ export function CosmicRadarChart({
                     </text>
                     <text
                       x={pos.x}
-                      y={pos.y + 10}
+                      y={pos.y + 11}
                       textAnchor={textAnchor}
                       fill={levelColor}
-                      fontSize="11"
+                      fontSize="12"
                       fontFamily="monospace"
                       fontWeight="700"
                     >

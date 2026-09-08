@@ -9,11 +9,7 @@ percentage.  No LLM participates in these calculations.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-try:
-    from datetime import UTC, datetime
-except ImportError:
-    from datetime import datetime, timezone
-    UTC = timezone.utc
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -651,7 +647,9 @@ class ProfileService:
         if owned_ids:
             mark_query = mark_query.filter(ConfusionMarkModel.owner_principal_id.in_(owned_ids))
         elif owner_principal_id:
-            mark_query = mark_query.filter(ConfusionMarkModel.owner_principal_id == owner_principal_id)
+            mark_query = mark_query.filter(
+                ConfusionMarkModel.owner_principal_id == owner_principal_id
+            )
         mark = mark_query.first()
         if mark:
             db.delete(mark)
@@ -665,7 +663,9 @@ class ProfileService:
         if owned_ids:
             attempt_query = attempt_query.filter(QuizAttemptModel.owner_principal_id.in_(owned_ids))
         elif owner_principal_id:
-            attempt_query = attempt_query.filter(QuizAttemptModel.owner_principal_id == owner_principal_id)
+            attempt_query = attempt_query.filter(
+                QuizAttemptModel.owner_principal_id == owner_principal_id
+            )
         attempts = attempt_query.all()
         if attempts:
             for att in attempts:

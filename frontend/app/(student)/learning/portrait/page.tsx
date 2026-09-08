@@ -22,12 +22,9 @@ import {
   ArrowRight,
   CheckCircle2,
   Code2,
-  Compass,
   FileQuestion,
   FlaskConical,
   Inbox,
-  Layers,
-  Lightbulb,
   RefreshCw,
   Sparkles,
   Target,
@@ -218,8 +215,6 @@ export default function PortraitPage() {
   const bridges = overview?.bridges;
 
   const hasMasteryData = (learning?.mastery.graded_attempts ?? 0) > 0;
-  const hasStrengths = (learning?.mastery.strong_points.length ?? 0) > 0;
-  const hasWeaknesses = (learning?.mastery.weak_points.length ?? 0) > 0;
   const hasKnowledgeGaps = (learning?.knowledge_gaps.length ?? 0) > 0;
   const hasReviewQueue = (learning?.review_queue.active_confusion_marks ?? 0) > 0;
   const hasResearchConvs = (research?.conversations.length ?? 0) > 0;
@@ -235,7 +230,6 @@ export default function PortraitPage() {
       (w) => !deletedIds.has(w)
     );
     const gaps = (learning?.knowledge_gaps ?? []).filter((g) => !deletedIds.has(g.knowledge_point));
-    const marks = Math.max(0, (learning?.review_queue.active_confusion_marks ?? 5) - deletedIds.size);
     const convCount = research?.conversations.length ?? 3;
 
     // 1. Concept: Higher if strong points exist

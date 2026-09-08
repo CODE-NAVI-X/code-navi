@@ -18,11 +18,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Generator
-try:
-    from datetime import UTC, datetime, timedelta
-except ImportError:
-    from datetime import datetime, timedelta, timezone
-    UTC = timezone.utc
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient

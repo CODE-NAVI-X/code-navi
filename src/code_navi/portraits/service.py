@@ -10,11 +10,7 @@ Pure rules, no model invocations, no network requests, and no second set of fact
 
 from __future__ import annotations
 
-try:
-    from datetime import UTC, datetime
-except ImportError:
-    from datetime import datetime, timezone
-    UTC = timezone.utc
+from datetime import UTC, datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
