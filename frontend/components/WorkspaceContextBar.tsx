@@ -2,15 +2,22 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { ArrowLeft, BriefcaseBusiness, Loader2 } from "lucide-react";
+import { ArrowLeft, BookOpen, BriefcaseBusiness, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { getLearningSessionId } from "@/lib/api/learning";
+import {
+  LEARNING_NOTEBOOK_OPEN_EVENT,
+  StructuredNotebook,
+  type NotebookTab,
+} from "@/components/learning/StructuredNotebook";
 import {
   fetchTask,
   fetchWorkspace,
   type Workspace,
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
+import { useLearningSessionId } from "@/lib/store/learning-store";
 
 type ContextState =
   | { state: "idle" }
@@ -44,10 +51,77 @@ function returnLabel(destination: string): string {
   return "返回上一步";
 }
 
+function isLearningRoute(pathname: string): boolean {
+  return (
+    pathname === "/learning" ||
+    pathname.startsWith("/learning/") ||
+    pathname === "/student/learning" ||
+    pathname.startsWith("/student/learning/")
+  );
+}
+
+function isNotebookTab(value: unknown): value is NotebookTab {
+  return (
+    value === "summary" ||
+    value === "note" ||
+    value === "research_note" ||
+    value === "wrong_answer" ||
+    value === "presentation"
+  );
+}
+
+function LearningNotebookHost() {
+  const [notebookOpen, setNotebookOpen] = useState(false);
+  const [notebookInitialTab, setNotebookInitialTab] = useState<NotebookTab>("summary");
+  const browserSessionId = useLearningSessionId();
+  const [sessionIdOverride, setSessionIdOverride] = useState<string | null>(null);
+  const sessionId = sessionIdOverride ?? browserSessionId;
+
+  useEffect(() => {
+    function handleOpen(event: Event) {
+      const detail = (event as CustomEvent<{ tab?: unknown }>).detail;
+      const tab = isNotebookTab(detail?.tab) ? detail.tab : "summary";
+      setSessionIdOverride(getLearningSessionId());
+      setNotebookInitialTab(tab);
+      setNotebookOpen(true);
+    }
+
+    window.addEventListener(LEARNING_NOTEBOOK_OPEN_EVENT, handleOpen);
+    return () => window.removeEventListener(LEARNING_NOTEBOOK_OPEN_EVENT, handleOpen);
+  }, []);
+
+  function showNotebook(tab: NotebookTab) {
+    setSessionIdOverride(getLearningSessionId());
+    setNotebookInitialTab(tab);
+    setNotebookOpen(true);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => showNotebook("summary")}
+        aria-label="展开学习笔记"
+        className="app-button-secondary inline-flex shrink-0 items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
+      >
+        <BookOpen className="h-3.5 w-3.5" strokeWidth={1.8} />
+        <span>展开学习笔记</span>
+      </button>
+      <StructuredNotebook
+        key={`${sessionId}:${notebookInitialTab}`}
+        open={notebookOpen}
+        onDismiss={() => setNotebookOpen(false)}
+        sessionId={sessionId || undefined}
+        initialTab={notebookInitialTab}
+      />
+    </>
+  );
+}
+
 /**
  * 统一顶栏中段的「我在哪」面包屑（DESIGN.md §6.6 / D5 Q3）。
  * 原 WorkspaceContextBar 独立条已内聚于此：展示 Workspace / Task 上下文
- * 与返回入口；独立 Learning 提示与上下文失效警示保留原有语义。
+ * 与返回入口；Learning 页面同时提供常驻学习笔记入口。
  */
 export function WorkspaceContextBar() {
   const pathname = usePathname();
@@ -58,6 +132,7 @@ export function WorkspaceContextBar() {
   const [context, setContext] = useState<ContextState>({ state: "idle" });
   const [retryVersion, setRetryVersion] = useState(0);
   const hasExplicitContext = Boolean(workspaceId || taskId);
+  const showLearningNotebook = isLearningRoute(pathname) && pathname !== "/learning/notebook";
 
   useEffect(() => {
     let active = true;
@@ -95,51 +170,50 @@ export function WorkspaceContextBar() {
   }, [hasExplicitContext, retryVersion, taskId, workspaceId]);
 
   if (!hasExplicitContext) {
-    const isLearningRoute =
-      pathname === "/learning" ||
-      pathname.startsWith("/learning/") ||
-      pathname === "/student/learning" ||
-      pathname.startsWith("/student/learning/");
-    if (!isLearningRoute) return null;
-    return (
-      <div className="hidden min-w-0 truncate text-xs text-[var(--app-muted)] md:block">
-        独立 Learning：解析会保存至个人工作区，但不关联 Task。
-      </div>
-    );
+    if (!isLearningRoute(pathname)) return null;
+    return showLearningNotebook ? <LearningNotebookHost /> : null;
   }
 
-  if (context.state === "idle") return null;
+  if (context.state === "idle") {
+    return showLearningNotebook ? <LearningNotebookHost /> : null;
+  }
 
   if (context.state === "loading") {
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--app-muted)]"
-      >
-        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-        <span className="truncate">正在恢复工作上下文…</span>
+      <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--app-muted)]"
+        >
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span className="truncate">正在恢复工作上下文…</span>
+        </div>
+        {showLearningNotebook && <LearningNotebookHost />}
       </div>
     );
   }
 
   if (context.state === "error") {
     return (
-      <div
-        role="alert"
-        className="flex min-w-0 items-center gap-2 truncate text-xs text-amber-700 dark:text-amber-300"
-      >
-        <span className="truncate">工作上下文不可用</span>
-        <button
-          type="button"
-          onClick={() => setRetryVersion((version) => version + 1)}
-          className="shrink-0 font-semibold underline"
+      <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+        <div
+          role="alert"
+          className="flex min-w-0 items-center gap-2 truncate text-xs text-amber-700 dark:text-amber-300"
         >
-          重试
-        </button>
-        <Link href="/" className="shrink-0 font-semibold underline">
-          返回首页
-        </Link>
+          <span className="truncate">工作上下文不可用</span>
+          <button
+            type="button"
+            onClick={() => setRetryVersion((version) => version + 1)}
+            className="shrink-0 font-semibold underline"
+          >
+            重试
+          </button>
+          <Link href="/" className="shrink-0 font-semibold underline">
+            返回首页
+          </Link>
+        </div>
+        {showLearningNotebook && <LearningNotebookHost />}
       </div>
     );
   }
@@ -171,6 +245,7 @@ export function WorkspaceContextBar() {
           <span className="hidden sm:inline">{returnLabel(destination)}</span>
         </Link>
       )}
+      {showLearningNotebook && <LearningNotebookHost />}
     </div>
   );
 }

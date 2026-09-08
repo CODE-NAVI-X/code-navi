@@ -43,7 +43,7 @@ import { getLocalProfileId } from "@/lib/api/workspaces";
 import { getOrCreateLearnerId } from "@/lib/learner";
 
 const GAP_SOURCE_LABELS: Record<string, string> = {
-  quiz_attempt: "理解检查",
+  quiz_attempt: "学情诊断",
   confusion_mark: "不懂标记",
   practice_outcome: "动手实践",
   code_fill_attempt: "代码填空",
@@ -52,7 +52,7 @@ const GAP_SOURCE_LABELS: Record<string, string> = {
 const SURFACE_LABELS: Record<string, string> = {
   ppt_page: "PPT 讲义页",
   explain: "名词解析",
-  quiz_question: "练习题",
+  quiz_question: "诊断题",
 };
 
 function formatOccurredAt(iso: string): string {
@@ -293,7 +293,7 @@ export default function PortraitPage() {
             还没有学习或科研记录
           </p>
           <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-400 dark:text-zinc-500">
-            完成一次理解检查、动手实践，或开启科研会话，这里就会实时生成聚合画像。
+            完成一次学情诊断、动手实践，或开启科研会话，这里就会实时生成聚合画像。
           </p>
         </div>
       )}

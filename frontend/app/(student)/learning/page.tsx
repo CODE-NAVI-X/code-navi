@@ -15,7 +15,7 @@ import {
   streamPresentation,
 } from "@/lib/api/learning";
 import TextSelectionPopover from "@/components/learning/TextSelectionPopover";
-import { StructuredNotebook } from "@/components/learning/StructuredNotebook";
+import { openLearningNotebook } from "@/components/learning/StructuredNotebook";
 import { DownstreamGoCard } from "@/components/learning/DownstreamGoCard";
 import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
 import { MarkButton } from "@/components/learning/MarkButton";
@@ -554,7 +554,7 @@ function ExplanationCard({
             className="app-button-secondary inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-50 active:scale-98 dark:hover:bg-zinc-800"
           >
             <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
-            生成配套练习题
+            开始学情诊断
           </button>
         </div>
       </div>
@@ -674,7 +674,7 @@ export default function LearningPage(): JSX.Element {
     savedSnapshot?.presentationProviderName,
   );
 
-  // Quiz (配套练习题) state — restored from the snapshot so the third view and
+  // Quiz (学情诊断) state — restored from the snapshot so the second view and
   // any already-generated paper survive a route switch. The learner portrait is
   // injected by default (``profile_id`` = this browser's unified key); the
   // QuizView toggle switches it off by writing ``profile_id: null``.
@@ -730,15 +730,9 @@ export default function LearningPage(): JSX.Element {
     }
   }, [query, result, step, view, outlines, slides, currentIndex, pptGenerationMode, pptProviderName, quizParams, quizResponse]);
 
-  const [notebookOpen, setNotebookOpen] = useState(false);
-  const [notebookInitialTab, setNotebookInitialTab] = useState<"summary" | "research_note">("summary");
-
   useEffect(() => {
     if (window.location.hash === "#research-notes") {
-      queueMicrotask(() => {
-        setNotebookInitialTab("research_note");
-        setNotebookOpen(true);
-      });
+      queueMicrotask(() => openLearningNotebook("research_note"));
     }
   }, []);
 
@@ -926,8 +920,8 @@ export default function LearningPage(): JSX.Element {
 
   /**
    * Generate a companion exercise set for the current concept and switch to the
-   * 配套练习题 view. This stays on the learning page — the quiz module is a
-   * third view of this page, not a route into another module.
+   * 学情诊断 view. This stays on the learning page — the quiz module is a
+   * second view of this page, not a route into another module.
    */
   async function handleGenerateQuiz() {
     const knowledgePoint = (result?.knowledge_point || query).trim();
@@ -1131,7 +1125,7 @@ export default function LearningPage(): JSX.Element {
               }`}
             >
               <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
-              配套练习题
+              学情诊断
             </button>
             </div>
           </div>
@@ -1212,10 +1206,7 @@ export default function LearningPage(): JSX.Element {
             knowledgePointId={buildKnowledgeId(query || result.knowledge_point || "DHCP 四阶段报文交互")}
             sessionId={activeSessionId}
             notebookItemId={result.notebook_item_id ?? undefined}
-            onOpenResearch={() => {
-              setNotebookInitialTab("summary");
-              setNotebookOpen(true);
-            }}
+            onOpenResearch={() => openLearningNotebook("summary")}
           />
         </div>
           ) : (
@@ -1239,14 +1230,6 @@ export default function LearningPage(): JSX.Element {
       {/* Floating text-selection popover — works on the whole page */}
       <TextSelectionPopover />
 
-      {/* Side-Drawer Notebook */}
-      <StructuredNotebook
-        key={notebookInitialTab}
-        open={notebookOpen}
-        onDismiss={() => setNotebookOpen(false)}
-        sessionId={activeSessionId}
-        initialTab={notebookInitialTab}
-      />
     </div>
   );
 }

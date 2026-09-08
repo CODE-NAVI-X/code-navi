@@ -25,13 +25,25 @@ import {
   Microscope,
 } from "lucide-react";
 
-type TabId = "summary" | "note" | "research_note" | "wrong_answer" | "presentation";
+export type NotebookTab = "summary" | "note" | "research_note" | "wrong_answer" | "presentation";
+
+export const LEARNING_NOTEBOOK_OPEN_EVENT = "code-navi:open-learning-notebook";
+
+/** Open the shared Learning notebook without coupling callers to its Drawer state. */
+export function openLearningNotebook(tab: NotebookTab = "summary"): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<{ tab: NotebookTab }>(LEARNING_NOTEBOOK_OPEN_EVENT, {
+      detail: { tab },
+    }),
+  );
+}
 
 interface StructuredNotebookProps {
   open: boolean;
   onDismiss: () => void;
   sessionId?: string;
-  initialTab?: TabId;
+  initialTab?: NotebookTab;
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -175,7 +187,7 @@ export function StructuredNotebook({
   initialTab = "summary",
 }: StructuredNotebookProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [activeTab, setActiveTab] = useState<NotebookTab>(initialTab);
   const [items, setItems] = useState<NotebookItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -280,7 +292,7 @@ export function StructuredNotebook({
       ? wrongAnswerItems
       : presentationItems;
 
-  const tabs: { id: TabId; label: string; icon: typeof Sparkles; count: number }[] = [
+  const tabs: { id: NotebookTab; label: string; icon: typeof Sparkles; count: number }[] = [
     { id: "summary", label: "AI 客观摘要", icon: Sparkles, count: summaryItems.length },
     { id: "note", label: "时间戳手记", icon: FileText, count: noteItems.length },
     { id: "research_note", label: "研究笔记", icon: Microscope, count: researchNoteItems.length },

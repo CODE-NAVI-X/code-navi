@@ -88,13 +88,21 @@ class QuizNotFoundError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _mock_questions(knowledge_point: str) -> list[QuizQuestion]:
+def _mock_questions(
+    knowledge_point: str,
+    *,
+    question_types: list[QuestionType] | tuple[QuestionType, ...] | None = None,
+    question_count: int | None = None,
+    start_index: int = 0,
+) -> list[QuizQuestion]:
     """Deterministic offline quiz used when no online provider is configured.
 
-    Contains all three types and real LaTeX so the exporter can be exercised
-    end-to-end with zero credentials.
+    With no request constraints, preserve the original three-question fixture so
+    the exporter and existing callers remain compatible. When constraints are
+    supplied, cycle only through the requested types and return exactly the
+    requested number of questions.
     """
-    return [
+    base_questions = [
         QuizQuestion(
             id="q1",
             type="single",
@@ -135,6 +143,21 @@ def _mock_questions(knowledge_point: str) -> list[QuizQuestion]:
             points=20,
             comment_prompt="(1) 证明必要性与充分性两个方向 - 60% (2) 集合运算正确性 - 40%",
         ),
+    ]
+    if question_types is None and question_count is None and start_index == 0:
+        return base_questions
+
+    types = list(question_types or _ALL_TYPES)
+    count = len(base_questions) if question_count is None else question_count
+    if count <= 0 or not types:
+        return []
+
+    templates = {question.type: question for question in base_questions}
+    return [
+        templates[types[index % len(types)]].model_copy(
+            update={"id": f"q{start_index + index + 1}"}
+        )
+        for index in range(count)
     ]
 
 
@@ -435,6 +458,29 @@ def _parse_revised(
     return (questions or None), summary
 
 
+def _ensure_requested_questions(
+    questions: list[QuizQuestion],
+    knowledge_point: str,
+    requested_count: int,
+    allowed_types: list[QuestionType],
+) -> tuple[list[QuizQuestion], bool]:
+    """Complete a provider payload so its type and count match the request."""
+    selected = [question for question in questions if question.type in allowed_types][
+        :requested_count
+    ]
+    missing = requested_count - len(selected)
+    if missing > 0:
+        selected.extend(
+            _mock_questions(
+                knowledge_point,
+                question_types=allowed_types,
+                question_count=missing,
+                start_index=len(selected),
+            )
+        )
+    return selected, missing > 0
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -531,7 +577,16 @@ class QuizGenerator:
                 else:
                     effective_student_profile = portrait_segment
 
-        offline = json.dumps([q.model_dump() for q in _mock_questions(request.knowledge_point)])
+        offline = json.dumps(
+            [
+                q.model_dump()
+                for q in _mock_questions(
+                    request.knowledge_point,
+                    question_types=types,
+                    question_count=request.question_count,
+                )
+            ]
+        )
         system = build_quiz_system_prompt(
             types,
             student_profile=effective_student_profile,
@@ -551,12 +606,19 @@ class QuizGenerator:
             offline,
         )
         raw = result.output_text or ""
-        questions = self._parse_questions(
+        parsed_questions = self._parse_questions(
             raw, request.question_count, types, default_web=(source_mode == "web")
         )
-        if not questions:
-            logger.warning("Quiz payload unparseable; falling back to mock questions.")
-            questions = _mock_questions(request.knowledge_point)[: request.question_count]
+        questions, used_fallback = _ensure_requested_questions(
+            parsed_questions,
+            request.knowledge_point,
+            request.question_count,
+            types,
+        )
+        if used_fallback:
+            logger.warning(
+                "Quiz payload was incomplete; filling missing questions with rules fallback."
+            )
             generation_mode = "rules_fallback"
         else:
             generation_mode = "rules" if provider_name == "mock" else "model"
@@ -568,7 +630,14 @@ class QuizGenerator:
                 request, session_id, questions, types, audit.notes
             )
             if revised:
-                questions = revised
+                questions, revised_with_fallback = _ensure_requested_questions(
+                    revised,
+                    request.knowledge_point,
+                    request.question_count,
+                    types,
+                )
+                if revised_with_fallback:
+                    generation_mode = "rules_fallback"
                 audit.revised = True
                 audit.revision_summary = summary
 
@@ -821,7 +890,14 @@ class QuizGenerator:
         offline = json.dumps(
             {
                 "summary": "离线 Mock：未触发真实修订",
-                "questions": [q.model_dump() for q in _mock_questions(request.knowledge_point)],
+                "questions": [
+                    q.model_dump()
+                    for q in _mock_questions(
+                        request.knowledge_point,
+                        question_types=allowed_types,
+                        question_count=request.question_count,
+                    )
+                ],
             },
             ensure_ascii=False,
         )

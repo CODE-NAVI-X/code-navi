@@ -192,7 +192,7 @@ export function SlideViewer({
                 className="app-button-secondary flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-slate-50 dark:hover:bg-zinc-800"
               >
                 <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
-                根据 PPT 生成配套练习题
+                根据 PPT 生成学情诊断题
               </button>
             )}
             {onExport && (

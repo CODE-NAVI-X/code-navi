@@ -6,7 +6,6 @@ import {
   BarChart3,
   BookOpen,
   ChevronRight,
-  ClipboardList,
   Code2,
   FileQuestion,
   Microscope,
@@ -18,7 +17,6 @@ export type LearningStepId =
   | "check"
   | "practice"
   | "portrait"
-  | "notebook"
   | "research";
 
 export interface LearningStepConfig {
@@ -42,8 +40,8 @@ export const LEARNING_STEPS: LearningStepConfig[] = [
   {
     id: "check",
     stepNumber: 2,
-    label: "检查",
-    shortLabel: "检查",
+    label: "学情诊断",
+    shortLabel: "诊断",
     icon: FileQuestion,
     defaultHref: "/learning?view=quiz",
   },
@@ -64,16 +62,8 @@ export const LEARNING_STEPS: LearningStepConfig[] = [
     defaultHref: "/learning/portrait",
   },
   {
-    id: "notebook",
-    stepNumber: 5,
-    label: "笔记",
-    shortLabel: "笔记",
-    icon: ClipboardList,
-    defaultHref: "/learning/notebook",
-  },
-  {
     id: "research",
-    stepNumber: 6,
+    stepNumber: 5,
     label: "科研引导",
     shortLabel: "科研",
     icon: Microscope,
@@ -124,7 +114,7 @@ export function LearningFlowStepper({
 
   return (
     <nav
-      aria-label="学习闭环六步流程导航"
+      aria-label="学习闭环五步流程导航"
       className={`app-card mb-6 rounded-2xl p-2 sm:p-2.5 shadow-sm overflow-x-auto ${className}`}
     >
       <ol className="flex min-w-max items-center justify-between gap-1 sm:gap-2">

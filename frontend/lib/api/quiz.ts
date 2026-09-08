@@ -104,6 +104,7 @@ export interface QuizGenerateParams {
 
 export const DEFAULT_QUIZ_PARAMS: QuizGenerateParams = {
   question_count: 5,
+  question_types: ["single"],
   difficulty: "medium",
   with_latex: true,
   source_mode: "generated",

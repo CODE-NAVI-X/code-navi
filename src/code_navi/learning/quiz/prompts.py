@@ -33,7 +33,7 @@ def _type_hints(types: list[QuestionType]) -> str:
             blocks.append(
                 f"""### {label} ({t})
 
-只选一个正确选项。选项 label 可含 $...$ LaTeX 数学公式。
+只选一个正确选项。每题必须存在唯一、明确、可由标准答案确定判分的正确选项，避免主观歧义；不得出现多个可解释为正确的选项。选项 label 可含 $...$ LaTeX 数学公式。
 
 {{"id": "q1", "type": "single", "question": "题干，可含 $...$ 数学公式", "options": [{{"label": "选项A内容", "value": "A"}}, {{"label": "选项B内容", "value": "B"}}, {{"label": "选项C内容", "value": "C"}}, {{"label": "选项D内容", "value": "D"}}], "answer": ["A"], "analysis": "解析", "points": 10}}"""
             )
@@ -65,6 +65,7 @@ QUIZ_SYSTEM_PROMPT = """\
 - 每题必须包含 `id`、`type`、`question`、`analysis`（解析/参考答案）、`points`（分值）、`source`（来源）。
 - 题干与选项内容可以嵌入 $...$ 表示的 LaTeX 数学公式（如 $\\frac{1}{2}$、$x^2$、$\\sqrt{2}$）。
 - 题目必须清晰无歧义，聚焦给定知识点；选项要有干扰性但不含"以上都对/都错"。
+- 当题型为单选题时，每题必须存在唯一、明确、可由标准答案确定判分的正确选项，避免主观歧义。
 - 不要编造事实；难度与指定难度匹配。
 
 {extra_rules}

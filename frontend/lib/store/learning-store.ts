@@ -33,7 +33,7 @@ export interface LearningSnapshot {
   currentIndex?: number;
   presentationGenerationMode?: PresentationGenerationMode;
   presentationProviderName?: string;
-  /** Quiz-generation settings — survive a route switch so the third view restores. */
+  /** Quiz-generation settings — survive a route switch so the diagnostic view restores. */
   quizParams?: QuizGenerateParams;
   /** Last generated exercise set — survives a route switch for review/export. */
   quizResponse?: QuizGenerateResponse | null;

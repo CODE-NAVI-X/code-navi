@@ -20,6 +20,7 @@ import uuid
 import zipfile
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -126,6 +127,44 @@ class TestQuizGenerator:
             "fill_blank",
             "short_answer",
         }
+
+    def test_generate_respects_requested_single_type_and_count(self, db: Session) -> None:
+        response = QuizGenerator().generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                question_count=5,
+                question_types=["single"],
+            ),
+            db,
+        )
+
+        assert len(response.questions) == 5
+        assert all(question.type == "single" for question in response.questions)
+
+    def test_incomplete_provider_payload_uses_type_and_count_fallback(
+        self, db: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        generator = QuizGenerator()
+
+        def incomplete_run(*_args: object, **_kwargs: object):
+            return (
+                SimpleNamespace(output_text="[]", run_id="run-fallback", event_log_path=None),
+                "test",
+            )
+
+        monkeypatch.setattr(generator, "_run", incomplete_run)
+        response = generator.generate(
+            QuizGenerateRequest(
+                knowledge_point="集合",
+                question_count=5,
+                question_types=["single"],
+            ),
+            db,
+        )
+
+        assert response.generation_mode == "rules_fallback"
+        assert len(response.questions) == 5
+        assert all(question.type == "single" for question in response.questions)
 
     def test_generate_persists_quiz_notebook_item(self, db: Session) -> None:
         generator = QuizGenerator()

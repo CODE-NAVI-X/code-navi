@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Companion-exercise view (配套练习题) — the third view of the unified learning
+ * Learning diagnostic view (学情诊断) — the second view of the unified learning
  * result area. The parent holds all quiz state (params / response / loading /
  * error / exporting) so the view survives tab switches; this component stays
  * presentational except for the transient answer set and grading state.
@@ -289,7 +289,7 @@ export function QuizView({
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tracking-wider text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
                 <Sparkles className="h-3 w-3" strokeWidth={1.5} />
-                配套练习题 · 组卷
+                学情诊断 · 组卷
               </span>
             </div>
             <h3 className="mt-2 truncate text-xl font-bold tracking-tight text-slate-900 dark:text-zinc-100">
@@ -309,7 +309,7 @@ export function QuizView({
             ) : (
               <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
             )}
-            {loading ? "正在生成练习题…" : response ? "重新组卷" : "生成组卷"}
+            {loading ? "正在生成诊断题…" : response ? "重新组卷" : "生成诊断题"}
           </button>
         </div>
 
@@ -385,7 +385,7 @@ export function QuizView({
               );
             })}
             <span className="text-[11px] text-slate-400 dark:text-zinc-500">
-              {params.question_types === undefined || params.question_types === null ? "（默认全部）" : ""}
+              {params.question_types === undefined || params.question_types === null ? "（全部题型）" : ""}
             </span>
           </div>
         </div>
@@ -462,7 +462,7 @@ export function QuizView({
       {/* Loading */}
       {loading && (
         <div role="status" aria-live="polite" className="space-y-4">
-          <span className="sr-only">正在生成练习题</span>
+          <span className="sr-only">正在生成学情诊断题</span>
           <SkeletonLine width="w-2/5" />
           <SkeletonLine />
           <SkeletonLine width="w-4/5" />
@@ -475,7 +475,7 @@ export function QuizView({
         <div role="alert" className="app-status-error flex items-start gap-3 rounded-xl p-4 text-xs">
           <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" strokeWidth={1.5} />
           <div>
-            <p className="font-semibold">练习题生成异常</p>
+            <p className="font-semibold">学情诊断生成异常</p>
             <p className="mt-0.5 text-slate-600 dark:text-red-200/80">{error}</p>
           </div>
         </div>
@@ -486,7 +486,7 @@ export function QuizView({
         <div className="flex flex-col items-center justify-center py-14 text-center">
           <FileQuestion className="mb-3 h-10 w-10 text-slate-300 dark:text-zinc-600" strokeWidth={1.5} />
           <p className="text-xs font-medium text-slate-500 dark:text-zinc-400">
-            尚未生成练习题。点击右上角「生成组卷」，将基于当前知识点自动编制一套配套练习。
+            尚未生成诊断题。点击右上角「生成诊断题」，将基于当前知识点自动编制一套学情诊断题。
           </p>
         </div>
       )}
