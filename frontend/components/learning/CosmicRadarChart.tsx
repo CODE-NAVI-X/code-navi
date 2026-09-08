@@ -119,7 +119,7 @@ export function CosmicRadarChart({
     const rect = containerRef.current.getBoundingClientRect();
     const xPos = (e.clientX - rect.left) / rect.width;
     const yPos = (e.clientY - rect.top) / rect.height;
-    const maxTilt = 8;
+    const maxTilt = 10;
     const tiltX = (yPos - 0.5) * -maxTilt;
     const tiltY = (xPos - 0.5) * maxTilt;
     setTilt({ x: tiltX, y: tiltY });
@@ -280,8 +280,8 @@ export function CosmicRadarChart({
             className="relative flex w-full items-center justify-center py-1"
           >
             <svg
-              viewBox="0 0 500 500"
-              className="h-auto w-full max-w-[530px] select-none"
+              viewBox="-60 0 620 500"
+              className="h-auto w-full max-w-[540px] select-none overflow-visible"
               aria-label="认知能力星轨雷达图"
             >
               <defs>
