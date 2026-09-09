@@ -127,6 +127,7 @@ export interface LearningKnowledgeGapOverview {
   knowledge_point: string;
   source_type: string;
   summary: string;
+  source_id?: string | null;
 }
 
 export interface LearningPortraitOverview {
@@ -544,6 +545,7 @@ function validatePortraitsOverviewResponse(raw: unknown): PortraitsOverviewRespo
           knowledge_point: typeof gap.knowledge_point === "string" ? gap.knowledge_point : "",
           source_type: typeof gap.source_type === "string" ? gap.source_type : "",
           summary: typeof gap.summary === "string" ? gap.summary : "",
+          source_id: typeof gap.source_id === "string" ? gap.source_id : null,
         });
       }
     }
@@ -620,4 +622,39 @@ function parseGapSourceType(value: unknown): KnowledgeGapSourceType {
     return value;
   }
   return "practice_outcome";
+}
+
+/**
+ * Delete a profile record (quiz attempt or confusion mark) to manage and correct profile facts.
+ * Throws ProfileApiError on non-OK status or network error so callers can roll back optimistic state.
+ */
+export async function deleteProfileRecord(recordId: string): Promise<boolean> {
+  const url = `${API_BASE}/api/v1/profile/records/${encodeURIComponent(recordId)}`;
+  const csrf = getStoredCsrfToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "DELETE",
+      credentials: "include",
+      headers,
+    });
+  } catch (networkError) {
+    throw new ProfileApiError(
+      0,
+      `Network error while contacting ${url}: ${String(networkError)}`,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractErrorDetail(response);
+    throw new ProfileApiError(
+      response.status,
+      detail ?? `删除记录失败 (${response.status})`,
+    );
+  }
+
+  return true;
 }

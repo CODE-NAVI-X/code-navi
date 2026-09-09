@@ -136,6 +136,7 @@ class PortraitsOverviewService:
                 knowledge_point=item.topic,
                 source_type=item.source_type,
                 summary=item.summary,
+                source_id=item.source_id,
             )
             for item in gaps_response.items[:8]
         ]

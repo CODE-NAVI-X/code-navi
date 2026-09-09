@@ -64,6 +64,10 @@ class LearningKnowledgeGapOverview(BaseModel):
         ...,
         description="Privacy-safe source summary.",
     )
+    source_id: str | None = Field(
+        default=None,
+        description="Traceable source record ID for drill-down and record deletion.",
+    )
 
 
 class LearningPortraitOverview(BaseModel):

@@ -43,6 +43,7 @@ from code_navi.learning_profile.schemas import MarkRequest, ProfileResponse  # n
 from code_navi.learning_profile.service import (  # noqa: E402
     ProfileService,
     build_student_profile_prompt,
+    build_student_profile_summary,
 )
 from code_navi.online_compiler.models import (  # noqa: E402
     PracticeLaunchModel,
@@ -1362,3 +1363,163 @@ class TestProfileCrossAccountDataIsolation:
         data = res.json()
         assert len(data["confusion"]) == 1
         assert data["confusion"][0]["knowledge_point"] == "贪心算法"
+
+
+class TestDeleteProfileRecordsAndSummary:
+    """Regression tests for record management, hard delete, rollback, and fact consistency."""
+
+    def test_delete_profile_record_confusion_mark_success(
+        self, client: TestClient, db: Session
+    ) -> None:
+        profile_id = str(uuid.uuid4())
+        _add_mark(db, knowledge_point="图论最短路", profile_id=profile_id)
+        mark = (
+            db.query(ConfusionMarkModel)
+            .filter(ConfusionMarkModel.knowledge_point == "图论最短路")
+            .first()
+        )
+        assert mark is not None
+
+        # Verify it appears in portrait
+        res_before = client.get(f"/api/v1/profile?profile_id={profile_id}")
+        assert res_before.status_code == 200
+        assert len(res_before.json()["confusion"]) == 1
+
+        # Delete the mark via endpoint
+        res_del = client.delete(f"/api/v1/profile/records/{mark.id}")
+        assert res_del.status_code == 200
+        assert res_del.json() == {"success": True, "record_id": mark.id}
+
+        # Verify database row is deleted
+        assert (
+            db.query(ConfusionMarkModel).filter(ConfusionMarkModel.id == mark.id).first()
+            is None
+        )
+
+        # Re-fetch profile, verify re-aggregated portrait no longer contains it
+        res_after = client.get(f"/api/v1/profile?profile_id={profile_id}")
+        assert res_after.status_code == 200
+        assert len(res_after.json()["confusion"]) == 0
+
+    def test_delete_profile_record_quiz_attempt_success(
+        self, client: TestClient, db: Session
+    ) -> None:
+        profile_id = str(uuid.uuid4())
+        # Add 3 attempts to pass the minimum sample threshold for mastery
+        for score in (0, 0, 0):
+            _add_attempt(
+                db,
+                knowledge_point="二叉搜索树",
+                score=score,
+                max_score=10,
+                profile_id=profile_id,
+            )
+
+        attempts = (
+            db.query(QuizAttemptModel)
+            .filter(QuizAttemptModel.knowledge_point == "二叉搜索树")
+            .all()
+        )
+        assert len(attempts) == 3
+
+        # Before deletion, mastery has graded_attempts == 3 and weakness "二叉搜索树"
+        res_before = client.get(f"/api/v1/profile?profile_id={profile_id}")
+        assert res_before.status_code == 200
+        data_before = res_before.json()
+        assert "二叉搜索树" in data_before["weaknesses"]
+
+        # Delete by attempt.attempt_id
+        target_attempt = attempts[0]
+        res_del = client.delete(f"/api/v1/profile/records/{target_attempt.attempt_id}")
+        assert res_del.status_code == 200
+        assert res_del.json() == {
+            "success": True,
+            "record_id": target_attempt.attempt_id,
+        }
+
+        # Re-fetch profile, verify graded attempts decreased
+        res_after = client.get(f"/api/v1/profile?profile_id={profile_id}")
+        assert res_after.status_code == 200
+        data_after = res_after.json()
+        # Remaining 2 attempts are now below the minimum sample size (>=3), so weakness is cleared
+        assert "二叉搜索树" not in data_after["weaknesses"]
+
+    def test_delete_profile_record_not_found(self, client: TestClient) -> None:
+        res = client.delete("/api/v1/profile/records/non-existent-record-uuid")
+        assert res.status_code == 404
+        assert "not found" in res.json()["detail"].lower()
+
+    def test_delete_profile_record_owner_isolation(
+        self, client: TestClient, db: Session
+    ) -> None:
+        # User A creates a confusion mark
+        client_a = TestClient(app)
+        reg_a = _register(client_a, "student", "User A")
+        principal_a = (
+            db.query(Principal).filter(Principal.user_id == reg_a["user"]["id"]).first()
+        )
+        assert principal_a is not None
+
+        profile_id = str(uuid.uuid4())
+        _add_mark(
+            db,
+            knowledge_point="红黑树",
+            profile_id=profile_id,
+            owner_principal_id=principal_a.id,
+        )
+        mark = (
+            db.query(ConfusionMarkModel)
+            .filter(ConfusionMarkModel.knowledge_point == "红黑树")
+            .first()
+        )
+        assert mark is not None
+
+        # User B tries to delete User A's record
+        client_b = TestClient(app)
+        _register(client_b, "student", "User B")
+
+        res_del_b = client_b.delete(f"/api/v1/profile/records/{mark.id}")
+        assert res_del_b.status_code == 404
+
+        # Verify User A's record is still intact
+        assert (
+            db.query(ConfusionMarkModel).filter(ConfusionMarkModel.id == mark.id).first()
+            is not None
+        )
+
+        # User A deletes their own record
+        res_del_a = client_a.delete(f"/api/v1/profile/records/{mark.id}")
+        assert res_del_a.status_code == 200
+        assert (
+            db.query(ConfusionMarkModel).filter(ConfusionMarkModel.id == mark.id).first()
+            is None
+        )
+
+    def test_build_student_profile_summary_empty_and_with_facts(self) -> None:
+        # Empty profile
+        empty_profile = ProfileResponse(
+            profile_id=str(uuid.uuid4()),
+            generated_at=datetime.now(UTC).isoformat(),
+            mastery=[],
+            strengths=[],
+            weaknesses=[],
+            confusion=[],
+        )
+        empty_summary = build_student_profile_summary(empty_profile)
+        assert "近期诊断记录较少" in empty_summary
+        assert "光线追踪" not in empty_summary
+        assert "Cookie" not in empty_summary
+
+        # Profile with real weaknesses and strengths
+        fact_profile = ProfileResponse(
+            profile_id=str(uuid.uuid4()),
+            generated_at=datetime.now(UTC).isoformat(),
+            mastery=[],
+            strengths=["梯度下降"],
+            weaknesses=["注意力机制"],
+            confusion=[],
+        )
+        fact_summary = build_student_profile_summary(fact_profile)
+        assert "基础巩固：梯度下降" in fact_summary
+        assert "重点薄弱：注意力机制" in fact_summary
+

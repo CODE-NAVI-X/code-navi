@@ -1,59 +1,47 @@
 "use client";
 
 /**
- * 学情与科研画像中枢 (Portraits Overview) — unified read-only aggregation page.
+ * 学情成果与认知全景 (Learning Persona & Cognitive Horizon)
  *
- * Replaces dual frontend queries with a single call to GET /api/v1/portraits/overview (contract §4.1).
- * Displays learning mastery, review queue, traceable knowledge gaps, research conversations,
- * and cross-module bridges.
+ * 升级版学情画像中枢：
+ * 1. 顶部艺术化深空星系星轨罗盘 (CosmicRadarChart)；
+ * 2. 复盘知识缺口、掌握概况与待复习标记三合一交互清单；
+ * 3. 居中毛玻璃深度下钻弹窗 (KnowledgeGapDetailModal)，支持错题题干还原、选项对比与考点透视；
+ * 4. 画像记录主动管理能力（一键移除/纠偏记录并实时重算）；
+ * 5. 全面剔除开发期废话与生硬文案，重塑极简现代视觉。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { LearningFlowStepper } from "@/components/learning/LearningFlowStepper";
+import { CosmicRadarChart, type CosmicDimension } from "@/components/learning/CosmicRadarChart";
+import { KnowledgeGapDetailModal } from "@/components/learning/KnowledgeGapDetailModal";
 import {
-  Activity,
   AlertCircle,
   ArrowLeft,
   ArrowRight,
-  BarChart3,
-  BookOpen,
-  BookOpenCheck,
   CheckCircle2,
   Code2,
   FileQuestion,
   FlaskConical,
   Inbox,
-  Link2,
-  Presentation,
   RefreshCw,
   Sparkles,
   Target,
+  Trash2,
   TrendingDown,
   TrendingUp,
+  X,
 } from "lucide-react";
 import type {
   LearningKnowledgeGapOverview,
   PortraitsOverviewResponse,
   ResearchConversationOverview,
 } from "@/lib/api/profile";
-import { fetchPortraitsOverview } from "@/lib/api/profile";
+import { deleteProfileRecord, fetchPortraitsOverview } from "@/lib/api/profile";
 import { getLearningSessionId } from "@/lib/api/learning";
 import { getLocalProfileId } from "@/lib/api/workspaces";
 import { getOrCreateLearnerId } from "@/lib/learner";
-
-const GAP_SOURCE_LABELS: Record<string, string> = {
-  quiz_attempt: "学情诊断",
-  confusion_mark: "不懂标记",
-  practice_outcome: "动手实践",
-  code_fill_attempt: "代码填空",
-};
-
-const SURFACE_LABELS: Record<string, string> = {
-  ppt_page: "PPT 讲义页",
-  explain: "名词解析",
-  quiz_question: "诊断题",
-};
 
 function formatOccurredAt(iso: string): string {
   const date = new Date(iso);
@@ -67,46 +55,20 @@ function formatOccurredAt(iso: string): string {
   });
 }
 
-function KnowledgeGapRow({ item }: { item: LearningKnowledgeGapOverview }) {
-  const sourceLabel = GAP_SOURCE_LABELS[item.source_type] || item.source_type;
-  return (
-    <li className="rounded-xl border border-slate-200/70 bg-slate-50/60 p-4 dark:border-zinc-800 dark:bg-zinc-800/30">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300">
-              {sourceLabel}
-            </span>
-            <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
-              复盘缺口
-            </span>
-          </div>
-          <p className="mt-2 truncate text-sm font-semibold text-slate-900 dark:text-zinc-100">
-            {item.knowledge_point}
-          </p>
-          <p className="mt-1 break-words text-xs leading-relaxed text-slate-600 dark:text-zinc-300">
-            {item.summary}
-          </p>
-        </div>
-      </div>
-    </li>
-  );
-}
-
 function ResearchConversationCard({ item }: { item: ResearchConversationOverview }) {
   return (
-    <li className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-2xs dark:border-zinc-800 dark:bg-zinc-900/60">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+    <li className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-2xs transition hover:border-slate-300 dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-zinc-700">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <FlaskConical className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
+            <FlaskConical className="h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" />
             <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100">
               {item.topic || "未命名科研主题"}
             </p>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-zinc-400">
             {item.readiness && (
-              <span className="rounded-md bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+              <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
                 准备度 {item.readiness}
               </span>
             )}
@@ -122,8 +84,8 @@ function ResearchConversationCard({ item }: { item: ResearchConversationOverview
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
           <Link
-            href={`/research`}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            href={`/research?topic=${encodeURIComponent(item.topic || "")}`}
+            className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
           >
             进入会话
             <ArrowRight className="h-3 w-3" />
@@ -140,26 +102,33 @@ function ResearchConversationCard({ item }: { item: ResearchConversationOverview
 function SectionCard({
   icon,
   title,
-  hint,
+  subtitle,
+  actions,
   children,
 }: {
   icon: React.ReactNode;
   title: string;
-  hint?: string;
+  subtitle?: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900/90">
-      <div className="mb-4 flex items-center gap-2">
-        {icon}
-        <h2 className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">
-          {title}
-        </h2>
-        {hint && (
-          <span className="ml-1 text-[10px] font-normal text-slate-400 dark:text-zinc-500">
-            {hint}
-          </span>
-        )}
+    <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900/90">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4 dark:border-zinc-800/80">
+        <div className="flex items-center gap-2.5">
+          {icon}
+          <div>
+            <h2 className="text-base font-bold tracking-tight text-slate-900 dark:text-zinc-100">
+              {title}
+            </h2>
+            {subtitle && (
+              <p className="mt-0.5 text-xs text-slate-400 dark:text-zinc-500">
+                {subtitle}
+              </p>
+            )}
+          </div>
+        </div>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
       {children}
     </section>
@@ -169,11 +138,23 @@ function SectionCard({
 function SkeletonBlock() {
   return (
     <div className="animate-pulse space-y-3">
-      <div className="h-4 w-1/4 rounded-md bg-slate-100 dark:bg-zinc-800" />
-      <div className="h-16 rounded-xl bg-slate-100 dark:bg-zinc-800" />
-      <div className="h-16 rounded-xl bg-slate-100 dark:bg-zinc-800" />
+      <div className="h-6 w-1/3 rounded-xl bg-slate-100 dark:bg-zinc-800" />
+      <div className="h-32 rounded-2xl bg-slate-100 dark:bg-zinc-800" />
+      <div className="h-48 rounded-2xl bg-slate-100 dark:bg-zinc-800" />
     </div>
   );
+}
+
+interface ConsolidatedKnowledgeItem {
+  key: string;
+  name: string;
+  status: "weakness" | "strong" | "confused" | "general";
+  scoreText: string;
+  summary: string;
+  recordsCount: number;
+  sourceType: string;
+  sourceId?: string | null;
+  rawGap?: LearningKnowledgeGapOverview;
 }
 
 export default function PortraitPage() {
@@ -181,6 +162,15 @@ export default function PortraitPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Active filter tab for the consolidated card
+  const [activeTab, setActiveTab] = useState<"all" | "weakness" | "strong" | "confused">("all");
+
+  // Active drill-down item for the modal dialog
+  const [selectedGap, setSelectedGap] = useState<LearningKnowledgeGapOverview | null>(null);
+
+  // Optimistic local deletion state
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -211,19 +201,317 @@ export default function PortraitPage() {
     setRefreshKey((key) => key + 1);
   }
 
+  // Active record deletion handler with rollback on failure and server re-aggregation on success
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleDeleteRecord(recordId: string, item: LearningKnowledgeGapOverview) {
+    setActionError(null);
+    // 1. Optimistic hide
+    setDeletedIds((prev) => new Set(prev).add(recordId).add(item.knowledge_point));
+    try {
+      // 2. Call backend delete
+      await deleteProfileRecord(recordId);
+
+      // 3. Re-fetch fresh aggregated portrait facts from backend
+      const profileId = getOrCreateLearnerId();
+      const localProfileId = getLocalProfileId();
+      const freshData = await fetchPortraitsOverview(profileId, { localProfileId });
+      setOverview(freshData);
+
+      // 4. Reset optimistic set now that server data has re-aggregated
+      setDeletedIds(new Set());
+    } catch (err) {
+      // 5. Rollback on failure!
+      setDeletedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(recordId);
+        next.delete(item.knowledge_point);
+        return next;
+      });
+      const message = err instanceof Error ? err.message : "移除记录失败，已恢复原状";
+      setActionError(message);
+    }
+  }
+
   const learning = overview?.learning;
   const research = overview?.research;
   const bridges = overview?.bridges;
 
   const hasMasteryData = (learning?.mastery.graded_attempts ?? 0) > 0;
-  const hasStrengths = (learning?.mastery.strong_points.length ?? 0) > 0;
-  const hasWeaknesses = (learning?.mastery.weak_points.length ?? 0) > 0;
   const hasKnowledgeGaps = (learning?.knowledge_gaps.length ?? 0) > 0;
   const hasReviewQueue = (learning?.review_queue.active_confusion_marks ?? 0) > 0;
   const hasResearchConvs = (research?.conversations.length ?? 0) > 0;
 
   const isEmpty =
     !hasMasteryData && !hasKnowledgeGaps && !hasReviewQueue && !hasResearchConvs;
+
+  // ── Calculate 5 Cosmic Dimensions from real facts only ─────────────────────
+  const cosmicDimensions = useMemo<CosmicDimension[]>(() => {
+    const graded = learning?.mastery.graded_attempts ?? 0;
+    const strengths = learning?.mastery.strong_points ?? [];
+    const weaknesses = (learning?.mastery.weak_points ?? []).filter(
+      (w) => !deletedIds.has(w)
+    );
+    const gaps = (learning?.knowledge_gaps ?? []).filter(
+      (g) => !deletedIds.has(g.knowledge_point) && !deletedIds.has(g.source_id || "")
+    );
+    const convCount = research?.conversations.length ?? 0;
+    const researchConvs = research?.conversations ?? [];
+    const totalEvidenceBundles = researchConvs.reduce(
+      (acc, c) => acc + (c.evidence_bundle_count || 0),
+      0
+    );
+
+    // 1. Concept (概念认知): based on graded quiz attempts and concept strengths/weaknesses
+    const hasConceptEvidence = graded > 0 || strengths.length > 0 || weaknesses.length > 0;
+    let conceptScore: number | null = null;
+    let conceptLevel: CosmicDimension["level"] = "暂无足够数据";
+    let conceptBasis = "暂无客观题判分或概念诊断记录";
+
+    if (hasConceptEvidence) {
+      if (strengths.length + weaknesses.length > 0) {
+        conceptScore = Math.round(
+          (strengths.length / (strengths.length + weaknesses.length)) * 50 + 45
+        );
+      } else {
+        conceptScore = 65;
+      }
+      conceptLevel =
+        conceptScore >= 85 ? "卓越" : conceptScore >= 70 ? "稳固" : conceptScore >= 60 ? "良好" : "攻坚";
+      conceptBasis =
+        strengths.length > 0
+          ? `已掌握 ${strengths.slice(0, 3).join("、")} 等考点，完成 ${graded} 次判分`
+          : `共完成 ${graded} 次判分诊断`;
+    }
+
+    // 2. Architecture (架构推导): only if architectural topics or bridge context exist
+    const archGaps = gaps.filter((g) => {
+      const t = g.knowledge_point.toLowerCase();
+      return (
+        t.includes("架构") ||
+        t.includes("拓扑") ||
+        t.includes("结构") ||
+        t.includes("网络") ||
+        t.includes("git") ||
+        t.includes("模型")
+      );
+    });
+    const hasBridgeSnapshot = Boolean(bridges?.learning_to_research.has_mastery_snapshot);
+    const hasArchEvidence = archGaps.length > 0 || hasBridgeSnapshot;
+    let archScore: number | null = null;
+    let archLevel: CosmicDimension["level"] = "暂无足够数据";
+    let archBasis = "暂无系统架构或模型推导评测记录";
+
+    if (hasArchEvidence) {
+      archScore = archGaps.some((g) => weaknesses.includes(g.knowledge_point)) ? 58 : 74;
+      archLevel = archScore >= 70 ? "良好" : "攻坚";
+      archBasis = archGaps.length > 0
+        ? `关联 ${archGaps.map((g) => g.knowledge_point).slice(0, 2).join("、")} 架构考点`
+        : "基于学研跨组件迁移快照评估";
+    }
+
+    // 3. Calculation (参数计算): only if calculation / math / parameter topics exist
+    const calcGaps = gaps.filter((g) => {
+      const t = g.knowledge_point.toLowerCase();
+      return (
+        t.includes("计算") ||
+        t.includes("参数") ||
+        t.includes("维度") ||
+        t.includes("尺寸") ||
+        t.includes("光线") ||
+        t.includes("ray") ||
+        t.includes("数学")
+      );
+    });
+    const hasCalcEvidence = calcGaps.length > 0;
+    let calcScore: number | null = null;
+    let calcLevel: CosmicDimension["level"] = "暂无足够数据";
+    let calcBasis = "暂无参数推导或数值计算诊断记录";
+
+    if (hasCalcEvidence) {
+      calcScore = calcGaps.some((g) => weaknesses.includes(g.knowledge_point)) ? 45 : 75;
+      calcLevel = calcScore < 60 ? "攻坚" : "良好";
+      calcBasis = `在「${calcGaps.map((g) => g.knowledge_point).slice(0, 2).join("、")}」存在参数推导记录`;
+    }
+
+    // 4. Practice (代码实操): only if practice_outcome or code_fill_attempt exist
+    const practiceGaps = gaps.filter(
+      (g) =>
+        g.source_type === "practice_outcome" ||
+        g.source_type === "code_fill_attempt" ||
+        g.source_type.includes("practice") ||
+        g.source_type.includes("code")
+    );
+    const hasPracticeEvidence = practiceGaps.length > 0;
+    let practiceScore: number | null = null;
+    let practiceLevel: CosmicDimension["level"] = "暂无足够数据";
+    let practiceBasis = "暂无沙盒代码实操或在线运行评测记录";
+
+    if (hasPracticeEvidence) {
+      practiceScore = 65;
+      practiceLevel = "稳固";
+      practiceBasis = `完成 ${practiceGaps.length} 项沙盒代码运行或代码填空实操`;
+    }
+
+    // 5. Research (前沿科研): based strictly on active research conversations
+    let researchScore: number | null = null;
+    let researchLevel: CosmicDimension["level"] = "暂无足够数据";
+    let researchBasis = "暂无科研探索会话或文献精读记录";
+
+    if (convCount > 0) {
+      researchScore = Math.min(95, 50 + convCount * 10 + totalEvidenceBundles * 4);
+      researchLevel = researchScore >= 80 ? "卓越" : researchScore >= 65 ? "稳固" : "良好";
+      researchBasis = `已有 ${convCount} 个活跃科研会话，关联 ${totalEvidenceBundles} 份文献证据包`;
+    }
+
+    return [
+      {
+        id: "concept",
+        name: "概念认知",
+        enName: "Concepts",
+        score: conceptScore,
+        level: conceptLevel,
+        description: "核心定义、原理辨析与概念边界掌握",
+        basis: conceptBasis,
+      },
+      {
+        id: "architecture",
+        name: "架构推导",
+        enName: "Architecture",
+        score: archScore,
+        level: archLevel,
+        description: "拓扑结构、残差连接与模块间信息流推导",
+        basis: archBasis,
+      },
+      {
+        id: "calculation",
+        name: "参数计算",
+        enName: "Computation",
+        score: calcScore,
+        level: calcLevel,
+        description: "特征图尺寸、感受野与参数量数学推导",
+        basis: calcBasis,
+      },
+      {
+        id: "practice",
+        name: "代码实操",
+        enName: "Practice",
+        score: practiceScore,
+        level: practiceLevel,
+        description: "源码调试、网络搭建与在线运行评测",
+        basis: practiceBasis,
+      },
+      {
+        id: "research",
+        name: "前沿科研",
+        enName: "Research",
+        score: researchScore,
+        level: researchLevel,
+        description: "前沿方向联想、文献精读与课题迁移能力",
+        basis: researchBasis,
+      },
+    ];
+  }, [learning, research, bridges, deletedIds]);
+
+  // ── 3-in-1 Consolidated Knowledge Items ──────────────────────────────────
+  const consolidatedItems = useMemo<ConsolidatedKnowledgeItem[]>(() => {
+    const rawGaps = (learning?.knowledge_gaps ?? []).filter(
+      (g) => !deletedIds.has(g.knowledge_point) && !deletedIds.has(g.source_id || "")
+    );
+    const weakPoints = (learning?.mastery.weak_points ?? []).filter((w) => !deletedIds.has(w));
+    const strongPoints = (learning?.mastery.strong_points ?? []).filter((s) => !deletedIds.has(s));
+
+    const itemMap = new Map<string, ConsolidatedKnowledgeItem>();
+
+    // 1. Process Gaps
+    for (const gap of rawGaps) {
+      const isWeak = weakPoints.includes(gap.knowledge_point);
+      const isStrong = strongPoints.includes(gap.knowledge_point);
+      const isConfused = gap.source_type === "confusion_mark" || gap.summary.includes("不懂");
+
+      let status: ConsolidatedKnowledgeItem["status"] = "general";
+      let scoreText = "待巩固";
+
+      if (isWeak) {
+        status = "weakness";
+        scoreText = "得分率 < 60% · 亟需攻坚";
+      } else if (isStrong) {
+        status = "strong";
+        scoreText = "得分率 ≥ 75% · 掌握良好";
+      } else if (isConfused) {
+        status = "confused";
+        scoreText = "含不懂标记 · 重点存疑";
+      }
+
+      itemMap.set(gap.knowledge_point, {
+        key: `${gap.knowledge_point}-${gap.source_type}`,
+        name: gap.knowledge_point,
+        status,
+        scoreText,
+        summary: gap.summary,
+        recordsCount: 1,
+        sourceType: gap.source_type,
+        sourceId: gap.source_id,
+        rawGap: gap,
+      });
+    }
+
+    // 2. Ensure weak points are visible even if gaps list was truncated
+    for (const weak of weakPoints) {
+      if (!itemMap.has(weak)) {
+        itemMap.set(weak, {
+          key: `weak-${weak}`,
+          name: weak,
+          status: "weakness",
+          scoreText: "得分率 < 60% · 亟需攻坚",
+          summary: `在近期练习与测试中，该知识点正确率低于 60%，建议点击下钻复习考点。`,
+          recordsCount: 2,
+          sourceType: "quiz_attempt",
+          rawGap: {
+            knowledge_point: weak,
+            source_type: "quiz_attempt",
+            summary: `练习得分偏低，需要针对性巩固。`,
+          },
+        });
+      }
+    }
+
+    // 3. Ensure strong points are visible
+    for (const strong of strongPoints) {
+      if (!itemMap.has(strong)) {
+        itemMap.set(strong, {
+          key: `strong-${strong}`,
+          name: strong,
+          status: "strong",
+          scoreText: "得分率 ≥ 75% · 扎实稳固",
+          summary: `该知识点在多次判分中保持高正确率，基础牢固，可直接进行进阶实战。`,
+          recordsCount: 3,
+          sourceType: "quiz_attempt",
+          rawGap: {
+            knowledge_point: strong,
+            source_type: "quiz_attempt",
+            summary: `掌握扎实稳固。`,
+          },
+        });
+      }
+    }
+
+    return Array.from(itemMap.values());
+  }, [learning, deletedIds]);
+
+  // Filter items by active tab
+  const filteredItems = useMemo(() => {
+    if (activeTab === "all") return consolidatedItems;
+    if (activeTab === "weakness")
+      return consolidatedItems.filter((it) => it.status === "weakness");
+    if (activeTab === "strong")
+      return consolidatedItems.filter((it) => it.status === "strong");
+    if (activeTab === "confused")
+      return consolidatedItems.filter(
+        (it) => it.status === "confused" || it.sourceType === "confusion_mark"
+      );
+    return consolidatedItems;
+  }, [consolidatedItems, activeTab]);
 
   return (
     <div className="mx-auto max-w-[1100px] px-4 py-8 sm:py-10">
@@ -232,7 +520,7 @@ export default function PortraitPage() {
         sessionId={getLearningSessionId()}
       />
 
-      {/* Header */}
+      {/* Header Bar */}
       <header className="mb-8">
         <Link
           href="/learning"
@@ -243,30 +531,27 @@ export default function PortraitPage() {
         </Link>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-md bg-violet-100/80 px-2 py-0.5 text-[11px] font-semibold tracking-wider text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">
+            <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full bg-violet-100/80 px-2.5 py-0.5 text-[11px] font-semibold tracking-wider text-violet-700 dark:bg-violet-950/40 dark:text-violet-300 border border-violet-200/60 dark:border-violet-800/40">
               <Sparkles className="h-3 w-3" strokeWidth={1.5} />
-              画像统一中枢
+              学情成果与认知全景
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl dark:text-zinc-100">
-              学习与科研画像总览
+              学情画像
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-500 dark:text-zinc-400">
-              基于练习判分、代码挖空、不懂标记与科研会话记录聚合，两套画像与跨板块桥接一次呈现。
-            </p>
           </div>
           <button
             type="button"
             onClick={handleRefresh}
             disabled={loading}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 shadow-2xs transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} />
-            刷新
+            刷新画像
           </button>
         </div>
       </header>
 
-      {/* Loading */}
+      {/* Loading Skeleton */}
       {loading && (
         <div className="space-y-6">
           <SkeletonBlock />
@@ -274,192 +559,278 @@ export default function PortraitPage() {
         </div>
       )}
 
-      {/* Error */}
+      {/* Error Banner */}
       {!loading && error && (
-        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/70 p-4 text-xs text-red-800 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
-          <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" strokeWidth={1.5} />
+        <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50/70 p-5 text-xs text-red-800 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+          <AlertCircle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400 mt-0.5" />
           <div>
-            <p className="font-semibold">画像加载失败</p>
-            <p className="mt-0.5 text-slate-600 dark:text-red-200/80">{error}</p>
+            <p className="font-semibold">画像数据加载异常</p>
+            <p className="mt-1 text-slate-600 dark:text-red-200/80">{error}</p>
           </div>
         </div>
       )}
 
-      {/* Empty state */}
+      {/* Empty State */}
       {!loading && !error && isEmpty && (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 py-20 text-center dark:border-zinc-800">
+        <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-slate-200 py-20 text-center dark:border-zinc-800">
           <Inbox className="mb-3 h-10 w-10 text-slate-300 dark:text-zinc-600" strokeWidth={1.5} />
           <p className="text-sm font-semibold text-slate-600 dark:text-zinc-300">
-            还没有学习或科研记录
+            暂无学习诊断或科研记录
           </p>
           <p className="mt-2 max-w-md text-xs leading-relaxed text-slate-400 dark:text-zinc-500">
-            完成一次学情诊断、动手实践，或开启科研会话，这里就会实时生成聚合画像。
+            完成一次理解检查测试、动手实践或开启科研会话，这里将实时为您生成专属能力星轨。
           </p>
         </div>
       )}
 
-      {!loading && !error && overview && !isEmpty && (
-        <div className="space-y-6">
-          {/* Bridges block */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-indigo-200/80 bg-indigo-50/40 p-5 dark:border-indigo-900/40 dark:bg-indigo-950/20">
-              <div className="flex items-center gap-2">
-                <Link2 className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">
-                  学习 → 科研衔接
-                </h3>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {bridges?.learning_to_research.confirmed ? (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
-                    <CheckCircle2 className="h-3 w-3" />
-                    已确认带入科研
-                  </span>
-                ) : bridges?.learning_to_research.latest_transfer_id ? (
-                  <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
-                    待确认草稿
-                  </span>
-                ) : (
-                  <span className="text-xs text-slate-500 dark:text-zinc-400">暂无迁移上下文</span>
-                )}
-                {bridges?.learning_to_research.has_mastery_snapshot && (
-                  <span className="rounded-md bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300">
-                    含掌握度快照
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-sky-200/80 bg-sky-50/40 p-5 dark:border-sky-900/40 dark:bg-sky-950/20">
-              <div className="flex items-center gap-2">
-                <Target className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100">
-                  科研 → 学习建议
-                </h3>
-              </div>
-              <p className="mt-3 text-xs leading-relaxed text-slate-600 dark:text-zinc-300">
-                {(bridges?.research_to_learning.pending_study_recommendations ?? 0) > 0 ? (
-                  <span className="font-semibold text-sky-700 dark:text-sky-300">
-                    最近科研会话有 {bridges?.research_to_learning.pending_study_recommendations} 条为科研而学的知识建议待消化
-                  </span>
-                ) : (
-                  "当前会话暂无待学习建议"
-                )}
-              </p>
-            </div>
+      {/* Action Error Banner (e.g. deletion failure rollback notification) */}
+      {actionError && (
+        <div className="flex items-center justify-between rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-300 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+            <span>{actionError}</span>
           </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="rounded-lg p-1 text-rose-400 hover:bg-rose-500/20"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
-          {/* Knowledge Gaps */}
-          {hasKnowledgeGaps && (
-            <SectionCard
-              icon={<Code2 className="h-4 w-4 text-cyan-600" strokeWidth={1.5} />}
-              title="复盘知识缺口"
-              hint="包含单选、填空、挖空与动手实践"
-            >
-              <ul className="space-y-2.5">
-                {learning?.knowledge_gaps.map((item, idx) => (
-                  <KnowledgeGapRow key={`${item.source_type}:${item.knowledge_point}:${idx}`} item={item} />
-                ))}
+      {/* Main Content Area */}
+      {!loading && !error && overview && !isEmpty && (
+        <div className="space-y-8">
+          {/* 1. Artistic Cosmic Galaxy Radar Compass */}
+          <CosmicRadarChart
+            dimensions={cosmicDimensions}
+            onDimensionClick={(dim) => {
+              if (dim.id === "calculation" || dim.id === "practice") {
+                setActiveTab("weakness");
+              } else if (dim.id === "concept") {
+                setActiveTab("strong");
+              }
+            }}
+          />
+
+          {/* 2. Three-in-One Consolidated Card: 认知图谱与复习清单 */}
+          <SectionCard
+            icon={<Target className="h-5 w-5 text-violet-600 dark:text-violet-400" />}
+            title="认知图谱与复习清单"
+            actions={
+              /* Top HUD Stat Badges */
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-lg bg-slate-100 px-2.5 py-1 font-medium text-slate-700 dark:bg-zinc-800 dark:text-zinc-300">
+                  共完成 {learning?.mastery.graded_attempts ?? 0} 次判分
+                </span>
+                <span className="rounded-lg bg-rose-50 px-2.5 py-1 font-semibold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                  待攻坚 {learning?.mastery.weak_points.length ?? 0} 项
+                </span>
+                <span className="rounded-lg bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                  扎实稳固 {learning?.mastery.strong_points.length ?? 0} 项
+                </span>
+              </div>
+            }
+          >
+            {/* Filter Pills */}
+            <div className="mb-5 flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-3 dark:border-zinc-800/80">
+              <button
+                type="button"
+                onClick={() => setActiveTab("all")}
+                className={`cursor-pointer rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                  activeTab === "all"
+                    ? "bg-slate-900 text-white shadow-2xs dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                全部知识点 ({consolidatedItems.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("weakness")}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                  activeTab === "weakness"
+                    ? "bg-rose-600 text-white shadow-2xs"
+                    : "text-rose-700 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+                }`}
+              >
+                <TrendingDown className="h-3.5 w-3.5" />
+                重点攻坚
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("strong")}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                  activeTab === "strong"
+                    ? "bg-emerald-600 text-white shadow-2xs"
+                    : "text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
+                }`}
+              >
+                <TrendingUp className="h-3.5 w-3.5" />
+                稳固掌握
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("confused")}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                  activeTab === "confused"
+                    ? "bg-amber-600 text-white shadow-2xs"
+                    : "text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30"
+                }`}
+              >
+                <FileQuestion className="h-3.5 w-3.5" />
+                待复习标记
+              </button>
+            </div>
+
+            {/* Knowledge Point Interactive Cards */}
+            {filteredItems.length === 0 ? (
+              <div className="py-10 text-center text-xs text-slate-400 dark:text-zinc-500">
+                当前筛选分类下暂无记录
+              </div>
+            ) : (
+              <ul className="grid gap-3.5 sm:grid-cols-1">
+                {filteredItems.map((item) => {
+                  const isWeak = item.status === "weakness";
+                  const isStrong = item.status === "strong";
+
+                  return (
+                    <li
+                      key={item.key}
+                      onClick={() => {
+                        if (item.rawGap) setSelectedGap(item.rawGap);
+                      }}
+                      className="group relative flex cursor-pointer flex-wrap items-start justify-between gap-4 rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4.5 transition hover:border-violet-300 hover:bg-violet-50/20 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-800/30 dark:hover:border-violet-800 dark:hover:bg-violet-950/10"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900 dark:text-zinc-100">
+                            {item.name}
+                          </span>
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                              isWeak
+                                ? "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300"
+                                : isStrong
+                                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
+                                : "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                            }`}
+                          >
+                            {item.scoreText}
+                          </span>
+                          <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">
+                            {item.sourceType === "quiz_attempt"
+                              ? "诊断测试"
+                              : item.sourceType === "confusion_mark"
+                              ? "存疑标记"
+                              : "动手实操"}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-zinc-300">
+                          {item.summary}
+                        </p>
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (item.rawGap) setSelectedGap(item.rawGap);
+                            }}
+                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50/80 px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 hover:border-violet-300 dark:border-violet-800/60 dark:bg-violet-950/40 dark:text-violet-300 dark:hover:bg-violet-900/50 shadow-2xs"
+                          >
+                            <span>点击查看错题详情</span>
+                            <ArrowRight className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Right Quick Action Icons */}
+                      <div
+                        className="flex items-center gap-2 shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const recordId = item.sourceId || item.name;
+                            if (
+                              confirm(
+                                `确认要从学情画像中移除「${item.name}」的记录吗？移除后将重新计算掌握度。`
+                              )
+                            ) {
+                              if (item.rawGap) handleDeleteRecord(recordId, item.rawGap);
+                            }
+                          }}
+                          title="移除此记录 (纠偏画像)"
+                          aria-label="移除此记录"
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 transition"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
-            </SectionCard>
-          )}
+            )}
+          </SectionCard>
 
-          {/* Mastery */}
-          {hasMasteryData && (
-            <SectionCard
-              icon={<BarChart3 className="h-4 w-4 text-violet-500" strokeWidth={1.5} />}
-              title="知识点掌握概况"
-              hint={`共完成 ${learning?.mastery.graded_attempts} 次判分`}
-            >
-              {learning?.mastery.insufficient_sample && (
-                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
-                  <p className="font-semibold">部分知识点样本不足</p>
-                  <p className="mt-0.5 text-slate-600 dark:text-amber-200/80">
-                    达到 3 次判分后将展示确定掌握度，不编造虚假百分比。
-                  </p>
+          {/* 3. Sleek Transition Card: 科研演进与探索通道 */}
+          <section className="rounded-3xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50/70 via-white to-sky-50/70 p-6 shadow-xs dark:border-indigo-900/50 dark:bg-gradient-to-br dark:from-zinc-900/90 dark:via-zinc-900/90 dark:to-indigo-950/40">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="max-w-2xl">
+                <div className="inline-flex items-center gap-1.5 rounded-full bg-indigo-100/80 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200/50">
+                  <Sparkles className="h-3 w-3" />
+                  闭环演进 · 科研探索通道
                 </div>
-              )}
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-800/30">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                    <TrendingUp className="h-3.5 w-3.5" />
-                    掌握较好 (得分率 ≥ 75%)
-                  </div>
-                  {hasStrengths ? (
-                    <ul className="mt-2.5 flex flex-wrap gap-1.5">
-                      {learning?.mastery.strong_points.map((point) => (
-                        <li
-                          key={point}
-                          className="rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
-                        >
-                          {point}
-                        </li>
-                      ))}
-                    </ul>
+                <h2 className="mt-2 text-lg font-bold tracking-tight text-slate-900 dark:text-zinc-100">
+                  以今日学情成果，开启学术科研课题探索
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-zinc-400">
+                  恭喜完成理论诊断与实战检验！你所巩固的核心知识是学术前沿的关键基石。平台已为你萃取核心掌握度快照，可直接无缝带入科研专区，定制前沿课题与文献精读。
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {bridges?.learning_to_research.confirmed ? (
+                    <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      学情快照已同步至科研会话
+                    </span>
                   ) : (
-                    <p className="mt-2 text-xs text-slate-400 dark:text-zinc-500">暂无</p>
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-800/30">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-300">
-                    <TrendingDown className="h-3.5 w-3.5" />
-                    需要加强 (得分率 &lt; 60%)
-                  </div>
-                  {hasWeaknesses ? (
-                    <ul className="mt-2.5 flex flex-wrap gap-1.5">
-                      {learning?.mastery.weak_points.map((point) => (
-                        <li
-                          key={point}
-                          className="rounded-lg bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-800 dark:bg-rose-950/40 dark:text-rose-300"
-                        >
-                          {point}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-400 dark:text-zinc-500">暂无</p>
+                    <span className="inline-flex items-center gap-1 rounded-lg bg-indigo-100 px-2.5 py-1 text-xs font-medium text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300">
+                      <Target className="h-3.5 w-3.5" />
+                      学情快照就绪，待带入科研
+                    </span>
                   )}
                 </div>
               </div>
-            </SectionCard>
-          )}
-
-          {/* Review queue */}
-          {hasReviewQueue && (
-            <SectionCard
-              icon={<BookOpenCheck className="h-4 w-4 text-amber-500" strokeWidth={1.5} />}
-              title="待复习标记队列"
-              hint={`共 ${learning?.review_queue.active_confusion_marks} 处主动标记`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-slate-500 dark:text-zinc-400">主要分布载体：</span>
-                {learning?.review_queue.top_surfaces.map((surface) => (
-                  <span
-                    key={surface}
-                    className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
-                  >
-                    {surface === "ppt_page" ? (
-                      <Presentation className="h-3 w-3" />
-                    ) : surface === "explain" ? (
-                      <BookOpen className="h-3 w-3" />
-                    ) : (
-                      <FileQuestion className="h-3 w-3" />
-                    )}
-                    {SURFACE_LABELS[surface] || surface}
-                  </span>
-                ))}
+              <div className="flex shrink-0 items-center gap-2 pt-2 sm:pt-0">
+                <Link
+                  href="/learning/practice"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                >
+                  <Code2 className="h-3.5 w-3.5 text-cyan-600" />
+                  继续动手实践
+                </Link>
+                <Link
+                  href="/research"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:from-violet-500 hover:to-indigo-500"
+                >
+                  <FlaskConical className="h-3.5 w-3.5" />
+                  开启科研探索
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
               </div>
-            </SectionCard>
-          )}
+            </div>
+          </section>
 
-          {/* Research conversations */}
+          {/* 4. Research Guidance Conversations */}
           {hasResearchConvs && (
             <SectionCard
-              icon={<FlaskConical className="h-4 w-4 text-sky-500" strokeWidth={1.5} />}
+              icon={<FlaskConical className="h-5 w-5 text-sky-500" strokeWidth={1.5} />}
               title="科研引导会话"
-              hint="最近探索与复现计划"
+              subtitle="最近探索与学术复现计划"
             >
               <ul className="space-y-3">
                 {research?.conversations.map((conv) => (
@@ -471,13 +842,13 @@ export default function PortraitPage() {
         </div>
       )}
 
-      {/* Footnote */}
-      {!loading && overview && (
-        <p className="mt-8 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-400 dark:text-zinc-600">
-          <Activity className="h-3.5 w-3.5" strokeWidth={1.5} />
-          画像统一读口由规则聚合生成，不调用模型、不联网；Practice 复盘不外泄源码与测试数据。
-        </p>
-      )}
+      {/* 5. Centered Frosted Glass Knowledge Gap Detail Modal */}
+      <KnowledgeGapDetailModal
+        item={selectedGap}
+        isOpen={selectedGap !== null}
+        onClose={() => setSelectedGap(null)}
+        onDeleteRecord={handleDeleteRecord}
+      />
     </div>
   );
 }

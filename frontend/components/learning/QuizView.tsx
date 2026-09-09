@@ -17,7 +17,7 @@
  * ``attempt_id``, aggregated into the learning portrait via ``profile_id``.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -41,7 +41,8 @@ import type {
   QuizQuestionType,
 } from "@/lib/api/quiz";
 import { gradeQuizAnswers } from "@/lib/api/learning";
-import { markSourceRef } from "@/lib/api/profile";
+import { fetchPortraitsOverview, markSourceRef } from "@/lib/api/profile";
+import { getLocalProfileId } from "@/lib/api/workspaces";
 import { getOrCreateLearnerId, newUuidV4 } from "@/lib/learner";
 import { MarkButton } from "@/components/learning/MarkButton";
 
@@ -181,7 +182,46 @@ export function QuizView({
   >({});
   const [gradeError, setGradeError] = useState<string | null>(null);
   const [withAnswer, setWithAnswer] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
+  const [showProfile, setShowProfile] = useState(true);
+  const [profileSummary, setProfileSummary] = useState<string>(
+    "正在根据学情画像加载最新掌握概况..."
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const profileId = getOrCreateLearnerId();
+    fetchPortraitsOverview(profileId, { localProfileId: getLocalProfileId() })
+      .then((data) => {
+        if (cancelled) return;
+        const gaps = data.learning.knowledge_gaps;
+        const weaknesses = data.learning.mastery.weak_points;
+        const strengths = data.learning.mastery.strong_points;
+
+        let summary = "";
+        if (weaknesses.length > 0 || gaps.length > 0) {
+          const weakNames =
+            weaknesses.length > 0
+              ? weaknesses.slice(0, 2).join("、")
+              : gaps[0]?.knowledge_point || "";
+          const strongText =
+            strengths.length > 0 ? `扎实掌握${strengths.slice(0, 2).join("、")}，` : "";
+          summary = `根据近期诊断：${strongText}在「${weakNames}」存在薄弱缺口与待复习标记，本次组卷将定向巩固弱项。`;
+        } else if (strengths.length > 0) {
+          summary = `根据近期诊断：在「${strengths.slice(0, 2).join("、")}」掌握良好（得分率≥75%），本次组卷将适度进阶考察综合应用。`;
+        } else {
+          summary = "近期诊断记录较少，组卷将依据核心考点均匀覆盖基础概念与推导题型。";
+        }
+        if (summary) setProfileSummary(summary);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProfileSummary("近期诊断记录较少，组卷将依据核心考点均匀覆盖基础概念与推导题型。");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // A fresh quiz resets answer / grading state via the parent's ``key`` on this
   // component (remount), so no ``setState``-in-effect is needed here.
@@ -434,9 +474,17 @@ export function QuizView({
                 />
                 自动使用学情画像（判分 + 标记记录）
               </label>
-              <p className="text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500">
-                开启后，组卷时自动加载本浏览器的练习判分与「不懂」标记记录作为提示词注入，让题目贴合你的实际掌握情况。
-              </p>
+              <div className="rounded-lg border border-violet-100 bg-violet-50/70 p-2.5 text-xs text-violet-900 dark:border-violet-900/40 dark:bg-violet-950/30 dark:text-violet-200">
+                <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700 dark:text-violet-300">
+                  <Sparkles className="h-3 w-3 shrink-0" />
+                  {params.student_profile && !autoProfileActive
+                    ? "当前专项错题复习注入提示词（已精准隔离全局画像）："
+                    : "当前画像注入摘要（贴合掌握实情）："}
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-zinc-300">
+                  {params.student_profile && !autoProfileActive ? params.student_profile : profileSummary}
+                </p>
+              </div>
               <textarea
                 value={params.student_profile ?? ""}
                 disabled={controlsDisabled}
