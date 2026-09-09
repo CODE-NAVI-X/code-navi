@@ -483,3 +483,32 @@ def test_academic_search_skill_contract_is_packaged() -> None:
     assert "explicit user confirmation" in skill
     assert "metadata_and_abstract_only" in skill
     assert "Do not fall back to a browser or unrestricted web search" in skill
+
+
+def test_conversation_search_chinese_query_records_supplemental_terms(
+    client: TestClient,
+) -> None:
+    source = FakeSource()
+    _conversation_search_service.search_tool = AcademicSearchTool({"arxiv": source})
+    created = client.post(
+        "/api/v1/research/conversations",
+        json={"initial_message": "我想研究编程学习中的生成式 AI"},
+    ).json()
+
+    response = client.post(
+        f"/api/v1/research/conversations/{created['conversation_id']}/evidence-bundles",
+        json={"query": "卷积神经网络 图像分类", "sources": ["arxiv"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["query"] == "卷积神经网络 图像分类"
+    assert "supplemental_terms" in body
+    assert any(
+        "convolutional" in term.casefold() or "cnn" in term.casefold()
+        for term in body["supplemental_terms"]
+    )
+    assert any(
+        "image classification" in term.casefold() or "image recognition" in term.casefold()
+        for term in body["supplemental_terms"]
+    )

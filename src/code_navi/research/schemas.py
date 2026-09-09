@@ -112,6 +112,8 @@ class EvidenceBundle(BaseModel):
     failure_reasons: list[str]
     provenance_note: str
     tool_audit: dict[str, object] | None = None
+    supplemental_query: str | None = None
+    supplemental_terms: list[str] = Field(default_factory=list)
 
 
 class ClarificationQuestion(BaseModel):

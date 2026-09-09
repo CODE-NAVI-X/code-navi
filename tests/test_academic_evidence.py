@@ -520,13 +520,13 @@ def test_issue_122_all_irrelevant_candidates_return_empty_list() -> None:
         accessed_at=accessed_at,
     )
     paper_2 = PaperMetadata(
-        title="Quantum Computing Foundations and Algorithms",
+        title="A Survey of SQL Injection Vulnerabilities",
         authors=["David"],
         year=2025,
         source_name="arXiv",
         url="https://arxiv.org/abs/2503.00001",
         identifier="arXiv:2503.00001",
-        abstract_excerpt="An introduction to qubits and quantum gates.",
+        abstract_excerpt="An introduction to web security and database injection attacks.",
         accessed_at=accessed_at,
     )
 
@@ -541,6 +541,7 @@ def test_issue_122_all_irrelevant_candidates_return_empty_list() -> None:
     assert bundle["source_statuses"][0]["status"] == "success"
     assert "searched_at" in bundle
     assert "provenance_note" in bundle
+
 
 
 def test_issue_122_cjk_single_char_overlap_not_relevant() -> None:
@@ -655,3 +656,135 @@ def test_search_when_all_candidates_filtered_returns_empty_papers_with_provenanc
     assert bundle["queried_sources"] == ["arxiv"]
     assert bundle["source_statuses"][0]["status"] == "success"
     assert "provenance_note" in bundle
+
+
+def test_issue_122_chinese_bilingual_bridge_retains_relevant_english_papers() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper_resnet_en = PaperMetadata(
+        title="Deep Residual Learning for Image Recognition",
+        authors=["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun"],
+        year=2016,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/1512.03385",
+        identifier="arXiv:1512.03385",
+        abstract_excerpt=(
+            "Deeper neural networks are more difficult to train. "
+            "We present a residual learning framework."
+        ),
+        accessed_at=accessed_at,
+    )
+    paper_cnn_en = PaperMetadata(
+        title="CNN-Based Image Classification on Large Scale Datasets",
+        authors=["Alex Krizhevsky"],
+        year=2017,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/1701.00001",
+        identifier="arXiv:1701.00001",
+        abstract_excerpt=(
+            "We train a deep convolutional neural network to classify high-resolution images."
+        ),
+        accessed_at=accessed_at,
+    )
+    paper_unrelated_en = PaperMetadata(
+        title="Quantum Computing Foundations and Algorithms",
+        authors=["David"],
+        year=2025,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2503.00001",
+        identifier="arXiv:2503.00001",
+        abstract_excerpt="An introduction to qubits and quantum gates.",
+        accessed_at=accessed_at,
+    )
+    paper_chinese = PaperMetadata(
+        title="基于卷积神经网络的图像分类算法研究",
+        authors=["张三", "李四"],
+        year=2023,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/2301.00001",
+        identifier="arXiv:2301.00001",
+        abstract_excerpt="本文提出了一种改进的卷积神经网络用于图像分类任务。",
+        accessed_at=accessed_at,
+    )
+
+    source = FakeArxivSource(
+        AcademicSourceResult.success(
+            "arxiv", [paper_unrelated_en, paper_resnet_en, paper_chinese, paper_cnn_en]
+        )
+    )
+    tool = AcademicSearchTool({"arxiv": source})
+
+    query = "卷积神经网络 图像分类"
+    bundle = tool.search("session-bilingual-cnn", query, ["arxiv"])
+
+    # 1. Raw Chinese query must be preserved as-is
+    assert bundle["query"] == "卷积神经网络 图像分类"
+
+    # 2. Supplemental query / terms must be transparently and traceably recorded
+    assert "supplemental_terms" in bundle
+    assert "supplemental_query" in bundle
+    supplemental_terms = bundle["supplemental_terms"]
+    assert any(
+        "convolutional" in term.casefold() or "cnn" in term.casefold()
+        for term in supplemental_terms
+    )
+    assert any(
+        "image classification" in term.casefold() or "image recognition" in term.casefold()
+        for term in supplemental_terms
+    )
+
+    # 3. Relevant English papers must be retained
+    titles = [p["title"] for p in bundle["papers"]]
+    assert "Deep Residual Learning for Image Recognition" in titles
+    assert "CNN-Based Image Classification on Large Scale Datasets" in titles
+
+    # 4. Irrelevant English papers must be filtered out
+    assert "Quantum Computing Foundations and Algorithms" not in titles
+
+
+    # 5. Non-English titles must be filtered out
+    assert "基于卷积神经网络的图像分类算法研究" not in titles
+
+    # 6. Source status and provenance preserved
+    assert bundle["source_statuses"][0]["status"] == "success"
+    assert bundle["queried_sources"] == ["arxiv"]
+    assert "provenance_note" in bundle
+
+
+def test_issue_122_unmapped_chinese_query_returns_honest_empty_without_fake_fallback() -> None:
+    accessed_at = datetime(2026, 8, 28, tzinfo=UTC)
+    paper_resnet_en = PaperMetadata(
+        title="Deep Residual Learning for Image Recognition",
+        authors=["Kaiming He"],
+        year=2016,
+        source_name="arXiv",
+        url="https://arxiv.org/abs/1512.03385",
+        identifier="arXiv:1512.03385",
+        abstract_excerpt="Deeper neural networks are more difficult to train.",
+        accessed_at=accessed_at,
+    )
+    source = FakeArxivSource(AcademicSourceResult.success("arxiv", [paper_resnet_en]))
+    tool = AcademicSearchTool({"arxiv": source})
+
+    bundle = tool.search("session-unmapped", "未知的非领域中文词汇", ["arxiv"])
+
+    assert bundle["query"] == "未知的非领域中文词汇"
+    assert bundle.get("supplemental_terms") == []
+    assert bundle.get("supplemental_query") is None
+    # No matching terms, so unrelated English papers are filtered out -> honest empty
+    assert bundle["papers"] == []
+    assert bundle["source_statuses"][0]["status"] == "success"
+
+
+def test_issue_122_chinese_query_all_sources_fail_returns_safe_empty() -> None:
+    source = FakeArxivSource(
+        AcademicSourceResult.failure("arxiv", "network_error", "arXiv network down", queried=True)
+    )
+    tool = AcademicSearchTool({"arxiv": source})
+
+    bundle = tool.search("session-fail", "卷积神经网络 图像分类", ["arxiv"])
+
+    assert bundle["query"] == "卷积神经网络 图像分类"
+    assert bundle["papers"] == []
+    assert bundle["source_statuses"][0]["status"] == "network_error"
+    assert bundle["failure_reasons"] == ["arXiv network down"]
+    assert bundle["queried_sources"] == ["arxiv"]
