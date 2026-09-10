@@ -41,6 +41,7 @@ import {
   streamOrchestratorMessage,
 } from "@/lib/api/research";
 
+import { splitMessageSegments, type MessageSegment } from "@/lib/research-options";
 import { MarkdownText } from "./MarkdownText";
 import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
@@ -443,6 +444,12 @@ export function ResearchConversation() {
   const isThinking = phase === "thinking";
   const disabled = phase !== "idle";
 
+  // 选项组只挂在最后一条姜姜消息上（与既有行为一致），并就地渲染在题干下方。
+  const allMessages = conversation?.messages ?? [];
+  const latestMessage = allMessages[allMessages.length - 1];
+  const optionGroupMessageId =
+    latestMessage && latestMessage.role === "assistant" ? latestMessage.message_id : null;
+
   return (
     <main
       key={conversation.conversation_id}
@@ -516,6 +523,12 @@ export function ResearchConversation() {
         <div className="mx-auto max-w-4xl space-y-6">
           {conversation.messages.map((message) => {
             const isUser = message.role === "user";
+            const showOptionGroup = !isUser && message.message_id === optionGroupMessageId;
+            // 按原文顺序切成“正文 -> 选项组 -> 正文”的片段，让交互选项贴在对应题干下方，
+            // 而不是被挂到整条消息末尾。
+            const segments: MessageSegment[] = showOptionGroup
+              ? splitMessageSegments(message.content)
+              : [{ kind: "markdown", content: message.content }];
 
             return (
               <article
@@ -566,12 +579,29 @@ export function ResearchConversation() {
                     {isUser ? (
                       <p className="whitespace-pre-wrap">{message.content}</p>
                     ) : (
-                      <MarkdownText
-                        content={message.content}
-                        onSelectDirection={(title) =>
-                          void handleSend(buildDirectionSelectionMessage(title))
-                        }
-                      />
+                      <div className="space-y-3">
+                        {/* 严格按原文顺序交替渲染 markdown 与选项组：拿到选项的选项组
+                            正好落在对应题干下方，而不是整条消息末尾。 */}
+                        {segments.map((segment, segmentIndex) =>
+                          segment.kind === "markdown" ? (
+                            <MarkdownText
+                              key={`markdown-${segmentIndex}`}
+                              content={segment.content}
+                              onSelectDirection={(title) =>
+                                void handleSend(buildDirectionSelectionMessage(title))
+                              }
+                            />
+                          ) : (
+                            <ResearchOptionSelector
+                              key={`options-${segmentIndex}`}
+                              group={segment.group}
+                              disabled={disabled}
+                              onSend={(text) => void handleSend(text)}
+                              onFillInput={(text) => setDraft(text)}
+                            />
+                          ),
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -610,21 +640,6 @@ export function ResearchConversation() {
               }
             />
           )}
-
-          {/* 选择题快速作答：最后一条是姜姜的消息且含 A/B/C 选项组时显示 */}
-          {(() => {
-            const allMessages = conversation?.messages ?? [];
-            const last = allMessages[allMessages.length - 1];
-            if (!last || last.role !== "assistant") return null;
-            return (
-              <ResearchOptionSelector
-                content={last.content}
-                disabled={disabled}
-                onSend={(message) => void handleSend(message)}
-                onFillInput={(text) => setDraft(text)}
-              />
-            );
-          })()}
 
           {/* Exception 2: Candidate Paper Card (Shown when paper exists) */}
           {papers && (papers.current_paper || papers.paper_history.length > 0) && (

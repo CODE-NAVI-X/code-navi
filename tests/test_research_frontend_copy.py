@@ -824,20 +824,32 @@ def test_research_option_selector_parses_and_submits_choices() -> None:
     conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
         encoding="utf-8"
     )
+    options_source = Path("frontend/lib/research-options.ts").read_text(encoding="utf-8")
 
     # 选项解析：A. / A、 / A： / A 端： 连续 ≥2 行归组；支持决策分支与计划确认
     assert "parseOptionGroups" in selector_source
     assert "ParsedOptionGroup" in selector_source
     assert "BRANCH_LINE" in selector_source
-    assert "计划执行确认" in selector_source
+    # 解析与“按原文顺序切片”的纯逻辑集中在 research-options 模块
+    assert "计划执行确认" in options_source
+    assert "splitMessageSegments" in options_source
     assert "我选 " in selector_source
     assert "补充说明（可选）" in selector_source
     assert "提交选择" in selector_source
     assert "填入输入框" in selector_source
     assert "onFillInput" in selector_source
+    # 选项就地渲染在题干下方，不再出现独立的“快速作答”重复卡片
+    assert "快速作答" not in selector_source
     # 仅最后一条是姜姜的消息且含选项组时挂载，且支持输入框自动填充
     assert "ResearchOptionSelector" in conversation_source
     assert "onFillInput={(text) => setDraft(text)}" in conversation_source
+    # 正文按原文顺序切成“正文 -> 选项组 -> 正文”，选项组因此贴在对应题干下方，
+    # 同时被接管的静态选项行从 markdown 片段里摘掉，保证同一题目只出现一份选项
+    assert "splitMessageSegments" in conversation_source
+    assert "segment.kind === \"markdown\"" in conversation_source
+    assert "<ResearchOptionSelector" in conversation_source
+    assert "group={segment.group}" in conversation_source
+    assert "stripOptionLines" not in conversation_source
     # 动态探索方向在定方向后自动隐藏
     assert "hasConfirmedDirection" in conversation_source
     # 推进按钮在信息未完成前变灰防呆
