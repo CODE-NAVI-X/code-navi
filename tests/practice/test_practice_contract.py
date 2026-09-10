@@ -9,6 +9,7 @@ boundary on any path.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 
@@ -167,7 +168,7 @@ class TestMockGenerateAndRestore:
         assert restored.status_code == 200
         assert restored.json() == payload
 
-    def test_context_driven_request_rejects_unrelated_mock_exercises(
+    def test_context_driven_request_generates_semantic_mock_exercises(
         self, client: TestClient
     ) -> None:
         context = {
@@ -182,9 +183,121 @@ class TestMockGenerateAndRestore:
             "/api/v1/practice/sets/generate",
             json={"kind": "mixed", "context": context, "count": 3},
         )
-        assert generated.status_code == 409, generated.text
-        assert "离线 Mock 模式" in generated.json()["detail"]
-        assert "二叉树遍历" in generated.json()["detail"]
+        assert generated.status_code == 200, generated.text
+        payload = generated.json()
+        assert payload["generation_mode"] == "mock"
+        assert payload["effective_context"] == context
+        assert payload["coverage"] == ["二叉树遍历"]
+        assert all(item["knowledge_points"] == ["二叉树遍历"] for item in payload["items"])
+        content = json.dumps(payload["items"], ensure_ascii=False).casefold()
+        assert "inorder" in content
+        assert "递归" in content
+        assert "左子树" in content
+        assert "两数之和" not in content
+        assert "average(nums)" not in content
+
+    def test_contextual_code_practice_uses_code_fill_and_one_focus(
+        self, client: TestClient
+    ) -> None:
+        context = {
+            "source_session_id": "sess-ctx-multi",
+            "knowledge_points": [
+                {"name": "CNN", "source_ref": "notebook-cnn", "mastery": 0.2},
+                {
+                    "name": "ResNet BasicBlock",
+                    "source_ref": "notebook-resnet",
+                    "mastery": 0.3,
+                },
+            ],
+            "objective": "先练习 CNN，再进入 ResNet BasicBlock",
+            "notes_summary": None,
+        }
+        generated = client.post(
+            "/api/v1/practice/sets/generate",
+            json={"kind": "code_practice", "context": context, "count": 5},
+        )
+
+        assert generated.status_code == 200, generated.text
+        payload = generated.json()
+        assert payload["effective_context"] == context
+        assert payload["coverage"] == ["CNN"]
+        assert {item["item_kind"] for item in payload["items"]} == {"code_fill"}
+        assert all(item["knowledge_points"] == ["CNN"] for item in payload["items"])
+        content = json.dumps(payload["items"], ensure_ascii=False).casefold()
+        assert "cnn" in content
+        assert "feature map" in content
+        assert "resnet" not in content
+
+        first_item = payload["items"][0]
+        grade = client.post(
+            "/api/v1/practice/code-fill/grade",
+            json={
+                "set_id": payload["set_id"],
+                "item_id": first_item["item_id"],
+                "attempt_id": "00000000-0000-4000-8000-000000000001",
+                "blank_answers": [
+                    {"blank_id": "cnn-convolution", "value": "convolve(image, kernel)"},
+                    {"blank_id": "cnn-pooling", "value": "max_pool(activated)"},
+                ],
+            },
+        )
+        assert grade.status_code == 200, grade.text
+        assert grade.json()["graded"] is True
+        assert grade.json()["total_score"] == grade.json()["total_max_score"]
+
+    @pytest.mark.parametrize(
+        ("knowledge_point", "semantic_terms"),
+        [
+            ("CNN", ("cnn", "卷积", "feature map", "池化")),
+            ("ResNet BasicBlock", ("resnet", "basicblock", "residual", "shortcut")),
+        ],
+    )
+    def test_supported_context_uses_matching_mock_fixture(
+        self,
+        client: TestClient,
+        knowledge_point: str,
+        semantic_terms: tuple[str, ...],
+    ) -> None:
+        context = {
+            "source_session_id": f"sess-{knowledge_point}",
+            "knowledge_points": [
+                {"name": knowledge_point, "source_ref": "notebook-1", "mastery": 0.4}
+            ],
+            "objective": f"掌握 {knowledge_point} 的核心结构",
+            "notes_summary": None,
+        }
+        generated = client.post(
+            "/api/v1/practice/sets/generate",
+            json={"kind": "mixed", "context": context, "count": 3},
+        )
+
+        assert generated.status_code == 200, generated.text
+        content = json.dumps(generated.json()["items"], ensure_ascii=False).casefold()
+        for term in semantic_terms:
+            assert term.casefold() in content
+        assert "两数之和" not in content
+        assert "average(nums)" not in content
+
+    def test_unsupported_context_is_rejected_instead_of_using_generic_mock(
+        self, client: TestClient
+    ) -> None:
+        context = {
+            "source_session_id": "sess-unsupported",
+            "knowledge_points": [
+                {"name": "量子纠错", "source_ref": "notebook-unsupported", "mastery": 0.2}
+            ],
+            "objective": "掌握量子纠错",
+            "notes_summary": None,
+        }
+
+        response = client.post(
+            "/api/v1/practice/sets/generate",
+            json={"kind": "mixed", "context": context, "count": 3},
+        )
+
+        assert response.status_code == 409
+        assert "不支持" in response.json()["detail"]
+        assert "两数之和" not in response.text
 
     def test_mixed_honours_concept_ratio(self, client: TestClient) -> None:
         generated = client.post(

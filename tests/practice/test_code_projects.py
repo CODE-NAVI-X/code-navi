@@ -107,7 +107,6 @@ def test_project_tree_and_file_content_roundtrip(client: TestClient) -> None:
     ("files", "status_code"),
     [
         ([{"path": "script.js", "content_base64": _encoded("console.log(1)")}], 415),
-        ([{"path": "data/train.py", "content_base64": _encoded("x = 1")}], 400),
         ([{"path": "../secret.py", "content_base64": _encoded("x = 1")}], 400),
         (
             [
@@ -117,7 +116,6 @@ def test_project_tree_and_file_content_roundtrip(client: TestClient) -> None:
             400,
         ),
         ([{"path": "main.py", "content_base64": "not-base64"}], 400),
-        ([{"path": "dataset.py", "content_base64": _encoded("import pickle\n")}], 400),
     ],
 )
 def test_project_upload_rejects_invalid_files(
@@ -126,6 +124,49 @@ def test_project_upload_rejects_invalid_files(
     response = client.post("/api/v1/practice/projects", json=_project_payload(files))
 
     assert response.status_code == status_code
+
+
+def test_project_upload_allows_python_files_inside_a_data_directory(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/practice/projects",
+        json=_project_payload(
+            [{"path": "data/train.py", "content_base64": _encoded("x = 1\n")}]
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["files"][0]["path"] == "data/train.py"
+
+
+def test_project_upload_allows_source_mentions_of_dataset_terms(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/practice/projects",
+        json=_project_payload(
+            [
+                {
+                    "path": "loader.py",
+                    "content_base64": _encoded(
+                        '# pickle/parquet are mentioned in this explanation\n'
+                        'def load_data(path):\n'
+                        '    return path\n'
+                    ),
+                }
+            ]
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+
+
+def test_project_upload_allows_python_data_libraries(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/practice/projects",
+        json=_project_payload(
+            [{"path": "loader.py", "content_base64": _encoded("import pickle\n")}]
+        ),
+    )
+
+    assert response.status_code == 200, response.text
 
 
 def test_project_upload_rejects_total_size_and_file_count(client: TestClient) -> None:

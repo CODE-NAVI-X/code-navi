@@ -222,15 +222,16 @@ class TestCodeUploadAnalyze:
 
         assert response.status_code == 413
 
-    def test_dataset_traces_return_400(self, client: TestClient) -> None:
+    def test_python_data_library_is_valid_code(self, client: TestClient) -> None:
         content = base64.b64encode(b"import pickle\n").decode()
         response = client.post(
             "/api/v1/practice/code-uploads/analyze",
             json={"filename": "dataset.py", "content_base64": content},
         )
 
-        assert response.status_code == 400
-        assert "仅支持核心代码或文档文件" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["kind"] == "python"
+        assert response.json()["imports"] == ["pickle"]
 
     def test_valid_python_upload_is_persisted_and_usable(self, client: TestClient) -> None:
         source = "def average(nums):\n    return sum(nums) / len(nums)\n"
