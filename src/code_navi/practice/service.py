@@ -29,9 +29,10 @@ from sqlalchemy.orm import Session
 from kernel.runtime import AgentRuntime, AgentSpec, RuntimeRequest
 
 from ..learning.models import NotebookItemModel
-from ..learning.quiz.schemas import QuizQuestion
+from ..learning.quiz.schemas import QuizQuestion, QuizQuestionSource
 from ..learning_profile.schemas import KnowledgeGapItem, ProfileResponse
 from ..providers import ProviderSettings, create_provider
+from .mock_fixtures import MockContextFixture, resolve_mock_context_focus
 from .models import (
     CodeFillAttemptModel,
     CodeProjectModel,
@@ -124,8 +125,8 @@ class PracticeModelGenerationError(Exception):
     """Raised when an explicitly requested model generation cannot be used."""
 
 
-class ContextualPracticeUnavailable(Exception):
-    """Raised when offline rules cannot truthfully generate a contextual exercise."""
+class ContextualPracticeUnsupported(Exception):
+    """Raised when Mock cannot truthfully generate a contextual exercise."""
 
 
 class DuplicateLearningPracticeSetError(Exception):
@@ -170,9 +171,31 @@ class PracticeSetService:
     ) -> PracticeSetResponse:
         self._validate_basis(request)
         self._validate_upload_ids(request, db, owned_ids=owned_ids)
+        knowledge_points = self._bound_knowledge_points(request)
+        provider_name = self._provider_name()
+        contextual_focus = (
+            resolve_mock_context_focus(knowledge_points)
+            if request.context is not None and provider_name == _MOCK_PROVIDER_NAME
+            else None
+        )
+        contextual_fixture = contextual_focus[1] if contextual_focus is not None else None
+        if request.context is not None and provider_name == _MOCK_PROVIDER_NAME:
+            if contextual_focus is None:
+                raise ContextualPracticeUnsupported(
+                    "当前为 Mock 模式，暂不支持为「"
+                    + "、".join(knowledge_points)
+                    + "」生成语义相关的上下文练习；"
+                    "支持 CNN、ResNet/BasicBlock、二叉树遍历。请配置真实 Provider 后重试。"
+                )
+        item_knowledge_points = (
+            [contextual_focus[0]]
+            if contextual_focus is not None
+            else knowledge_points
+        )
+        contextual_mock = contextual_focus is not None
         structure_exercises = (
             self._structure_exercises_for_topic(request)
-            if request.kind == "code_practice"
+            if request.kind == "code_practice" and request.context is None
             else None
         )
         if structure_exercises:
@@ -182,23 +205,12 @@ class PracticeSetService:
                 db,
                 owner_principal_id=owner_principal_id,
             )
-        if (
-            request.context is not None
-            and self._provider_name() == "mock"
-            and not allow_mock_context
-        ):
-            points = "、".join(point.name for point in request.context.knowledge_points)
-            raise ContextualPracticeUnavailable(
-                f"当前为离线 Mock 模式，无法为「{points}」生成可信的代码练习；"
-                "请配置 AI Provider 后重试。"
-            )
-
-        knowledge_points = self._bound_knowledge_points(request)
         set_id = str(uuid4())
         code_fill_specs, code_fill_provider, code_fill_used_model = (
             self._generate_code_fill_specs(
                 request,
                 strict_model=strict_model or request.context is not None,
+                fixture=contextual_fixture,
             )
             if request.kind != "concept_quiz"
             else ([], "mock", False)
@@ -207,7 +219,11 @@ class PracticeSetService:
 
         item_models: list[PracticeSetItemModel] = []
         for position in range(1, request.count + 1):
-            item_kind = self._item_kind_for_position(request, position)
+            item_kind = self._item_kind_for_position(
+                request,
+                position,
+                contextual_mock=contextual_mock,
+            )
             if item_kind == "code_fill" and code_fill_index < len(code_fill_specs):
                 payload, judge_secret = code_fill_specs[code_fill_index]
                 code_fill_index += 1
@@ -216,7 +232,8 @@ class PracticeSetService:
                     request=request,
                     position=position,
                     item_kind=item_kind,
-                    knowledge_points=knowledge_points,
+                    knowledge_points=item_knowledge_points,
+                    fixture=contextual_fixture,
                 )
             item_models.append(
                 PracticeSetItemModel(
@@ -232,7 +249,7 @@ class PracticeSetService:
 
         effective_context = request.context
         effective_topic = None if request.context is not None else request.topic
-        coverage = knowledge_points
+        coverage = item_knowledge_points
 
         snapshot = {
             "request": request.model_dump(mode="json"),
@@ -268,7 +285,7 @@ class PracticeSetService:
             self._double_write_concept_quizzes(
                 db,
                 set_id=set_id,
-                knowledge_point=knowledge_points[0],
+                knowledge_point=coverage[0],
                 item_models=item_models,
                 owner_principal_id=owner_principal_id,
             )
@@ -280,7 +297,7 @@ class PracticeSetService:
                 item_id=item.item_id,
                 position=item.position,
                 item_kind=item.item_kind,
-                knowledge_points=knowledge_points,
+                knowledge_points=item_knowledge_points,
                 judging=_judging_channel(item.item_kind),
                 payload=item.payload,
                 grading_hint=(
@@ -692,6 +709,7 @@ class PracticeSetService:
         request: PracticeSetGenerateRequest,
         *,
         strict_model: bool = False,
+        fixture: MockContextFixture | None = None,
     ) -> tuple[list[tuple[dict, dict | None]], str, bool]:
         """Generate code-fill items from a provider, falling back to mock rules."""
         provider_name = self._provider_name()
@@ -707,7 +725,10 @@ class PracticeSetService:
         topic = self._bound_knowledge_points(request)[0]
         if provider_name == "mock":
             return (
-                [self._mock_code_fill_dict(topic, position) for position in range(1, count + 1)],
+                [
+                    self._mock_code_fill_dict(topic, position, fixture=fixture)
+                    for position in range(1, count + 1)
+                ],
                 "mock",
                 False,
             )
@@ -731,7 +752,10 @@ class PracticeSetService:
                 raise PracticeModelGenerationError(
                     "The AI practice generator returned no valid code-fill items"
                 )
-            items = [self._mock_code_fill_dict(topic, position) for position in range(1, count + 1)]
+            items = [
+                self._mock_code_fill_dict(topic, position, fixture=fixture)
+                for position in range(1, count + 1)
+            ]
             return items, "rules", False
         if strict_model and len(items) < count:
             raise PracticeModelGenerationError(
@@ -813,6 +837,8 @@ class PracticeSetService:
         self,
         topic: str,
         position: int,
+        *,
+        fixture: MockContextFixture | None = None,
     ) -> tuple[dict, dict | None]:
         """Return one deterministic code-fill item matching the mock contract."""
         request = PracticeSetGenerateRequest(kind="code_practice", topic=topic, count=3)
@@ -821,6 +847,7 @@ class PracticeSetService:
             position=position,
             item_kind="code_fill",
             knowledge_points=[topic],
+            fixture=fixture,
         )
         return payload, secret
 
@@ -944,12 +971,6 @@ class PracticeSetService:
             raise UploadValidationError("文件内容不是有效的 base64 文本", status_code=400) from exc
         if len(content.encode("utf-8")) > _MAX_UPLOAD_BYTES:
             raise UploadValidationError("文件超过 256KB 限制", status_code=413)
-        if _looks_like_dataset_content(content):
-            raise UploadValidationError(
-                "仅支持核心代码或文档文件，不支持数据集文件",
-                status_code=400,
-            )
-
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         upload_id = str(uuid4())
         if filename.endswith(".py"):
@@ -992,8 +1013,8 @@ class PracticeSetService:
                 raise UploadValidationError("项目文件路径无效或重复", status_code=400)
             path = posixpath.normpath(path)
             parts = path.split("/")
-            if ".." in parts or "data" in {part.lower() for part in parts}:
-                raise UploadValidationError("不支持 data 目录或越界路径", status_code=400)
+            if ".." in parts:
+                raise UploadValidationError("项目文件路径无效或越界", status_code=400)
             lower = path.lower()
             if not (lower.endswith(".py") or lower.endswith(".md")):
                 raise UploadValidationError("项目仅支持 .py 或 .md 文件", status_code=415)
@@ -1007,10 +1028,6 @@ class PracticeSetService:
             total += size
             if total > _MAX_PROJECT_BYTES:
                 raise UploadValidationError("项目超过 2MB 限制", status_code=413)
-            if _looks_like_dataset_content(content):
-                raise UploadValidationError(
-                    "仅支持核心代码或文档文件，不支持数据集文件", status_code=400
-                )
             if lower.endswith(".py"):
                 analysis = self._analyze_python_upload(path, content, "", "tmp")
             else:
@@ -1809,11 +1826,18 @@ class PracticeSetService:
         return [request.topic] if request.topic else ["未指定知识点"]
 
     @staticmethod
-    def _item_kind_for_position(request: PracticeSetGenerateRequest, position: int) -> str:
+    def _item_kind_for_position(
+        request: PracticeSetGenerateRequest,
+        position: int,
+        *,
+        contextual_mock: bool = False,
+    ) -> str:
         """Deterministic item composition for the mock (contract §1.1 kinds)."""
         if request.kind == "concept_quiz":
             return "concept_quiz_question"
         if request.kind == "code_practice":
+            if contextual_mock:
+                return "code_fill"
             return "code_fill" if position % 2 == 1 else "coding_problem"
 
         # mixed: honour concept_ratio deterministically — first N positions are
@@ -1832,6 +1856,7 @@ class PracticeSetService:
         position: int,
         item_kind: str,
         knowledge_points: list[str],
+        fixture: MockContextFixture | None = None,
     ) -> tuple[dict, dict | None]:
         """Build one deterministic mock item: (public payload, judge_secret).
 
@@ -1839,6 +1864,57 @@ class PracticeSetService:
         code) goes into ``judge_secret`` only — never into ``payload``.
         """
         topic_label = knowledge_points[0] if knowledge_points else request.topic or "练习"
+
+        if fixture is not None:
+            if item_kind == "concept_quiz_question":
+                concept = copy.deepcopy(fixture.concept)
+                question = QuizQuestion(
+                    id=f"item-{position:02d}",
+                    type="single",
+                    question=concept["question"],
+                    options=concept["options"],
+                    answer=concept["answer"],
+                    analysis=concept["analysis"],
+                    points=concept.get("points", 10),
+                    source=QuizQuestionSource(
+                        type="local_bank",
+                        label=f"Mock fixture：{fixture.label}（离线演示）",
+                    ),
+                )
+                secret = question.model_dump(mode="json")
+                payload = {
+                    key: value
+                    for key, value in secret.items()
+                    if key not in _CONCEPT_SECRET_KEYS
+                }
+                payload.pop("comment_prompt", None)
+                return payload, {
+                    "answers": secret.get("answer"),
+                    "analysis": secret.get("analysis"),
+                }
+
+            if item_kind == "coding_problem":
+                problem = copy.deepcopy(fixture.coding_problem)
+                problem.update(
+                    {
+                        "id": f"mock-problem-{position:02d}",
+                        "source": "generated",
+                        "difficulty": request.difficulty,
+                        "tags": knowledge_points,
+                        "judgeable": False,
+                        "generationReason": (
+                            f"Mock fixture（{fixture.label}）离线演示，题目内容与上下文知识点相关"
+                        ),
+                        "limitations": [
+                            "Mock fixture，仅用于离线演示，不声称是真实模型生成或完整题库；"
+                            "未注册服务端题库，不支持隐藏测试提交。"
+                        ],
+                    }
+                )
+                return problem, None
+
+            if item_kind == "code_fill":
+                return _mock_fixture_code_fill_payload(fixture)
 
         if item_kind == "concept_quiz_question":
             question = QuizQuestion(
@@ -1939,6 +2015,28 @@ class PracticeSetService:
             "blanks": blanks,
             "reference_code": reference_code,
         }
+
+def _mock_fixture_code_fill_payload(
+    fixture: MockContextFixture,
+) -> tuple[dict, dict]:
+    """Convert one semantic fixture into the public code-fill shape and secret."""
+    spec = copy.deepcopy(fixture.code_fill)
+    reference_code = str(spec["reference_code"])
+    blanks = list(spec["blanks"])
+    payload = {
+        "title": str(spec["title"]),
+        "language": "python",
+        "complexity": "light",
+        "judge_mode": "llm_static",
+        "code_masked": str(spec["code_masked"]),
+        "blanks": [
+            {key: blank[key] for key in _CODE_FILL_BLANK_PUBLIC_KEYS} for blank in blanks
+        ],
+        "steps": copy.deepcopy(spec["steps"]),
+        "source": "generated",
+        "reference_code_hash": hashlib.sha256(reference_code.encode("utf-8")).hexdigest(),
+    }
+    return payload, {"blanks": blanks, "reference_code": reference_code}
 
 
 def _judging_channel(item_kind: str) -> str:
@@ -2131,25 +2229,6 @@ def _project_code_fill_items(
     return [(payload, secret)]
 
 
-def _looks_like_dataset_content(content: str) -> bool:
-    """Reject obvious dataset traces by content rules."""
-    lowered = content.lower()
-    if "pickle" in lowered or "parquet" in lowered:
-        return True
-    if any(token in lowered for token in ("\x89png", "\xff\xd8\xff", "gif89a")):
-        return True
-    lines = [line.strip() for line in content.splitlines() if line.strip()]
-    consecutive = 0
-    for line in lines:
-        if set(line) <= {",", "\t", "|", ";"} and len(line) > 2000:
-            consecutive += 1
-        else:
-            consecutive = 0
-        if consecutive >= 3:
-            return True
-    return False
-
-
 def _python_signature(node: ast.AST) -> str:
     if isinstance(node, ast.ClassDef):
         bases = ", ".join(ast.unparse(base) for base in node.bases)
@@ -2204,6 +2283,7 @@ def _dedupe(items: list[str]) -> list[str]:
 
 __all__ = [
     "CodeFillAttemptModel",
+    "ContextualPracticeUnsupported",
     "ExplainOnlyJudgingError",
     "MissingGenerationBasis",
     "PracticeSetNotFoundError",

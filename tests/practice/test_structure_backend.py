@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Generator
 from types import SimpleNamespace
@@ -66,7 +67,7 @@ def test_structure_topic_generates_code_fill_set(client: TestClient) -> None:
     assert len(payload["items"]) == min(3, len(exercises_for_topic(topic.id)))
 
 
-def test_context_code_practice_rejects_unrelated_mock_exercises(
+def test_context_code_practice_generates_semantic_mock_exercises(
     client: TestClient,
 ) -> None:
     context = {
@@ -84,9 +85,35 @@ def test_context_code_practice_rejects_unrelated_mock_exercises(
         json={"kind": "code_practice", "context": context, "count": 5},
     )
 
-    assert generated.status_code == 409, generated.text
-    assert "离线 Mock 模式" in generated.json()["detail"]
-    assert "卷积、池化" in generated.json()["detail"]
+    assert generated.status_code == 200, generated.text
+    payload = generated.json()
+    assert payload["generation_mode"] == "mock"
+    assert payload["effective_context"] == context
+    assert payload["coverage"] == ["卷积"]
+    assert all(item["knowledge_points"] == ["卷积"] for item in payload["items"])
+    assert {item["item_kind"] for item in payload["items"]} == {"code_fill"}
+    content = json.dumps(payload["items"], ensure_ascii=False).casefold()
+    assert "cnn" in content
+    assert "卷积" in content
+    assert "feature map" in content
+    assert "池化" in content
+    assert "两数之和" not in content
+    assert "average(nums)" not in content
+    grade = client.post(
+        "/api/v1/practice/code-fill/grade",
+        json={
+            "set_id": payload["set_id"],
+            "item_id": payload["items"][0]["item_id"],
+            "attempt_id": str(uuid4()),
+            "blank_answers": [
+                {"blank_id": "cnn-convolution", "value": "convolve(image, kernel)"},
+                {"blank_id": "cnn-pooling", "value": "max_pool(activated)"},
+            ],
+        },
+    )
+    assert grade.status_code == 200, grade.text
+    assert grade.json()["graded"] is True
+    assert grade.json()["total_score"] == grade.json()["total_max_score"]
 
 
 def test_structure_topic_set_can_grade_with_code_fill_grade(

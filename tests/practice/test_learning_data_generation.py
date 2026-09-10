@@ -46,7 +46,7 @@ def client() -> Generator[TestClient, None, None]:
         yield test_client
 
 
-def _add_weak_attempts(db: Session, topic: str = "network security") -> None:
+def _add_weak_attempts(db: Session, topic: str = "二叉树遍历") -> None:
     for index in range(3):
         db.add(
             QuizAttemptModel(
@@ -91,14 +91,17 @@ def test_generates_safe_archived_set_from_weakness_and_detects_bank_gap(
     assert response.status_code == 200
     data = response.json()
     assert data["generation_version"] == "learning-data.v1"
-    assert data["selected_knowledge_points"] == ["network security"]
-    assert data["question_bank_gaps"] == ["network security"]
+    assert data["selected_knowledge_points"] == ["二叉树遍历"]
+    assert data["question_bank_gaps"] == ["二叉树遍历"]
     practice_set = data["practice_set"]
-    assert practice_set["coverage"] == ["network security"]
+    assert practice_set["coverage"] == ["二叉树遍历"]
     assert {item["item_kind"] for item in practice_set["items"]} == {
         "concept_quiz_question",
         "code_fill",
     }
+    assert "inorder" in response.text
+    assert "递归" in response.text
+    assert "两数之和" not in response.text
     assert "answer" not in response.text
     assert "judge_secret" not in response.text
 
@@ -129,15 +132,51 @@ def test_requires_traceable_learning_data(client: TestClient) -> None:
 def test_accepts_an_explicit_knowledge_point_without_fabricating_mastery(
     client: TestClient,
 ) -> None:
-    body = _request_body() | {"knowledge_points": ["network security"]}
+    body = _request_body() | {"knowledge_points": ["二叉树遍历"]}
 
     response = client.post("/api/v1/practice/sets/generate-from-learning", json=body)
 
     assert response.status_code == 200
     data = response.json()
-    assert data["selected_knowledge_points"] == ["network security"]
+    assert data["selected_knowledge_points"] == ["二叉树遍历"]
     context = data["practice_set"]["effective_context"]
     assert context["knowledge_points"][0]["mastery"] is None
+
+
+def test_mock_learning_generation_focuses_first_supported_point(
+    client: TestClient,
+) -> None:
+    body = _request_body() | {
+        "kind": "code_practice",
+        "knowledge_points": ["CNN", "ResNet BasicBlock"],
+    }
+
+    response = client.post("/api/v1/practice/sets/generate-from-learning", json=body)
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    practice_set = data["practice_set"]
+    assert data["selected_knowledge_points"] == ["CNN", "ResNet BasicBlock"]
+    assert practice_set["coverage"] == ["CNN"]
+    assert {item["item_kind"] for item in practice_set["items"]} == {"code_fill"}
+    assert all(item["knowledge_points"] == ["CNN"] for item in practice_set["items"])
+    content = json.dumps(practice_set["items"], ensure_ascii=False).casefold()
+    assert "cnn" in content
+    assert "feature map" in content
+    assert "resnet" not in content
+    assert "两数之和" not in content
+
+
+def test_rejects_unsupported_learning_context_in_mock_mode(
+    client: TestClient,
+) -> None:
+    body = _request_body() | {"knowledge_points": ["network security"]}
+
+    response = client.post("/api/v1/practice/sets/generate-from-learning", json=body)
+
+    assert response.status_code == 409
+    assert "不支持" in response.json()["detail"]
+    assert "两数之和" not in response.text
 
 
 def test_returns_explicit_failure_when_real_provider_fails(
