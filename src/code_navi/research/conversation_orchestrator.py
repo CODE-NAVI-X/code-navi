@@ -20,6 +20,7 @@ from .conversation_guidance import (
     ResearchConversationGuidanceService,
     StudyRecommendationsNotConfirmedError,
 )
+from .clarification_options import extract_clarification_options
 from .conversation_guidance_schemas import (
     StudyRecommendationRequest,
 )
@@ -2748,6 +2749,12 @@ class ResearchConversationOrchestrator:
         now_dt = datetime.now(UTC)
         msgs = list(conv.messages_data or [])
 
+        # 结构化澄清契约：把「待答问题 + 建议答案」从正文里提取一次，
+        # 随后同时写进持久化消息与响应，前端只消费结构化字段。
+        # 只对真正生成成功的正文做提取；失败/重试路径在调用本方法之前就已返回，
+        # 因此不会凭空造出候选选项。
+        next_question, suggested_answers = extract_clarification_options(reply_content)
+
         # User message (skipped for backend-initiated turns like the bridge
         # welcome, which must not fabricate a user bubble).
         if include_user_message:
@@ -2768,6 +2775,8 @@ class ResearchConversationOrchestrator:
             "template": template_name,
             "plan_layer": plan_layer,
             "stage_at_time": state_model.current_stage,
+            "next_question": next_question,
+            "suggested_answers": suggested_answers,
             "created_at": now_dt.isoformat(),
         })
         conv.messages_data = msgs
@@ -2785,6 +2794,8 @@ class ResearchConversationOrchestrator:
             sender="assistant",
             content=reply_content,
             passive_tool_called=triggered_tool,
+            next_question=next_question,
+            suggested_answers=suggested_answers,
             created_at=now_dt,
         )
 

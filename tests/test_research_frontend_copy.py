@@ -857,6 +857,39 @@ def test_research_option_selector_parses_and_submits_choices() -> None:
     assert "canConfirmPlan" in conversation_source
 
 
+def test_research_conversation_consumes_structured_clarification_fields() -> None:
+    """结构化澄清契约：前端按 next_question/suggested_answers 渲染，不再依赖正文 A/B/C/D。"""
+    conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
+        encoding="utf-8"
+    )
+    options_source = Path("frontend/lib/research-options.ts").read_text(encoding="utf-8")
+    api_source = Path("frontend/lib/api/research.ts").read_text(encoding="utf-8")
+
+    # 编排器回复类型必须携带结构化字段（SSE / 重试 / 历史恢复共用同一契约）
+    reply_interface = api_source.split("export interface OrchestratorMessageReply", 1)[1].split(
+        "}", 1
+    )[0]
+    assert "next_question" in reply_interface
+    assert "suggested_answers" in reply_interface
+
+    # 纯逻辑集中在 research-options：构造选项组 + 映射消息
+    assert "buildStructuredOptionGroup" in options_source
+    assert "buildAssistantConversationMessage" in options_source
+    # 少于 2 条建议答案不渲染按钮，保持自由输入
+    assert "MIN_SUGGESTED_ANSWERS = 2" in options_source
+
+    # 组件优先使用结构化字段，且三条路径共用同一映射
+    assert "buildStructuredOptionGroup(message)" in conversation_source
+    assert "buildAssistantConversationMessage(response.reply_message)" in conversation_source
+    assert "splitMessageSegments(message.content, structuredGroup)" in conversation_source
+    # UI 层不得再硬编码清空这两个字段：唯一允许出现的是用户消息的乐观占位。
+    assert conversation_source.count("next_question: null") == 1
+    assert conversation_source.count("suggested_answers: []") == 1
+    user_placeholder = conversation_source.split("const tempUserMsg", 1)[1].split("};", 1)[0]
+    assert "next_question: null" in user_placeholder
+    assert "suggested_answers: []" in user_placeholder
+
+
 def test_markdown_renders_bracket_headings_and_stage_subheadings() -> None:
     """【小节标题】整行加粗强调；阶段小标题与 --- 分隔线有独立样式。"""
     markdown_source = Path("frontend/components/research/MarkdownText.tsx").read_text(

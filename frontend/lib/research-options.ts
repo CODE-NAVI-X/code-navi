@@ -185,7 +185,38 @@ export type MessageSegment =
  * 3. 没有原文行的虚拟选项组（如“计划执行确认”）没有可定位的位置，
  *    按其原有合理行为追加到消息末尾。
  */
-export function splitMessageSegments(content: string): MessageSegment[] {
+export function splitMessageSegments(
+  content: string,
+  structured: ParsedOptionGroup | null = null,
+): MessageSegment[] {
+  const base = buildBaseSegments(content);
+  if (!structured) return base;
+
+  // 结构化字段是唯一可靠来源：正文里解析出的文本选项组一律丢弃，
+  // 避免“结构化选项 + 正文 A/B/C/D”同时渲染出两份。
+  const markdownOnly = base.filter(
+    (segment): segment is Extract<MessageSegment, { kind: "markdown" }> =>
+      segment.kind === "markdown" && segment.content.trim().length > 0,
+  );
+
+  // 插到承载该题干的那段正文之后，这样选项正好落在对应问题下方。
+  const question = (structured.title ?? "").trim();
+  let insertAt = markdownOnly.length;
+  if (question) {
+    const found = markdownOnly.findIndex((segment) => segment.content.includes(question));
+    if (found >= 0) insertAt = found + 1;
+  }
+
+  const segments: MessageSegment[] = [...markdownOnly];
+  segments.splice(insertAt, 0, {
+    kind: "options",
+    group: structured,
+    groupIndex: 0,
+  });
+  return segments;
+}
+
+function buildBaseSegments(content: string): MessageSegment[] {
   const groups = parseOptionGroups(content);
   if (groups.length === 0) return [{ kind: "markdown", content }];
 
@@ -229,6 +260,92 @@ export function splitMessageSegments(content: string): MessageSegment[] {
   });
 
   return segments;
+}
+
+/** 建议答案至少要有 2 条才值得渲染成可点选选项；只有 1 条时保持自由输入。 */
+export const MIN_SUGGESTED_ANSWERS = 2;
+
+/** 后端结构化澄清契约：一道待答问题 + 若干条建议答案。 */
+export interface SuggestedAnswersSource {
+  next_question?: string | null;
+  suggested_answers?: readonly string[] | null;
+}
+
+/**
+ * 把结构化的 `next_question` / `suggested_answers` 转成可渲染的选项组。
+ *
+ * 这是**唯一可靠来源**：不再要求模型在正文里恰好写出 A/B/C/D。
+ * 不满足条件时返回 `null`，调用方应保持自由输入，绝不伪造候选。
+ */
+export function buildStructuredOptionGroup(
+  source: SuggestedAnswersSource,
+): ParsedOptionGroup | null {
+  const title = (source.next_question ?? "").trim();
+  if (!title) return null;
+
+  const answers = (source.suggested_answers ?? [])
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (answers.length < MIN_SUGGESTED_ANSWERS) return null;
+
+  return {
+    title,
+    options: answers.map((text, index) => {
+      const key = String.fromCharCode(65 + index);
+      return { key, text, fillValue: `我选 ${key}：${text}` };
+    }),
+    // 结构化选项没有对应的正文行可摘除。
+    lineIndexes: [],
+  };
+}
+
+/** 编排器返回的 assistant 回复（可用字段子集，便于流式/重试/历史复用）。 */
+export interface AssistantReplyLike extends SuggestedAnswersSource {
+  id: string;
+  content: string;
+  created_at: string;
+}
+
+/** 与 `ResearchConversationMessage` 结构兼容的 assistant 消息。 */
+export interface AssistantConversationMessage {
+  message_id: string;
+  role: "assistant";
+  content: string;
+  created_at: string;
+  generation_mode: "agent";
+  run_id: null;
+  event_count: number;
+  intent: null;
+  next_question: string | null;
+  suggested_answers: string[];
+  candidate_questions: string[];
+  recommended_action: null;
+}
+
+/**
+ * 把编排器回复映射成前端消息。
+ *
+ * 实时流式完成、重试完成、历史恢复三条路径共用这一个映射，
+ * 因此 `next_question` / `suggested_answers` 不会被某一层硬编码清空。
+ */
+export function buildAssistantConversationMessage(
+  reply: AssistantReplyLike,
+): AssistantConversationMessage {
+  return {
+    message_id: reply.id,
+    role: "assistant",
+    content: reply.content,
+    created_at: reply.created_at,
+    generation_mode: "agent",
+    run_id: null,
+    event_count: 1,
+    intent: null,
+    next_question: reply.next_question ?? null,
+    suggested_answers: [...(reply.suggested_answers ?? [])],
+    candidate_questions: [],
+    recommended_action: null,
+  };
 }
 
 /** 再次点击同一选项即取消选中。 */

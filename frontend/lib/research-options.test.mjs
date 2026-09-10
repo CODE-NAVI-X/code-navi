@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   buildAnswerMessage,
+  buildAssistantConversationMessage,
+  buildStructuredOptionGroup,
   parseOptionGroups,
   splitMessageSegments,
   toggleOptionKey,
@@ -211,6 +213,151 @@ test("单行字母内容不成组，也不会把正文切碎", () => {
   const single = ["引言", "A. 只有一个孤立的字母条目", "结论"].join("\n");
   assert.deepEqual(parseOptionGroups(single), []);
   assert.deepEqual(splitMessageSegments(single), [{ kind: "markdown", content: single }]);
+});
+
+// ---------------------------------------------------------------------------
+// 结构化字段（next_question / suggested_answers）
+// ---------------------------------------------------------------------------
+
+/** 后端结构化契约：一道待答问题 + 2~4 条建议答案。 */
+const STRUCTURED_REPLY = {
+  content: CNN_REPLY,
+  next_question: QUESTION_1,
+  suggested_answers: EXPLICIT_TEXT.map((line) => line.slice(3)),
+};
+
+test("结构化建议答案 >=2 条时构造出可点选选项组", () => {
+  const group = buildStructuredOptionGroup(STRUCTURED_REPLY);
+
+  assert.notEqual(group, null);
+  assert.deepEqual(
+    group.options.map((option) => option.key),
+    ["A", "B", "C", "D"],
+  );
+  assert.equal(group.title, QUESTION_1);
+  assert.equal(group.options[0].text, EXPLICIT_TEXT[0].slice(3));
+  // 填充文案与既有交互保持一致
+  assert.equal(group.options[0].fillValue, `我选 A：${EXPLICIT_TEXT[0].slice(3)}`);
+});
+
+test("建议答案少于 2 条时不构造选项组，保持自由输入", () => {
+  assert.equal(buildStructuredOptionGroup({ next_question: QUESTION_1 }), null);
+  assert.equal(
+    buildStructuredOptionGroup({ next_question: QUESTION_1, suggested_answers: [] }),
+    null,
+  );
+  assert.equal(
+    buildStructuredOptionGroup({ next_question: QUESTION_1, suggested_answers: ["只有一个"] }),
+    null,
+  );
+  assert.equal(buildStructuredOptionGroup({ suggested_answers: ["a", "b"] }), null);
+});
+
+test("结构化选项优先：与正文 A/B/C/D 同时存在时只渲染一份", () => {
+  const group = buildStructuredOptionGroup(STRUCTURED_REPLY);
+  const segments = splitMessageSegments(CNN_REPLY, group);
+
+  const optionSegments = segments.filter((segment) => segment.kind === "options");
+  assert.equal(optionSegments.length, 1, "只能有一组交互选项");
+
+  // 渲染的是结构化来源，而不是碰巧写在正文里的同款文本
+  assert.deepEqual(optionSegments[0].group, group);
+
+  const markdown = segments
+    .filter((segment) => segment.kind === "markdown")
+    .map((segment) => segment.content)
+    .join("\n\n");
+  for (const line of EXPLICIT_TEXT) {
+    assert.equal(markdown.includes(line), false, `正文不应残留静态选项行：${line}`);
+  }
+});
+
+test("结构化选项插在对应题干之后、问题 2 之前", () => {
+  const group = buildStructuredOptionGroup(STRUCTURED_REPLY);
+  const segments = splitMessageSegments(CNN_REPLY, group);
+
+  assert.deepEqual(
+    segments.map((segment) => segment.kind),
+    ["markdown", "options", "markdown"],
+  );
+  assert.equal(segments[0].content.includes(QUESTION_1), true);
+  assert.equal(segments[0].content.includes(QUESTION_2), false);
+  assert.equal(segments[2].content.includes(QUESTION_2), true);
+  assert.deepEqual(segments[2].group ?? null, null);
+});
+
+test("结构化选项在正文里找不到题干时落在末尾，不丢选项", () => {
+  const group = buildStructuredOptionGroup({
+    next_question: "一个正文里并不存在的题干？",
+    suggested_answers: ["甲方案", "乙方案"],
+  });
+  const segments = splitMessageSegments("我们先随便聊聊别的。", group);
+
+  assert.deepEqual(
+    segments.map((segment) => segment.kind),
+    ["markdown", "options"],
+  );
+  assert.equal(segments[1].group.options.length, 2);
+});
+
+test("普通编号步骤 1./2. 不会被当成文本选项", () => {
+  const numberedPlan = [
+    "下面是我建议的推进路径：",
+    "1. 先确认研究问题与评价指标",
+    "2. 再挑选一篇可复现的基线论文",
+    "3. 最后在本地跑通最小实验",
+  ].join("\n");
+
+  assert.deepEqual(parseOptionGroups(numberedPlan), []);
+  assert.deepEqual(splitMessageSegments(numberedPlan), [
+    { kind: "markdown", content: numberedPlan },
+  ]);
+});
+
+test("实时流式完成的回复映射不会把结构化字段清成 null / []", () => {
+  const message = buildAssistantConversationMessage({
+    id: "assistant-1",
+    content: CNN_REPLY,
+    created_at: "2026-09-10T00:00:00Z",
+    next_question: QUESTION_1,
+    suggested_answers: EXPLICIT_TEXT.map((line) => line.slice(3)),
+  });
+
+  assert.equal(message.message_id, "assistant-1");
+  assert.equal(message.role, "assistant");
+  assert.equal(message.next_question, QUESTION_1);
+  assert.deepEqual(message.suggested_answers, EXPLICIT_TEXT.map((line) => line.slice(3)));
+});
+
+test("缺少结构化字段时映射成空值而不是抛错（历史兼容降级）", () => {
+  const message = buildAssistantConversationMessage({
+    id: "assistant-legacy",
+    content: "我们先聊聊你的研究兴趣。",
+    created_at: "2026-09-10T00:00:00Z",
+  });
+
+  assert.equal(message.next_question, null);
+  assert.deepEqual(message.suggested_answers, []);
+  // 没有结构化字段时仍可回退到正文解析
+  assert.equal(buildStructuredOptionGroup(message), null);
+});
+
+test("历史会话消息带结构化字段时，仍能重建出可点选选项", () => {
+  // 重新加载历史会话：GET 返回的消息已经带上了持久化的结构化字段
+  const restored = buildAssistantConversationMessage({
+    id: "assistant-restored",
+    content: CNN_REPLY,
+    created_at: "2026-09-10T00:00:00Z",
+    next_question: QUESTION_1,
+    suggested_answers: ["应用层：做具体任务", "方法层：改进结构"],
+  });
+
+  const group = buildStructuredOptionGroup(restored);
+  assert.notEqual(group, null);
+  assert.deepEqual(
+    group.options.map((option) => option.text),
+    ["应用层：做具体任务", "方法层：改进结构"],
+  );
 });
 
 test("点击选项复用既有填充文案：自动填入输入框并带上补充说明", () => {

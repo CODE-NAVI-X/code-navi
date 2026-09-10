@@ -41,7 +41,12 @@ import {
   streamOrchestratorMessage,
 } from "@/lib/api/research";
 
-import { splitMessageSegments, type MessageSegment } from "@/lib/research-options";
+import {
+  buildAssistantConversationMessage,
+  buildStructuredOptionGroup,
+  splitMessageSegments,
+  type MessageSegment,
+} from "@/lib/research-options";
 import { MarkdownText } from "./MarkdownText";
 import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
@@ -222,20 +227,9 @@ export function ResearchConversation() {
         },
         onCompleted: (response: OrchestratorMessageResponse) => {
           if (response.reply_message) {
-            const assistantMsg: ResearchConversationMessage = {
-              message_id: response.reply_message.id,
-              role: "assistant",
-              content: response.reply_message.content,
-              created_at: response.reply_message.created_at,
-              generation_mode: "agent",
-              run_id: null,
-              event_count: 1,
-              intent: null,
-              next_question: null,
-              suggested_answers: [],
-              candidate_questions: [],
-              recommended_action: null,
-            };
+            // 结构化澄清字段必须原样透传，不能在 UI 层硬编码清空。
+            const assistantMsg: ResearchConversationMessage =
+              buildAssistantConversationMessage(response.reply_message);
             setConversation((prev) =>
               prev ? { ...prev, messages: [...prev.messages, assistantMsg] } : prev,
             );
@@ -283,20 +277,10 @@ export function ResearchConversation() {
     try {
       const response = await retryLastOrchestratorMessage(conversation.conversation_id);
       if (response.status === "completed" && response.reply_message) {
-        const assistantMsg: ResearchConversationMessage = {
-          message_id: response.reply_message.id,
-          role: "assistant",
-          content: response.reply_message.content,
-          created_at: response.reply_message.created_at,
-          generation_mode: "agent",
-          run_id: null,
-          event_count: 1,
-          intent: null,
-          next_question: null,
-          suggested_answers: [],
-          candidate_questions: [],
-          recommended_action: null,
-        };
+        // 重试完成同样走同一个映射，结构化字段不会丢。
+        const assistantMsg: ResearchConversationMessage = buildAssistantConversationMessage(
+          response.reply_message,
+        );
         setConversation((prev) =>
           prev ? { ...prev, messages: [...prev.messages, assistantMsg] } : prev,
         );
@@ -524,10 +508,15 @@ export function ResearchConversation() {
           {conversation.messages.map((message) => {
             const isUser = message.role === "user";
             const showOptionGroup = !isUser && message.message_id === optionGroupMessageId;
+            // 结构化字段优先：只有 suggested_answers ≥2 条时才构造选项组；
+            // 否则返回 null，回退到正文解析（历史兼容），再不行就保持自由输入。
+            const structuredGroup = showOptionGroup
+              ? buildStructuredOptionGroup(message)
+              : null;
             // 按原文顺序切成“正文 -> 选项组 -> 正文”的片段，让交互选项贴在对应题干下方，
             // 而不是被挂到整条消息末尾。
             const segments: MessageSegment[] = showOptionGroup
-              ? splitMessageSegments(message.content)
+              ? splitMessageSegments(message.content, structuredGroup)
               : [{ kind: "markdown", content: message.content }];
 
             return (

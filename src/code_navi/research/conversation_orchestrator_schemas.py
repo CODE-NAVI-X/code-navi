@@ -198,6 +198,10 @@ class OrchestratorMessageReply(BaseModel):
     content: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     passive_tool_called: str | None = None
+    # 结构化澄清契约：前端据此渲染可点击选项，不再依赖正文里写成 A/B/C/D。
+    # 没有可靠建议时 next_question 可为空/仅问题、suggested_answers 为空列表。
+    next_question: str | None = None
+    suggested_answers: list[str] = Field(default_factory=list)
 
 
 class OrchestratorMessageResponse(BaseModel):
