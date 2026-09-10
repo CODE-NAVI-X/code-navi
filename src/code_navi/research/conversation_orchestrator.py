@@ -469,6 +469,93 @@ def _has_search_request_words(message: str) -> bool:
     return any(word in message for word in _SEARCH_REQUEST_WORDS)
 
 
+# ---------------------------------------------------------------------------
+# 「明确检索动作」判定
+#
+# 背景：原有判定依赖**连续子串**（如「执行检索」「开始检索」），而真实措辞里
+# 动作词与「检索」之间常夹着修饰词——「请基于已确认主题重新**执行更严格的**检索」。
+# 于是用户的明确重新检索意图被判为「不是检索动作」，后端只做了口头回复，
+# 既不触发检索也不落新的 evidence bundle。
+#
+# 判定刻意保持最小且可审计：先按标点分句，只对**自身提到检索/搜索**的分句判断，
+# 并要求「发起动作」而非「讨论检索」。既不使用无限制模糊匹配，也不退化成
+# 「包含检索二字就触发」。
+# ---------------------------------------------------------------------------
+
+_SEARCH_CLAUSE_SPLIT = re.compile(r"[，。；！？,;?!\n]+")
+
+# 明确的发起动作：重做类 / 动作动词类 / 换词类。
+# 动作词与「检索/搜索」之间只允许一个有限的修饰词窗口（≤12 字，不跨标点），
+# 以覆盖「重新执行更严格的检索」而不吞掉整句话。
+_SEARCH_ACTION_PATTERNS = (
+    r"(?:重新|再次|再|又)[^，。；！？\n]{0,12}(?:检索|搜索)",
+    r"(?:执行|进行|启动|发起|开始|开展|运行|重做|跑)[^，。；！？\n]{0,10}(?:检索|搜索)",
+    r"(?:换|更换|替换|改用)[^，。；！？\n]{0,12}(?:检索|搜索)",
+)
+
+# 非动作语气：询问/解释检索本身、回顾既有检索结果、把检索留到以后、明确暂缓。
+# 命中这些的分句即使含「检索/搜索」也不构成发起检索。
+_SEARCH_NON_ACTION_PATTERNS = (
+    r"(?:什么|啥)(?:是|叫)[^，。；！？\n]{0,6}(?:检索|搜索)",
+    r"(?:检索|搜索)[^，。；！？\n]{0,6}(?:是什么意思|是啥意思|的意思|的含义|是什么)",
+    r"(?:介绍|讲解|解释|说明|科普|聊聊|谈谈|讨论|讲讲|说说|了解)"
+    r"[^，。；！？\n]{0,6}(?:检索|搜索)",
+    r"(?:检索|搜索)[^，。；！？\n]{0,4}(?:流程|原理|机制|步骤|方法|方式|做法)",
+    r"(?:怎么|如何|怎样)[^，。；！？\n]{0,6}(?:检索|搜索)",
+    r"(?:总结|汇总|整理|梳理|回顾|复述|评价|点评|分析|阅读|查看|看看)"
+    r"[^，。；！？\n]{0,10}(?:检索|搜索)",
+    r"(?:检索|搜索)[^，。；！？\n]{0,6}结果[^，。；！？\n]{0,6}"
+    r"(?:总结|汇总|整理|梳理|回顾|分析)",
+    r"(?:以后|将来|未来|之后|回头|到时候|下次|有空)"
+    r"[^，。；！？\n]{0,10}(?:可以|能|会|要|想|打算|考虑|再|先)",
+    r"(?:暂时|先)[^，。；！？\n]{0,6}(?:不|别|无需|不用|不要)"
+    r"[^，。；！？\n]{0,6}(?:检索|搜索)",
+)
+
+
+def _search_clauses(message: str) -> list[str]:
+    """按标点切分，只保留自身提到「检索/搜索」的分句。"""
+    return [
+        clause
+        for clause in _SEARCH_CLAUSE_SPLIT.split(message)
+        if "检索" in clause or "搜索" in clause
+    ]
+
+
+def _is_non_action_search_clause(clause: str) -> bool:
+    """该分句是否只是在「讨论检索本身」而不是发起检索。"""
+    return any(
+        re.search(pattern, clause) for pattern in _SEARCH_NON_ACTION_PATTERNS
+    )
+
+
+def _detect_explicit_search_action(message: str) -> bool:
+    """用户是否以明确的动作语气要求（重新/再次/换词）发起检索。
+
+    只认「发起检索」的动作语气；讨论检索本身、回顾既有结果、把检索推到以后
+    都不算。按标点分句后再判断，避免跨句互相污染。
+    """
+    for clause in _search_clauses(message):
+        if _is_non_action_search_clause(clause):
+            continue
+        if any(re.search(pattern, clause) for pattern in _SEARCH_ACTION_PATTERNS):
+            return True
+    return False
+
+
+def _is_non_action_search_talk(message: str) -> bool:
+    """整条消息只在讨论检索本身（而非发起检索）时返回 True。
+
+    用于抑制既有触发路径的误判，例如「我们以后可以做论文检索」会命中
+    确认语气（「可以」）而错误触发正式检索。
+    """
+    clauses = _search_clauses(message)
+    return bool(clauses) and all(
+        _is_non_action_search_clause(clause) for clause in clauses
+    )
+
+
+
 def _extract_search_query(message: str) -> str | None:
     """Deterministically strip trigger words, keeping the user's own terms."""
     query = message.strip()
@@ -1692,15 +1779,23 @@ class ResearchConversationOrchestrator:
                 or _is_search_guidance_followup(conv_msgs)
             )
         )
+        # 明确的重新/再次/换词检索动作：动作词与「检索」之间允许修饰词，
+        # 例如「请基于已确认主题重新执行更严格的检索」。
+        is_explicit_search_action = _detect_explicit_search_action(user_message)
+        # 整条消息只在讨论检索本身（询问/解释/回顾/以后再说）时不触发检索，
+        # 即使命中了确认语气或上述动作词。
+        is_search_talk_only = _is_non_action_search_talk(user_message)
         in_execution_or_plan = state_model.current_stage in (
             "research_execution", "research_plan"
         )
         should_run_search = (
             not is_asking_for_search_keywords
+            and not is_search_talk_only
             and (
                 is_query_status_inquiry
                 or is_search_confirm
                 or is_direct_search_action
+                or is_explicit_search_action
             )
         )
 
@@ -1721,15 +1816,20 @@ class ResearchConversationOrchestrator:
                 existing_bundles = self.search_service.list_bundles(conversation_id, db)
             else:
                 existing_bundles = getattr(self.search_service, "saved_bundles", [])
-            latest_with_papers = next(
-                (b for b in reversed(existing_bundles) if b.papers), None
-            )
+            # list_bundles 按 created_at.desc() 返回：下标 0 就是最新一次检索。
+            # 询问既有结果时以最新 bundle 为准，不回退到更早的、可能无关的论文
+            # （与前端 c3761b8 的「最新空 bundle 优先」保持一致）。
+            latest_bundle = existing_bundles[0] if existing_bundles else None
 
-            if is_query_status_inquiry and latest_with_papers is not None:
-                source_note = "、".join(latest_with_papers.queried_sources) or "允许来源"
-                searched_day = latest_with_papers.searched_at.date().isoformat()
+            if (
+                is_query_status_inquiry
+                and latest_bundle is not None
+                and latest_bundle.papers
+            ):
+                source_note = "、".join(latest_bundle.queried_sources) or "允许来源"
+                searched_day = latest_bundle.searched_at.date().isoformat()
                 cand_items = []
-                for index, paper in enumerate(latest_with_papers.papers[:5], start=1):
+                for index, paper in enumerate(latest_bundle.papers[:5], start=1):
                     item = (
                         f"{index}. **《{paper.title}》**\n"
                         f"   - 来源：{paper.source_name} · {paper.year or '年份未标注'}\n"
@@ -1739,7 +1839,7 @@ class ResearchConversationOrchestrator:
                         item += f"\n   - 摘要摘录：{paper.abstract_excerpt[:180]}..."
                     cand_items.append(item)
                 candidate_lines = "\n\n".join(cand_items)
-                q_text = latest_with_papers.query
+                q_text = latest_bundle.query
                 reply_content = (
                     f"(＾▽＾) 检索结果已就绪！为你找到以下真实论文候选"
                     f"（检索词：`{q_text}`；来源：{source_note}；检索时间：{searched_day}）：\n\n"
@@ -1748,6 +1848,20 @@ class ResearchConversationOrchestrator:
                     f"💡 **下一步**：\n"
                     f"上方已同步加载【检索候选论文卡片】。你可以直接点击卡片上的「请姜姜精读介绍这篇」，"
                     f"或者回复序号告诉姜姜，我们立即进入论文精读与复现设计！"
+                )
+            elif is_query_status_inquiry and latest_bundle is not None:
+                # 最新一次检索就是空结果：如实说明空态，不用更早的论文补位。
+                failure_note = ""
+                if latest_bundle.failure_reasons:
+                    failure_note = "；失败原因：" + "、".join(
+                        latest_bundle.failure_reasons
+                    )
+                reply_content = (
+                    f"(｡･ω･｡) 最近一次检索（检索词：`{latest_bundle.query}`；"
+                    f"检索时间：{latest_bundle.searched_at.date().isoformat()}）"
+                    f"没有返回合适的论文{failure_note}。\n\n"
+                    "姜姜不会拿更早的检索结果或无关论文来补位。"
+                    "我们可以换一组检索词重新检索，或者返回方向探索。"
                 )
             else:
                 query = _resolve_academic_search_query(user_message, conv, state_model, conv_msgs)

@@ -1915,3 +1915,391 @@ def test_search_request_in_research_plan_advances_stage(db_session) -> None:
     assert PAPER_TITLE in resp.reply_message.content
 
 
+# ---------------- P3-A2: 明确的「重新/再次/换词」检索动作必须真正触发检索 ----------------
+#
+# 浏览器事实：用户在研究开展阶段明确要求
+#   「请基于已确认主题重新执行更严格的检索：CIFAR-10、ResNet、…」
+# 后端却没有触发检索，assistant 只做了口头回复（triggered_tool=None），
+# 也没有落任何新的 evidence bundle，页面于是继续显示上一轮的无关论文。
+#
+# 原有判定依赖**连续子串**「执行检索」，而真实措辞里动作词与「检索」之间
+# 夹着修饰词（「重新**执行更严格的**检索」），因此漏判。
+#
+# 本节的语义边界（必须同时满足才算明确检索动作）：
+#   1. 用户消息里有明确的检索动作意图（动作词 + 检索/搜索）；
+#   2. 该意图落在「重新/再次/换关键词/执行」这类**发起动作**上；
+#   3. 阶段前置条件（研究画像与计划已就绪）仍然生效，不得被绕过；
+#   4. 讨论/解释/回顾检索本身，不构成检索动作。
+
+RERUN_SEARCH_MESSAGE = (
+    "请基于已确认主题重新执行更严格的检索：CIFAR-10、ResNet、data augmentation、"
+    "SHAP、feature attribution stability、explanation consistency、random seeds。"
+)
+
+# 第一轮检索留下的无关论文（浏览器证据里的真实标题类型）。
+OLD_SEARCH_PAPER_TITLE = "Exoplanet atmospheric retrieval with JWST transit spectra"
+
+
+class RecordingSearchService:
+    """像真实检索服务一样：每次 search 都新增一条 bundle，读取按时间倒序返回。"""
+
+    def __init__(
+        self,
+        next_bundles: list[ConversationEvidenceBundle] | None = None,
+        saved_bundles: list[ConversationEvidenceBundle] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.next_bundles = list(next_bundles or [])
+        self.saved_bundles = list(saved_bundles or [])
+        self.error = error
+        self.calls: list[str] = []
+
+    def search(self, conversation_id, request, db):
+        self.calls.append(request.query or "")
+        if self.error is not None:
+            raise self.error
+        if not self.next_bundles:
+            raise AssertionError("unexpected extra search call")
+        bundle = self.next_bundles.pop(0)
+        # 真实服务每次都 INSERT 一条新记录；这里插入最前，模拟 created_at.desc()。
+        self.saved_bundles.insert(0, bundle)
+        return bundle
+
+    def list_bundles(self, conversation_id, db):
+        return list(self.saved_bundles)
+
+
+def _bundle(
+    conv_id: str, papers: list, query: str = "CIFAR-10 ResNet SHAP"
+) -> ConversationEvidenceBundle:
+    """按给定论文构造一个 evidence bundle；papers 为空即「空结果」bundle。"""
+    return ConversationEvidenceBundle(
+        bundle_id=f"bundle-{conv_id}-{len(papers)}",
+        conversation_id=conv_id,
+        query=query,
+        requested_sources=["arxiv"],
+        allowed_sources=["arxiv"],
+        queried_sources=["arxiv"],
+        source_statuses=[
+            AcademicSourceStatus(
+                source="arxiv",
+                status="success" if papers else "no_results",
+                accessed_at=datetime.now(UTC),
+            ),
+        ],
+        searched_at=datetime.now(UTC),
+        papers=papers,
+        source_links=[None for _ in papers],
+        failure_reasons=[],
+        provenance_note="metadata and abstract only",
+    )
+
+
+def _make_search_conversation(
+    db, conv_id: str, *, stage: str = "research_execution", messages=None
+) -> None:
+    db.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "CIFAR-10 特征归因稳定性"},
+            messages_data=list(messages or []),
+        )
+    )
+    if stage == "research_execution":
+        _make_execution_state(db, conv_id)
+    else:
+        db.add(
+            ResearchOrchestratorStateModel(
+                conversation_id=conv_id,
+                current_stage=stage,
+                completed_stages=["research_need"],
+                subtasks={"need_defined": True, "profile_ready": False},
+                direction_history=[],
+                plan_history=[],
+            )
+        )
+        db.commit()
+
+
+def _orchestrator(search_service) -> ResearchConversationOrchestrator:
+    return ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+
+
+def test_rerun_search_with_modifiers_between_verb_and_noun_runs_real_search(
+    db_session,
+) -> None:
+    """1. 「重新执行更严格的检索」中间夹修饰词，仍必须被识别为明确检索动作。"""
+    conv_id = "conv-rerun-1"
+    paper = _real_paper(PAPER_TITLE, PAPER_URL)
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [paper])]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message=RERUN_SEARCH_MESSAGE), db_session
+    )
+    assert len(search_service.calls) == 1
+    # 检索词沿用用户这次给出的严格主题词。
+    assert "CIFAR-10" in search_service.calls[0]
+    assert "ResNet" in search_service.calls[0]
+    # 进入既有检索链路：回复候选、模板为 search_results。
+    assert PAPER_TITLE in resp.reply_message.content
+    assert _last_message_template(db_session, conv_id) == "search_results"
+    # 候选不等于已选论文：仍需用户确认。
+    papers = _orchestrator(search_service).get_papers(conv_id, db_session)
+    assert papers.current_paper is None
+    assert resp.state.subtasks.paper_selected is False
+
+
+def test_rerun_search_on_confirmed_topic_runs_real_search(db_session) -> None:
+    """2. 「请基于已确认主题重新检索」必须被识别为明确检索动作。"""
+    conv_id = "conv-rerun-2"
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)])]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="请基于已确认主题重新检索"),
+        db_session,
+    )
+    assert len(search_service.calls) == 1
+    assert _last_message_template(db_session, conv_id) == "search_results"
+
+
+def test_switch_keywords_and_search_again_runs_real_search(db_session) -> None:
+    """3. 「换关键词再搜索一次」必须被识别为明确检索动作。"""
+    conv_id = "conv-rerun-3"
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)])]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(
+            message="换一组关键词再搜索一次：CIFAR-10 ResNet SHAP"
+        ),
+        db_session,
+    )
+    assert len(search_service.calls) == 1
+    assert _last_message_template(db_session, conv_id) == "search_results"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "论文检索是什么意思？",
+        "请介绍检索流程",
+        "你是怎么检索的？",
+        "我们以后可以做论文检索",
+        "请总结刚才的检索结果",
+        "我还在考虑研究方向，先不检索",
+    ],
+)
+def test_search_meta_or_future_discussion_does_not_run_search(
+    db_session, message: str
+) -> None:
+    """4/5/6. 讨论检索本身、回顾检索结果、把检索留到以后，都不得触发检索。"""
+    conv_id = "conv-rerun-meta"
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)])]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message=message), db_session
+    )
+    assert search_service.calls == []
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_assistant_mentioning_search_does_not_trigger_a_user_action(
+    db_session,
+) -> None:
+    """6. assistant 正文提到「下一步可以检索」不构成用户的检索动作。"""
+    conv_id = "conv-rerun-assistant"
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)])]
+    )
+    _make_search_conversation(
+        db_session,
+        conv_id,
+        messages=[
+            {
+                "role": "assistant",
+                "content": "下一步可以检索相关英文论文，也可以先打磨研究设计。",
+                "template": "general_reply",
+            }
+        ],
+    )
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="我明白了，我们先讨论研究设计"),
+        db_session,
+    )
+    assert search_service.calls == []
+    assert resp.state.current_stage == "research_execution"
+
+
+def test_rerun_search_message_cannot_bypass_stage_precondition(db_session) -> None:
+    """7. 画像/阶段前置条件不满足时，明确检索动作也不能绕过门控。"""
+    conv_id = "conv-rerun-gated"
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)])]
+    )
+    _make_search_conversation(db_session, conv_id, stage="research_need")
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message=RERUN_SEARCH_MESSAGE), db_session
+    )
+    assert search_service.calls == []
+    assert resp.state.current_stage == "research_need"
+
+
+def test_explicit_search_action_calls_search_exactly_once(db_session) -> None:
+    """9. 明确检索动作只触发一次，不重复调用检索工具。"""
+    conv_id = "conv-rerun-once"
+    search_service = RecordingSearchService(
+        next_bundles=[
+            _bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)]),
+            _bundle(conv_id, [_real_paper(PAPER_TITLE, PAPER_URL)]),
+        ]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message=RERUN_SEARCH_MESSAGE), db_session
+    )
+    assert len(search_service.calls) == 1
+    # 只落了本次检索这一条 bundle。
+    assert len(search_service.saved_bundles) == 1
+
+
+def test_empty_rerun_search_persists_new_empty_bundle_and_hides_old_papers(
+    db_session,
+) -> None:
+    """10/11/13. 重新检索返回空结果：落新的空 bundle，且不得用旧 bundle 补位。"""
+    conv_id = "conv-rerun-empty"
+    old_bundle = _bundle(
+        conv_id,
+        [_real_paper(OLD_SEARCH_PAPER_TITLE, "https://example.org/old-paper")],
+        query="exoplanet",
+    )
+    search_service = RecordingSearchService(
+        # 第一次：中文查询落空；第二次：英文兜底查询同样落空。
+        next_bundles=[_bundle(conv_id, [], query="CIFAR-10 ResNet SHAP"), _bundle(conv_id, [], query="CIFAR-10 ResNet SHAP")],
+        saved_bundles=[old_bundle],
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message=RERUN_SEARCH_MESSAGE), db_session
+    )
+    assert len(search_service.calls) >= 1
+    # 最新 bundle 必须是这次检索产生的空结果。
+    bundles = search_service.list_bundles(conv_id, db_session)
+    assert bundles[0].papers == []
+    assert bundles[0].query == "CIFAR-10 ResNet SHAP"
+    assert any(char in "CIFAR-10" for char in bundles[0].query[:8])
+    # 空态显式说明，且不得出现上一轮的无关论文。
+    assert "没有检索到" in resp.reply_message.content
+    assert OLD_SEARCH_PAPER_TITLE not in resp.reply_message.content
+    assert _last_message_template(db_session, conv_id) == "search_results"
+
+
+def test_empty_search_result_keeps_query_sources_and_provenance(db_session) -> None:
+    """12. 空结果仍然落新 bundle，并保留原始查询、来源状态、失败原因与 provenance。"""
+    conv_id = "conv-rerun-empty-bundle"
+
+    class EmptyArxivSource:
+        """真实检索链路里的确定性空来源。"""
+
+        def search(self, query: str) -> AcademicSourceResult:
+            return AcademicSourceResult.success("arxiv", [])
+
+    from code_navi.research.conversation_search_service import (
+        ResearchConversationSearchService,
+    )
+
+    search_service = ResearchConversationSearchService(
+        search_tool=AcademicSearchTool({"arxiv": EmptyArxivSource()})
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    bundle = search_service.search(
+        conv_id,
+        CreateConversationEvidenceBundleRequest(query="CIFAR-10 ResNet SHAP stability"),
+        db_session,
+    )
+    assert bundle.query == "CIFAR-10 ResNet SHAP stability"
+    assert bundle.papers == []
+    assert bundle.queried_sources == ["arxiv"]
+    assert "no_results" in [status.status for status in bundle.source_statuses]
+    assert "arxiv" in [status.source for status in bundle.source_statuses]
+    assert isinstance(bundle.failure_reasons, list)
+    assert bundle.provenance_note
+    # 空结果也必须持久化，供前端「最新 bundle 优先」读取。
+    persisted = search_service.list_bundles(conv_id, db_session)
+    assert len(persisted) == 1
+    assert persisted[0].papers == []
+    assert persisted[0].query == "CIFAR-10 ResNet SHAP stability"
+
+
+def test_query_status_after_empty_search_does_not_reuse_older_bundle(
+    db_session,
+) -> None:
+    """13. 追问结果时，最新一次是空结果就如实说空，不得回退到更早的论文。"""
+    conv_id = "conv-rerun-status-empty"
+    old_bundle = _bundle(
+        conv_id,
+        [_real_paper(OLD_SEARCH_PAPER_TITLE, "https://example.org/old-paper")],
+        query="exoplanet",
+    )
+    empty_bundle = _bundle(conv_id, [], query="CIFAR-10 ResNet SHAP")
+    # list_bundles 按 created_at.desc()：最新（空）在前，旧的无关论文在后。
+    search_service = RecordingSearchService(
+        saved_bundles=[empty_bundle, old_bundle]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message="告知我结果"), db_session
+    )
+    assert search_service.calls == []  # 只是追问，不重复触发检索
+    assert OLD_SEARCH_PAPER_TITLE not in resp.reply_message.content
+    assert "CIFAR-10 ResNet SHAP" in resp.reply_message.content
+    assert "没有返回合适的论文" in resp.reply_message.content
+
+
+def test_failed_rerun_search_does_not_fabricate_success_or_reuse_old_papers(
+    db_session,
+) -> None:
+    """14. 检索源失败：显式失败、不落新 bundle、不伪造成功、不复用旧论文。"""
+    conv_id = "conv-rerun-failed"
+    old_bundle = _bundle(
+        conv_id,
+        [_real_paper(OLD_SEARCH_PAPER_TITLE, "https://example.org/old-paper")],
+        query="exoplanet",
+    )
+    search_service = RecordingSearchService(
+        error=RuntimeError("all sources timed out"), saved_bundles=[old_bundle]
+    )
+    _make_search_conversation(db_session, conv_id)
+
+    resp = _orchestrator(search_service).process_message(
+        conv_id, SendOrchestratorMessageRequest(message=RERUN_SEARCH_MESSAGE), db_session
+    )
+    assert len(search_service.calls) == 1
+    assert "未成功" in resp.reply_message.content or "失败" in resp.reply_message.content
+    assert OLD_SEARCH_PAPER_TITLE not in resp.reply_message.content
+    # 没有落任何新 bundle（bundle 数不变），也没有伪造检索成功。
+    assert search_service.saved_bundles == [old_bundle]
+    assert _last_message_template(db_session, conv_id) == "search_results"
+
+
