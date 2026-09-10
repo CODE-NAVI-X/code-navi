@@ -50,6 +50,7 @@ import {
 import { getLocalProfileId } from "@/lib/api/workspaces";
 import {
   gradePracticeCodeFill,
+  fetchPracticeSet,
   generatePracticeSetFromLearning,
   generatePracticeSetWithContext,
   type PracticeCodeFillPayload,
@@ -509,6 +510,7 @@ function PracticeContent() {
     urlKnowledgeId ?? payload?.masteredKnowledgePoint.id ?? persistedPayload?.masteredKnowledgePoint.id;
   const workspaceId = searchParams.get("workspace_id") ?? undefined;
   const taskId = searchParams.get("task_id") ?? undefined;
+  const restoredSetId = searchParams.get("set_id");
   const sessionId = searchParams.get("session_id") ?? payload?.sessionId ?? persistedPayload?.sessionId ?? undefined;
   const practiceFocus = useMemo(
     () => buildPracticeFocus(knowledgeId, knowledgeName),
@@ -551,6 +553,12 @@ function PracticeContent() {
       : { status: "idle", message: "" },
   );
   const [directStructureSet, setDirectStructureSet] = useState<ContextStructureSet | null>(null);
+  const [restoredStructureSet, setRestoredStructureSet] = useState<ContextStructureSet | null>(null);
+  const [restoredSetState, setRestoredSetState] = useState<DirectStructureState>(() =>
+    restoredSetId
+      ? { status: "loading", message: "正在恢复已生成的练习。" }
+      : { status: "idle", message: "" },
+  );
   const [activeStructureExercise, setActiveStructureExercise] =
     useState<CompilerStructureExercise | null>(null);
   const [directEntryDismissed, setDirectEntryDismissed] = useState(false);
@@ -812,6 +820,51 @@ function PracticeContent() {
     };
   }, [directEntryKey, directPracticeContext, learnerId]);
 
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setRestoredStructureSet(null);
+      setRestoredSetState(
+        restoredSetId
+          ? { status: "loading", message: "正在恢复已生成的练习。" }
+          : { status: "idle", message: "" },
+      );
+    });
+    if (!restoredSetId) {
+      return () => {
+        active = false;
+      };
+    }
+
+    void fetchPracticeSet(restoredSetId)
+      .then((response) => {
+        if (!active) return;
+        const items = response.items
+          .map(gatewayItemToContextStructureItem)
+          .filter((item): item is ContextStructureItem => item !== null);
+        if (!items.length) {
+          setRestoredSetState({
+            status: "empty",
+            message: "该练习集不包含可打开的代码挖空题。",
+          });
+          return;
+        }
+        setRestoredStructureSet({ response, items });
+        setRestoredSetState({ status: "ready", message: "已恢复生成的练习。" });
+      })
+      .catch((reason: unknown) => {
+        if (!active) return;
+        setRestoredSetState({
+          status: "error",
+          message: reason instanceof Error ? reason.message : "无法恢复已生成的练习。",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [restoredSetId]);
+
   const exercises = useMemo(
     () => {
       const codeExercises =
@@ -972,9 +1025,32 @@ function PracticeContent() {
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? `learning-set-${crypto.randomUUID()}`
             : `learning-set-${Date.now()}`;
+        const generatedStructureItems = learningResponse.practice_set.items
+          .map(gatewayItemToContextStructureItem)
+          .filter((item): item is ContextStructureItem => item !== null);
         const generated = learningResponse.practice_set.items
           .map((item) => gatewayItemToExercise(item, batchId))
           .filter((exercise): exercise is PracticeExercise => exercise !== null);
+        if (generated.length === 0 && generatedStructureItems.length > 0) {
+          setDirectStructureSet({
+            response: learningResponse.practice_set,
+            items: generatedStructureItems,
+          });
+          setActiveStructureExercise(null);
+          setDirectStructureState({
+            status: "ready",
+            message: `已按学习数据生成 ${generatedStructureItems.length} 道代码挖空练习；题目绑定：${
+              learningResponse.practice_set.coverage.join("、") || "当前知识点"
+            }。`,
+          });
+          setSetMessage(
+            `已按学习数据生成 ${generatedStructureItems.length} 道代码挖空题（Mock 闭环）；覆盖：${
+              learningResponse.practice_set.coverage.join("、") || "当前知识点"
+            }。`,
+          );
+          setView("structure");
+          return;
+        }
         if (generated.length === 0) {
           setSetMessage("学习数据题集未包含可执行编程题，请改用学习目标生成。");
           return;
@@ -1029,11 +1105,6 @@ function PracticeContent() {
           message: "学习上下文练习未返回可用题目，未显示无关的静态题目。",
         });
         setSetMessage("学习上下文练习未返回可用题目，请配置 AI Provider 后重试。");
-        return;
-        setDirectStructureState({
-          status: "empty",
-          message: "上下文练习集未返回可练结构题，结构练习目录也为空。",
-        });
         return;
       }
       const response = await generateProblemSet({
@@ -1369,6 +1440,36 @@ function PracticeContent() {
     hasDirectContext: directPracticeContext !== null,
     directEntryDismissed,
   });
+  const restoredSetForUrl =
+    restoredSetId && restoredStructureSet?.response.set_id === restoredSetId
+      ? restoredStructureSet
+      : null;
+  const restoringDifferentSet =
+    restoredSetId !== null &&
+    restoredStructureSet !== null &&
+    restoredStructureSet.response.set_id !== restoredSetId;
+
+  if (restoredSetId) {
+    if (restoredSetForUrl) {
+      return (
+        <ContextStructureWorkspace
+          structureSet={restoredSetForUrl}
+          profileId={learnerId}
+          onBack={() => router.replace("/learning/practice")}
+        />
+      );
+    }
+    return (
+      <StructurePracticeState
+        state={
+          restoringDifferentSet
+            ? { status: "loading", message: "正在恢复已生成的练习。" }
+            : restoredSetState
+        }
+        onBack={() => router.replace("/learning/practice")}
+      />
+    );
+  }
 
   if (isDirectStructureView) {
     if (directStructureSet) {

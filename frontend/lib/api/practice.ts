@@ -198,6 +198,13 @@ export async function generatePracticeSetWithContext(payload: {
   });
 }
 
+/** Restore an archived practice set before opening one of its exercises. */
+export async function fetchPracticeSet(setId: string): Promise<PracticeGatewaySetResponse> {
+  return request<PracticeGatewaySetResponse>(
+    `/api/v1/practice/sets/${encodeURIComponent(setId)}`,
+  );
+}
+
 export async function gradePracticeCodeFill(payload: {
   setId: string;
   itemId: string;
@@ -282,8 +289,8 @@ export async function generatePracticeSetFromLearning(payload: {
       body: JSON.stringify({
         local_profile_id: payload.localProfileId,
         profile_id: payload.profileId,
-        // The current workspace can execute and submit coding_problem items.
-        // Other archived kinds retain their server-side judging contracts.
+        // The server keeps the code_practice contract; contextual Mock sets use
+        // code_fill so the student flow can grade through the practice gateway.
         kind: "code_practice",
         count: Math.max(3, Math.min(8, payload.count ?? 5)),
         difficulty: payload.difficulty ?? "medium",

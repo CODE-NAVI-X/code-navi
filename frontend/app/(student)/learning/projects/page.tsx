@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -96,17 +96,30 @@ function toBase64(file: File): Promise<string> {
   });
 }
 
-function SymbolList({ symbols }: { symbols: CodeProjectSymbol[] }) {
+function SymbolList({
+  symbols,
+  onSelect,
+}: {
+  symbols: CodeProjectSymbol[];
+  onSelect: (symbol: CodeProjectSymbol) => void;
+}) {
   if (symbols.length === 0) return null;
   return (
     <ul className="ml-5 border-l border-slate-200 py-1 text-xs dark:border-zinc-800">
       {symbols.map((symbol) => (
-        <li key={`${symbol.kind}-${symbol.name}-${symbol.line}`} className="flex items-center gap-1.5 px-2 py-1 text-slate-500 dark:text-zinc-400">
+        <li key={`${symbol.kind}-${symbol.name}-${symbol.line}`}>
+          <button
+            type="button"
+            onClick={() => onSelect(symbol)}
+            className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            title={`打开文件（第 ${symbol.line} 行）`}
+          >
           <span className={symbol.kind === "class" ? "text-amber-600 dark:text-amber-400" : "text-sky-600 dark:text-sky-400"}>
             {symbol.kind === "class" ? "C" : symbol.kind === "method" ? "M" : "F"}
           </span>
           <span className="truncate">{symbol.name}</span>
           <span className="ml-auto text-[10px] text-slate-400">{symbol.line}</span>
+          </button>
         </li>
       ))}
     </ul>
@@ -120,7 +133,7 @@ function TreeView({
 }: {
   nodes: TreeNode[];
   selectedPath: string | null;
-  onSelect: (file: CodeProjectFile) => void;
+  onSelect: (file: CodeProjectFile, symbol?: CodeProjectSymbol) => void;
 }) {
   return (
     <ul className="space-y-0.5">
@@ -141,7 +154,10 @@ function TreeView({
               {node.file.kind === "python" ? <FileCode2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> : <FileText className="h-4 w-4 text-violet-600 dark:text-violet-400" />}
               <span className="truncate">{node.file.path.split("/").at(-1)}</span>
             </button>
-            <SymbolList symbols={node.file.symbols} />
+            <SymbolList
+              symbols={node.file.symbols}
+              onSelect={(symbol) => onSelect(node.file, symbol)}
+            />
           </li>
         ),
       )}
@@ -156,7 +172,7 @@ function DirectoryItem({
 }: {
   node: TreeDirectory;
   selectedPath: string | null;
-  onSelect: (file: CodeProjectFile) => void;
+  onSelect: (file: CodeProjectFile, symbol?: CodeProjectSymbol) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -182,6 +198,8 @@ export default function ProjectCodeNavigationPage() {
   const [project, setProject] = useState<CodeProject | null>(null);
   const [selectedFile, setSelectedFile] = useState<CodeProjectFile | null>(null);
   const [content, setContent] = useState<string>("");
+  const [selectedLine, setSelectedLine] = useState<number | null>(null);
+  const targetLineRef = useRef<HTMLSpanElement | null>(null);
   const [projectName, setProjectName] = useState("");
   const [uploading, setUploading] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
@@ -214,9 +232,10 @@ export default function ProjectCodeNavigationPage() {
   const tree = useMemo(() => projectTree(project?.files ?? []), [project]);
   const loading = Boolean(projectId && project?.project_id !== projectId && !error);
 
-  async function selectFile(file: CodeProjectFile) {
+  async function selectFile(file: CodeProjectFile, symbol?: CodeProjectSymbol) {
     if (!project) return;
     setSelectedFile(file);
+    setSelectedLine(symbol?.line ?? null);
     setFileLoading(true);
     setError(null);
     try {
@@ -230,6 +249,11 @@ export default function ProjectCodeNavigationPage() {
       setFileLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (fileLoading || selectedLine === null || !content) return;
+    targetLineRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [content, fileLoading, selectedFile?.path, selectedLine]);
 
   async function explainSelectedFile() {
     if (!project || !selectedFile) return;
@@ -353,14 +377,18 @@ export default function ProjectCodeNavigationPage() {
             <div className={`app-card grid min-h-[62vh] flex-1 overflow-hidden rounded-lg ${sidebarHidden ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]"}`}>
               {!sidebarHidden ? <aside className="min-h-0 overflow-auto border-b border-slate-200 p-3 lg:border-b-0 lg:border-r dark:border-zinc-800">
                 <p className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-zinc-400">资源管理器</p>
-                <TreeView nodes={tree} selectedPath={selectedFile?.path ?? null} onSelect={(file) => void selectFile(file)} />
+                <TreeView nodes={tree} selectedPath={selectedFile?.path ?? null} onSelect={(file, symbol) => void selectFile(file, symbol)} />
               </aside> : null}
               <article className="flex min-h-0 flex-col bg-slate-950 text-slate-100">
                 <div className="flex min-h-11 items-center justify-between border-b border-slate-700 px-4 text-xs text-slate-300">
                   <span className="truncate">{selectedFile?.path ?? "选择左侧文件以查看代码"}</span>
                   {selectedFile ? <div className="flex items-center gap-2"><span>{selectedFile.kind === "python" ? "Python" : "Markdown"}</span><button type="button" onClick={() => void explainSelectedFile()} disabled={explaining} className="inline-flex items-center gap-1 text-sky-300 disabled:opacity-50" title="AI 讲解当前文件">{explaining ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}讲解</button>{selectedFile.kind === "python" ? <button type="button" onClick={() => void createFillPractice()} disabled={generatingPractice} className="text-emerald-300 disabled:opacity-50" title="从当前文件生成关键逻辑挖空练习">{generatingPractice ? "生成中" : "挖空练习"}</button> : null}</div> : null}
                 </div>
-                {fileLoading ? <div className="flex flex-1 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div> : selectedFile ? <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-sm leading-6"><code>{content}</code></pre> : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-400"><FileCode2 className="h-8 w-8" /><p>从项目树选择 Python 或 Markdown 文件。</p></div>}
+                {fileLoading ? <div className="flex flex-1 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div> : selectedFile ? <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-sm leading-6"><code>{content.split("\n").map((line, index) => {
+                  const lineNumber = index + 1;
+                  const isTargetLine = selectedLine === lineNumber;
+                  return <span key={lineNumber} ref={isTargetLine ? targetLineRef : undefined} data-line-number={lineNumber} aria-current={isTargetLine ? "location" : undefined} className={`block ${isTargetLine ? "bg-amber-500/25" : ""}`}><span className="mr-4 inline-block w-8 select-none text-right text-slate-500">{lineNumber}</span>{line || " "}</span>;
+                })}</code></pre> : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-400"><FileCode2 className="h-8 w-8" /><p>从项目树选择 Python 或 Markdown 文件。</p></div>}
                 {explanation ? <section className="max-h-64 overflow-auto border-t border-slate-700 bg-slate-900 p-4 text-sm"><p className="mb-2 text-xs text-slate-400">{explanation.source === "model" ? "模型讲解" : "规则讲解"}</p>{explanation.entries.map((entry) => <div key={`${entry.path}-${entry.symbol ?? "file"}`} className="mb-3 space-y-1"><p className="font-medium text-slate-100">{entry.symbol ?? entry.path}</p>{entry.fact.map((text) => <p key={text} className="text-slate-300">事实：{text}</p>)}{entry.inference.map((text) => <p key={text} className="text-amber-200">推测：{text}</p>)}{entry.to_verify.map((text) => <p key={text} className="text-sky-200">待确认：{text}</p>)}</div>)}</section> : null}
               </article>
             </div>

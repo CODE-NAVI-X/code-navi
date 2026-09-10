@@ -41,7 +41,7 @@ from .schemas import (
     StructureCatalogResponse,
 )
 from .service import (
-    ContextualPracticeUnavailable,
+    ContextualPracticeUnsupported,
     DuplicateLearningPracticeSetError,
     ExplainOnlyJudgingError,
     MissingGenerationBasis,
@@ -85,7 +85,7 @@ async def generate_practice_set(
         )
     except MissingGenerationBasis as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ContextualPracticeUnavailable as exc:
+    except ContextualPracticeUnsupported as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except UploadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -121,6 +121,8 @@ async def generate_practice_set_from_learning(
             owned_ids=owned_ids,
         )
     except MissingLearningData as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ContextualPracticeUnsupported as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DuplicateLearningPracticeSetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
