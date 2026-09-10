@@ -47,6 +47,10 @@ import {
   splitMessageSegments,
   type MessageSegment,
 } from "@/lib/research-options";
+import {
+  createCandidateScope,
+  loadSearchCandidates,
+} from "@/lib/research-candidates";
 import { MarkdownText } from "./MarkdownText";
 import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
@@ -105,21 +109,26 @@ export function ResearchConversation() {
 
   const startedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  /** 候选论文的会话归属守卫：切换会话时作废旧会话在途的读取，避免迟到响应污染新会话。 */
+  const candidateScopeRef = useRef(createCandidateScope());
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, []);
 
-  async function refreshSearchCandidates(conversationId: string) {
-    try {
-      const bundles = await listResearchEvidence(conversationId);
-      const withPapers = bundles.filter((bundle) => bundle.papers.length > 0);
-      const latest = withPapers[withPapers.length - 1];
-      setSearchCandidates(latest ? latest.papers.slice(0, 5) : []);
-    } catch {
-      setSearchCandidates([]);
-    }
-  }
+  /**
+   * 按指定会话重新读取候选论文。
+   *
+   * 归属校验在 loadSearchCandidates 内部完成：只有“当前会话的最新一次读取”
+   * 才会把结果写进 state，旧会话迟到的响应（无论成功还是失败）都会被丢弃。
+   */
+  const refreshSearchCandidates = useCallback(async (conversationId: string) => {
+    await loadSearchCandidates<AcademicPaperResult>(conversationId, {
+      scope: candidateScopeRef.current,
+      fetchBundles: (id) => listResearchEvidence(id),
+      apply: (papers) => setSearchCandidates(papers),
+    });
+  }, []);
 
   const restoreOrCreate = useCallback(async () => {
     setPhase("initializing");
@@ -179,7 +188,7 @@ export function ResearchConversation() {
     } finally {
       setPhase("idle");
     }
-  }, []);
+  }, [refreshSearchCandidates]);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -336,6 +345,10 @@ export function ResearchConversation() {
     setDirectionCards([]);
     setPapers(null);
     setDraft("");
+    // 候选论文属于具体会话：切换会话时必须立即清空，否则上一个会话的候选会残留在
+    // 新会话里，看起来像“新会话一开始就自动检索过”。同时切离旧会话，作废其在途读取。
+    candidateScopeRef.current.switchTo(null);
+    setSearchCandidates([]);
 
     try {
       const created = await createResearchConversation();
@@ -352,6 +365,9 @@ export function ResearchConversation() {
       if (stateRes) setOrchestratorState(stateRes);
       if (cardsRes?.cards) setDirectionCards(cardsRes.cards);
       if (papersRes) setPapers(papersRes);
+      // 新会话也可能已有自己的合法 bundle（如学习端带入的上下文），
+      // 必须按新 conversation_id 读取，而不是沿用旧会话的候选。
+      await refreshSearchCandidates(created.conversation_id);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {

@@ -868,6 +868,59 @@ def test_research_option_selector_parses_and_fills_input() -> None:
     assert "canConfirmPlan" in conversation_source
 
 
+def test_new_research_conversation_clears_previous_search_candidates() -> None:
+    """新建会话必须清空旧候选，并按新 conversation_id 重新读取候选论文。
+
+    回归：点击“新建对话”后，页面清空了会话/编排器状态/方向卡/已选论文/草稿，
+    却没有清空候选论文列表，也没有按新的 conversation_id 重新读取 evidence
+    bundles，于是新会话一打开就显示上一个会话的候选论文，看起来像“新会话
+    自动检索过”。后端按 conversation_id 隔离本身是正确的，本轮只修前端状态。
+    """
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    candidates_source = Path("frontend/lib/research-candidates.ts").read_text(encoding="utf-8")
+
+    # 候选的会话归属与加载逻辑集中在纯模块里，迟到响应可被单测覆盖。
+    assert "createCandidateScope" in candidates_source
+    assert "loadSearchCandidates" in candidates_source
+    assert "pickLatestCandidatePapers" in candidates_source
+    assert "MAX_CANDIDATE_PAPERS" in candidates_source
+
+    new_conversation = workspace_source.split(
+        "async function handleStartNewConversation", 1
+    )[1].split("function handleFormSubmit", 1)[0]
+
+    # 重置必须清空候选，且发生在发起创建请求之前（立即生效，不等接口返回）。
+    assert "setSearchCandidates([])" in new_conversation
+    assert new_conversation.index(
+        "setSearchCandidates([])"
+    ) < new_conversation.index("await createResearchConversation()")
+    # 切离旧会话，作废旧会话在途的候选读取。
+    assert "switchTo(null)" in new_conversation
+    # 新会话按自己的 conversation_id 重新读取候选，不沿用旧会话 id。
+    assert "refreshSearchCandidates(created.conversation_id)" in new_conversation
+    assert "refreshSearchCandidates(conversation.conversation_id)" not in new_conversation
+
+    # 候选读取统一走带归属校验的加载函数，迟到的旧响应不会落到页面上。
+    refresh_body = workspace_source.split(
+        "const refreshSearchCandidates = useCallback", 1
+    )[1].split("}, [", 1)[0]
+    assert "loadSearchCandidates" in refresh_body
+    assert "candidateScope" in refresh_body
+    assert "listResearchEvidence" in refresh_body
+
+    # 刷新恢复旧会话的既有持久化语义不得被改动。
+    restore_body = workspace_source.split(
+        "const restoreOrCreate = useCallback", 1
+    )[1].split("\n  }, [", 1)[0]
+    assert "getResearchConversation(savedId)" in restore_body
+    assert "refreshSearchCandidates(activeConversationId)" in restore_body
+    assert "setSearchCandidates([])" not in restore_body
+    assert "switchTo(null)" not in restore_body
+
+    # 没有候选时不渲染候选卡片（不靠阶段门控掩盖状态清理问题）。
+    assert "searchCandidates.length > 0" in workspace_source
+
+
 def test_research_conversation_consumes_structured_clarification_fields() -> None:
     """结构化澄清契约：前端按 next_question/suggested_answers 渲染，不再依赖正文 A/B/C/D。"""
     conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
