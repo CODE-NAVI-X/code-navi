@@ -868,6 +868,47 @@ def test_research_option_selector_parses_and_fills_input() -> None:
     assert "canConfirmPlan" in conversation_source
 
 
+def test_latest_evidence_bundle_is_the_newest_one_not_the_newest_with_papers() -> None:
+    """锁定「最新 evidence bundle」的定义，并禁止用无关论文给空结果补位。
+
+    回归：一次明确返回空结果的检索之后，页面仍显示上一轮检索留下的 5 篇无关英文论文
+    （NASA 系外行星 / 超导 / 数学递推 / D3-brane / LiFeAs），用户因此无法选论文、
+    无法进入第四阶段。根因是前端“跳过空 bundle、去找更早的有论文 bundle”。
+    """
+    candidates_source = Path("frontend/lib/research-candidates.ts").read_text(encoding="utf-8")
+
+    # 接口排序契约：两条读取路径都按 created_at 倒序 → 数组下标 0 就是最新 bundle。
+    # 前端据此把「最新」定义为数组第一个元素；这里把后端契约一并锁死，
+    # 后端若改成升序，本用例会立刻失败，而不是静默地让前端读错。
+    search_service = Path(
+        "src/code_navi/research/conversation_search_service.py"
+    ).read_text(encoding="utf-8")
+    list_bundles = search_service.split("def list_bundles(", 1)[1].split(
+        "def analyze_paper(", 1
+    )[0]
+    assert "ResearchEvidenceBundleModel.conversation_id == conversation_id" in list_bundles
+    assert "order_by(ResearchEvidenceBundleModel.created_at.desc())" in list_bundles
+
+    conversation_service = Path("src/code_navi/research/conversation_service.py").read_text(
+        encoding="utf-8"
+    )
+    restore_bundles = conversation_service.split("def _evidence_bundles(", 1)[1].split(
+        "def _experiment_evidence_bundles(", 1
+    )[0]
+    assert "order_by(ResearchEvidenceBundleModel.created_at.desc())" in restore_bundles
+
+    # 前端不得再按 papers 过滤后取“最后一个”（= 最旧的一个）。
+    assert "papers.length > 0" not in candidates_source
+    assert "withPapers" not in candidates_source
+    assert "bundles.length - 1" not in candidates_source
+    # 最新 bundle 为空时直接返回空，绝不回退到更早的 bundle。
+    assert "newest" in candidates_source
+
+    # 空结果语义：候选只由最新 bundle 的 papers 决定，不改写来源状态 / provenance。
+    for untouched in ("source_statuses", "failure_reasons", "provenance_note", "queried_sources"):
+        assert untouched not in candidates_source, untouched
+
+
 def test_new_research_conversation_clears_previous_search_candidates() -> None:
     """新建会话必须清空旧候选，并按新 conversation_id 重新读取候选论文。
 

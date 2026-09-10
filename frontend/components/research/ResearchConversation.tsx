@@ -297,6 +297,9 @@ export function ResearchConversation() {
           setOrchestratorState(response.state);
         }
         setFailedTurnError(null);
+        // 重试会重放上一轮用户消息，可能再写一个 evidence bundle（空结果也算）。
+        // 与实时流式路径保持一致：按当前会话重新读取候选，避免空结果后仍显示旧论文。
+        await refreshSearchCandidates(conversation.conversation_id);
       } else if (response.status === "failed") {
         setFailedTurnError(response.error || "重试失败，请再次尝试。");
         if (response.state) {

@@ -10,15 +10,35 @@ import {
 } from "./research-candidates.ts";
 
 /**
- * 回归背景：点击“新建对话”后，页面清空了会话/编排器状态/方向卡/已选论文/草稿，
+ * 回归背景（两轮）：
+ *
+ * 第一轮：点击“新建对话”后，页面清空了会话/编排器状态/方向卡/已选论文/草稿，
  * 却没有清空候选论文列表，也没有按新的 conversation_id 重新读取 evidence bundles。
  * 于是新会话一打开就显示上一个会话的候选论文，看起来像“新会话自动检索过”。
  *
- * 后端按 conversation_id 隔离本身是正确的，本轮只修前端会话切换时的候选状态：
+ * 第二轮（真实浏览器）：一次明确返回空结果的检索之后，页面仍然显示上一轮检索
+ * 留下的 5 张无关英文论文卡片（NASA 系外行星 / 超导 / 数学递推 / D3-brane / LiFeAs），
+ * 用户因此无法选择论文、无法进入第四阶段。根因是“跳过空 bundle 去找更早的有论文 bundle”。
+ *
+ * 后端按 conversation_id 隔离本身是正确的，本轮只修前端候选状态：
  *   1. 新建会话时旧候选必须立即清空；
  *   2. 新会话必须按自己的 conversation_id 重新读取候选；
  *   3. 旧会话的迟到响应（成功或失败）都不得污染新会话；
- *   4. 刷新页面恢复旧会话的既有持久化语义保持不变。
+ *   4. 刷新页面恢复旧会话的既有持久化语义保持不变；
+ *   5. **最新 bundle 为空结果时，候选必须是空的——绝不回退到更早的 bundle**。
+ */
+
+/**
+ * “最新 evidence bundle”的定义（已核对后端源码，见 tests/test_research_frontend_copy.py
+ * 的排序契约用例）：
+ *
+ *   GET /api/v1/research/conversations/{id}/evidence-bundles
+ *     → ConversationSearchService.list_bundles
+ *     → .order_by(ResearchEvidenceBundleModel.created_at.desc())
+ *   会话恢复路径 ConversationService._evidence_bundles 同样是 created_at.desc()。
+ *
+ * 即接口按时间倒序返回，**数组下标 0 就是最新一次检索的 bundle**。
+ * 下面所有用例都按这个顺序构造数组。
  */
 
 /** 只保留候选卡片关心的字段，避免测试被无关类型细节绑住。 */
@@ -30,6 +50,26 @@ function paper(title) {
 function bundle(...titles) {
   return { papers: titles.map(paper) };
 }
+
+/** 带来源状态 / provenance / 失败原因的 bundle（用于锁定空结果语义不被改写）。 */
+function bundleWithMetadata(...titles) {
+  return {
+    papers: titles.map(paper),
+    source_statuses: [{ source: "crossref", status: "ok" }],
+    queried_sources: ["crossref", "arxiv"],
+    failure_reasons: titles.length === 0 ? ["no_relevant_result"] : [],
+    provenance_note: "仅元数据与摘要，未下载全文",
+  };
+}
+
+/** 真实浏览器里出现的 5 篇无关论文（第一轮检索的遗留结果）。 */
+const UNRELATED_OLD_TITLES = [
+  "Exoplanet atmospheres with JWST",
+  "Superconductivity in twisted bilayer graphene",
+  "A recursive approach to counting",
+  "Branes and D3-brane dynamics",
+  "LiFeAs: a stoichiometric superconductor",
+];
 
 /** 手工可控的 promise，用来模拟“旧请求晚返回”。 */
 function deferred() {
@@ -336,27 +376,224 @@ test("按恢复到的会话 id 读取时能拿回该会话自己的历史候选"
 });
 
 // ---------------------------------------------------------------------------
-// 7. 候选挑选沿用既有语义（本轮不改变检索/排序行为）
+// 7. 最新 bundle 语义（严格）：空结果不得回退到更早的 bundle
 // ---------------------------------------------------------------------------
 
-test("候选挑选沿用既有语义：跳过空 bundle、取最后一个、最多 5 篇、保持原顺序", () => {
+test("用例 1：最新 bundle 为空、较早 bundle 有论文 → 必须为空", () => {
+  // 顺序 = 接口顺序 = created_at.desc()：下标 0 是最新一次检索（空结果）
+  const bundles = [bundle(), bundle(...UNRELATED_OLD_TITLES)];
+
+  assert.deepEqual(
+    pickLatestCandidatePapers(bundles),
+    [],
+    "空结果之后不得把更早一轮的无关论文重新显示出来",
+  );
+});
+
+test("用例 2：只有一个空 bundle → 必须为空", () => {
+  assert.deepEqual(pickLatestCandidatePapers([bundle()]), []);
+  // 空 bundle 自己也带 metadata 时同样是空
+  assert.deepEqual(pickLatestCandidatePapers([bundleWithMetadata()]), []);
+});
+
+test("用例 3：只有一个有论文 bundle → 保持原顺序，最多 5 篇", () => {
   assert.equal(MAX_CANDIDATE_PAPERS, 5);
 
-  const sixPapers = bundle("甲", "乙", "丙", "丁", "戊", "己");
-  assert.deepEqual(titles(pickLatestCandidatePapers([sixPapers])), [
+  const single = bundle("甲", "乙", "丙");
+  assert.deepEqual(titles(pickLatestCandidatePapers([single])), ["甲", "乙", "丙"]);
+
+  // 超过 5 篇时截断，且顺序与后端返回一致
+  const six = bundle("甲", "乙", "丙", "丁", "戊", "己");
+  assert.deepEqual(titles(pickLatestCandidatePapers([six])), [
     "甲",
     "乙",
     "丙",
     "丁",
     "戊",
   ]);
+});
 
-  // 没有论文的 bundle 被跳过，取最后一个带论文的 bundle（既有行为）
-  const bundles = [sixPapers, { papers: [] }, bundle("庚")];
-  assert.deepEqual(titles(pickLatestCandidatePapers(bundles)), ["庚"]);
+test("用例 4：最新 bundle 有论文、较早也有 → 只返回最新的，不混合", () => {
+  const bundles = [
+    bundle("最新·论文 1", "最新·论文 2"),
+    bundle(...UNRELATED_OLD_TITLES),
+  ];
 
-  // 不修改调用方传入的数据
-  const input = [bundle("甲")];
-  pickLatestCandidatePapers(input);
-  assert.equal(input[0].papers.length, 1);
+  const result = titles(pickLatestCandidatePapers(bundles));
+  assert.deepEqual(result, ["最新·论文 1", "最新·论文 2"]);
+  for (const old of UNRELATED_OLD_TITLES) {
+    assert.equal(result.includes(old), false, `不得混入更早 bundle 的论文：${old}`);
+  }
+});
+
+test("用例 4b：多个历史 bundle 时只看最新那一个", () => {
+  const bundles = [
+    bundle("最新论文"),
+    bundle("上一轮论文"),
+    bundle("更早论文"),
+  ];
+  assert.deepEqual(titles(pickLatestCandidatePapers(bundles)), ["最新论文"]);
+});
+
+test("用例 1b：最新 bundle 为空、较早有多轮有论文 → 必须为空", () => {
+  const bundles = [
+    bundle(),
+    bundle("上一轮论文 A", "上一轮论文 B"),
+    bundle(...UNRELATED_OLD_TITLES),
+  ];
+  assert.deepEqual(pickLatestCandidatePapers(bundles), []);
+});
+
+test("用例 5：空结果 bundle 只按 papers 判定，不因来源状态/metadata 被跳过", () => {
+  // 空结果 bundle 依然带 source_statuses / queried_sources / failure_reasons /
+  // provenance_note。这些字段必须原样保留在 bundle 里，前端不得据此判定“跳过它”。
+  const emptyWithMetadata = bundleWithMetadata();
+  const bundles = [emptyWithMetadata, bundleWithMetadata(...UNRELATED_OLD_TITLES)];
+
+  assert.deepEqual(pickLatestCandidatePapers(bundles), []);
+  // 不改写来源状态与 provenance（只做读取）
+  assert.equal(emptyWithMetadata.papers.length, 0);
+  assert.deepEqual(emptyWithMetadata.queried_sources, ["crossref", "arxiv"]);
+  assert.equal(emptyWithMetadata.provenance_note, "仅元数据与摘要，未下载全文");
+
+  // 有论文时同样只看最新 bundle
+  assert.deepEqual(
+    titles(pickLatestCandidatePapers([bundleWithMetadata("唯一候选"), bundleWithMetadata("旧候选")])),
+    ["唯一候选"],
+  );
+});
+
+test("用例 9：完全没有任何 bundle → 空（不是错误，也不是伪造结果）", () => {
+  assert.deepEqual(pickLatestCandidatePapers([]), []);
+  assert.deepEqual(pickLatestCandidatePapers(null), []);
+  assert.deepEqual(pickLatestCandidatePapers(undefined), []);
+  // 缺 papers 字段的脏数据按空处理，不抛错
+  assert.deepEqual(pickLatestCandidatePapers([{}]), []);
+
+  // 只读：不修改调用方传入的 bundle 数组与其中的 papers
+  const input = [bundle("甲", "乙")];
+  const picked = pickLatestCandidatePapers(input);
+  assert.deepEqual(titles(picked), ["甲", "乙"]);
+  assert.equal(input.length, 1);
+  assert.equal(input[0].papers.length, 2);
+  assert.notEqual(picked, input[0].papers, "返回的是切片副本，不是原数组引用");
+});
+
+test("用例 5b：空结果后页面候选被清空，不再保留上一轮检索的论文", async () => {
+  const scope = createCandidateScope();
+  const applied = [];
+  const apply = (papers) => applied.push(titles(papers));
+
+  // 第一轮检索：真实候选（浏览器里是 5 篇无关英文论文）
+  await loadSearchCandidates("conv-1", {
+    scope,
+    fetchBundles: async () => [bundle(...UNRELATED_OLD_TITLES)],
+    apply,
+  });
+  assert.deepEqual(applied.at(-1), UNRELATED_OLD_TITLES);
+
+  // 第二轮检索返回空结果 → 新 bundle 排在数组最前
+  await loadSearchCandidates("conv-1", {
+    scope,
+    fetchBundles: async () => [bundle(), bundle(...UNRELATED_OLD_TITLES)],
+    apply,
+  });
+
+  assert.deepEqual(applied.at(-1), [], "空结果必须把页面候选清空");
+  for (const old of UNRELATED_OLD_TITLES) {
+    assert.equal(applied.at(-1).includes(old), false, `旧论文不得残留：${old}`);
+  }
+  // 页面只在有候选时才渲染候选区域
+  assert.ok(CONVERSATION_SOURCE.includes("searchCandidates.length > 0"));
+});
+
+test("用例 5c：重试本轮完成后同样按最新 bundle 刷新候选", () => {
+  // 重试会重放上一轮用户消息；若那一轮触发了检索，就会再写一个 bundle
+  // （空结果也算一个）。三条会追加 assistant 消息的路径都必须刷新候选，
+  // 否则空结果之后卡片仍是上一轮的旧论文。
+  const retryBody = functionBody(
+    CONVERSATION_SOURCE,
+    "async function handleRetry",
+    "} finally {",
+  );
+
+  assert.ok(
+    retryBody.includes("refreshSearchCandidates(conversation.conversation_id)"),
+    "重试完成后必须按当前会话重新读取候选",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 8. 同一会话内新检索请求迟到，不得覆盖更新的结果
+// ---------------------------------------------------------------------------
+
+test("用例 8：同一会话里先发起的请求晚返回，不得覆盖后发起的请求结果", async () => {
+  const scope = createCandidateScope();
+  const applied = [];
+  const apply = (papers) => applied.push(titles(papers));
+
+  const firstResponse = deferred();
+  const firstLoad = loadSearchCandidates("conv-1", {
+    scope,
+    fetchBundles: () => firstResponse.promise,
+    apply,
+  });
+
+  // 用户又触发了一次检索（或新一轮对话完成），候选重新读取
+  await loadSearchCandidates("conv-1", {
+    scope,
+    fetchBundles: async () => [bundle(), bundle("旧结果")],
+    apply,
+  });
+  assert.deepEqual(applied, [[]], "第二次读取到空结果，候选应立即清空");
+
+  // 第一次请求此刻才回来，带着过期的旧论文
+  firstResponse.resolve([bundle("过期论文 1", "过期论文 2")]);
+  assert.equal(await firstLoad, false, "过期请求不得被采纳");
+  assert.deepEqual(applied, [[]], "过期的旧结果不得覆盖更新的空结果");
+});
+
+test("用例 8b：同一会话里新结果先到、旧结果后到，最终保留新结果", async () => {
+  const scope = createCandidateScope();
+  const applied = [];
+  const apply = (papers) => applied.push(titles(papers));
+
+  const staleResponse = deferred();
+  const staleLoad = loadSearchCandidates("conv-1", {
+    scope,
+    fetchBundles: () => staleResponse.promise,
+    apply,
+  });
+
+  await loadSearchCandidates("conv-1", {
+    scope,
+    fetchBundles: async () => [bundle("新检索论文")],
+    apply,
+  });
+
+  staleResponse.resolve([bundle("旧一轮论文")]);
+  await staleLoad;
+
+  assert.deepEqual(applied, [["新检索论文"]]);
+});
+
+// ---------------------------------------------------------------------------
+// 9. 候选卡片的只读语义（点击只进待确认流程）
+// ---------------------------------------------------------------------------
+
+test("候选卡片点击只发待确认消息，不直接设置为当前论文", () => {
+  assert.ok(CONVERSATION_SOURCE.includes("我想选择这篇论文作为复现候选"));
+  assert.ok(
+    !CONVERSATION_SOURCE.split("<SearchCandidateCards", 2)[1]
+      .split("/>", 1)[0]
+      .includes("selectOrchestratorPaper"),
+    "点击候选卡片不得直接调用选论文接口",
+  );
+  // 卡片组件自身也不持有选论文能力
+  const cards = readFileSync(
+    new URL("../components/research/SearchCandidateCards.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.ok(cards.includes("确认后才会设为当前论文"));
+  assert.ok(!cards.includes("selectOrchestratorPaper"));
 });
