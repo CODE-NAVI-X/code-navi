@@ -354,6 +354,23 @@ export function toggleOptionKey(current: string | undefined, key: string): strin
 }
 
 /**
+ * 点击选项（或编辑补充说明）后应写入页面底部输入框的草稿文本。
+ *
+ * 这是选项组**唯一**的作答出口：只产出一段可继续编辑的草稿交给 `setDraft`，
+ * 不发送任何请求、不触发任何发送链路。用户确认后由页面底部的全局“发送”按钮提交。
+ * 没有选中项时返回空串，调用方应保持自由输入。
+ */
+export function buildOptionFillText(
+  option: ParsedOption | null | undefined,
+  supplement = "",
+): string {
+  if (!option) return "";
+  const base = option.fillValue || `我选 ${option.key}：${option.text}`;
+  const extra = supplement.trim();
+  return extra ? `${base}（补充：${extra}）` : base;
+}
+
+/**
  * 把当前选中项与补充说明组合成发送给姜姜的用户消息。
  * 未选中任何项时返回空串，调用方据此禁用提交。
  */

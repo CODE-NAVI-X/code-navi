@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   buildAnswerMessage,
   buildAssistantConversationMessage,
+  buildOptionFillText,
   buildStructuredOptionGroup,
   parseOptionGroups,
   splitMessageSegments,
   toggleOptionKey,
 } from "./research-options.ts";
+
+/** 读取同级组件源码，用于锁定“选项组件不得具备发送能力”这一结构契约。 */
+function readComponentSource(relativePath) {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
 
 /**
  * 科研对话真实场景：姜姜的回复正文里已经把 A/B/C/D 写成静态列表，前端又单独解析出
@@ -386,4 +393,115 @@ test("切换选中状态：再次点击同一选项取消选中", () => {
   assert.equal(toggleOptionKey(undefined, "B"), "B");
   assert.equal(toggleOptionKey("A", "B"), "B");
   assert.equal(toggleOptionKey("B", "B"), "");
+});
+
+/**
+ * 本轮交互目标：
+ *   一个问题 -> 问题下方 2~4 个可点击选项 -> 点选项只把内容填入底部输入框
+ *   -> 用户可编辑或补充 -> 只有底部全局“发送”按钮负责提交。
+ */
+test("点击选项只把内容填入底部输入框（draft），不产生任何发送动作", () => {
+  const [group] = parseOptionGroups(CNN_REPLY);
+  const option = group.options[0];
+
+  // 点击 A 得到的只是一段“草稿文本”，用于写入底部输入框
+  const draft = buildOptionFillText(option, "");
+  assert.equal(typeof draft, "string");
+  assert.equal(
+    draft,
+    "我选 A：应用层：用 CNN 做某个具体任务（请说明是什么任务、有没有数据）",
+  );
+
+  // 补充说明只是拼进同一段草稿，仍然不是一次发送
+  assert.equal(
+    buildOptionFillText(option, "已有 CIFAR-10"),
+    `${draft}（补充：已有 CIFAR-10）`,
+  );
+
+  // 草稿是普通字符串，用户可以继续编辑改写
+  assert.equal(
+    draft.replace("应用层", "工程落地"),
+    "我选 A：工程落地：用 CNN 做某个具体任务（请说明是什么任务、有没有数据）",
+  );
+
+  // 没有选中任何选项时不产生草稿，调用方保持自由输入
+  assert.equal(buildOptionFillText(null, ""), "");
+  assert.equal(buildOptionFillText(undefined, "   "), "");
+});
+
+test("ResearchOptionSelector 失去全部发送能力：只保留填充输入框", () => {
+  const selector_source = readComponentSource(
+    "../components/research/ResearchOptionSelector.tsx",
+  );
+
+  // 组件不再接收 onSend —— 类型层面就没有发送出口，重新加回会直接被 tsc 拒绝
+  assert.ok(
+    !selector_source.includes("onSend"),
+    "选项组件不应再持有 onSend：点击选项不得发送请求",
+  );
+  // 组件不得直接触发既有发送链路
+  assert.ok(
+    !/handleSend/.test(selector_source),
+    "选项组件不应调用 handleSend",
+  );
+  // 页面上的“提交选择”按钮已删除：提交只由底部全局发送按钮负责
+  assert.ok(
+    !selector_source.includes("提交选择"),
+    "选项组件不应再渲染“提交选择”按钮",
+  );
+  // 删掉发送入口后，点击选项仍然把回答写入输入框
+  assert.ok(
+    selector_source.includes("onFillInput"),
+    "点击选项必须仍能填充底部输入框",
+  );
+});
+
+test("会话把选项组件只接到 setDraft，提交仍由全局发送按钮负责", () => {
+  const conversation_source = readComponentSource(
+    "../components/research/ResearchConversation.tsx",
+  );
+  const usage = conversation_source.split("<ResearchOptionSelector", 2)[1].split("/>", 1)[0];
+
+  // 选项组只接线到输入框草稿
+  assert.ok(usage.includes("onFillInput={(text) => setDraft(text)}"));
+  assert.ok(!usage.includes("onSend"), "挂载选项组时不得传入发送回调");
+  // 底部全局发送按钮仍然调用原有发送链路
+  assert.ok(conversation_source.includes("void handleSend(draft)"));
+});
+
+test("重试完成路径与实时流式路径共用同一映射，结构化字段同样不丢", () => {
+  const reply = {
+    id: "assistant-retry",
+    content: CNN_REPLY,
+    created_at: "2026-09-10T00:00:00Z",
+    next_question: QUESTION_1,
+    suggested_answers: ["应用层：做具体任务", "方法层：改进结构"],
+  };
+
+  const retried = buildAssistantConversationMessage(reply);
+  const streamed = buildAssistantConversationMessage(reply);
+
+  // 两条路径产出完全一致，重试不会把字段清空
+  assert.deepEqual(retried, streamed);
+  assert.equal(retried.next_question, QUESTION_1);
+  assert.deepEqual(retried.suggested_answers, ["应用层：做具体任务", "方法层：改进结构"]);
+  // 重试回来的选项同样可点选
+  assert.notEqual(buildStructuredOptionGroup(retried), null);
+});
+
+test("失败路径不构造助手消息，因此失败时不会渲染任何伪造选项", () => {
+  const conversation_source = readComponentSource(
+    "../components/research/ResearchConversation.tsx",
+  );
+  // 只看 handleRetry 函数体，避免匹配到顶部 import 里的同名符号
+  const retry_block = conversation_source
+    .split("async function handleRetry", 2)[1]
+    .split("} finally {", 1)[0];
+
+  // 只有 completed 且带 reply_message 才追加消息；failed 分支只记录错误
+  assert.ok(retry_block.includes('response.status === "completed" && response.reply_message'));
+  assert.ok(retry_block.includes('response.status === "failed"'));
+  // 失败分支里不得存在任何追加 assistant 消息的写法
+  const failed_branch = retry_block.split('response.status === "failed"', 2)[1];
+  assert.ok(!failed_branch.includes("buildAssistantConversationMessage"));
 });

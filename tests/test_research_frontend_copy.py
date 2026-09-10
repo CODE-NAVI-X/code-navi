@@ -816,8 +816,8 @@ def test_search_candidate_cards_come_from_real_bundles_and_never_auto_select() -
     assert "selectOrchestratorPaper" not in cards
 
 
-def test_research_option_selector_parses_and_submits_choices() -> None:
-    """选择题快速作答：解析 A/B/C 选项组，提交时组合成明确的用户消息。"""
+def test_research_option_selector_parses_and_fills_input() -> None:
+    """选择题选项：解析 A/B/C 选项组，点击只把回答填入底部输入框（不发送）。"""
     selector_source = Path(
         "frontend/components/research/ResearchOptionSelector.tsx"
     ).read_text(encoding="utf-8")
@@ -833,16 +833,27 @@ def test_research_option_selector_parses_and_submits_choices() -> None:
     # 解析与“按原文顺序切片”的纯逻辑集中在 research-options 模块
     assert "计划执行确认" in options_source
     assert "splitMessageSegments" in options_source
-    assert "我选 " in selector_source
+    # 作答文案的唯一出口是 buildOptionFillText：只产出可编辑草稿
+    assert "buildOptionFillText" in options_source
+    assert "我选 " in options_source
+    assert "buildOptionFillText" in selector_source
     assert "补充说明（可选）" in selector_source
-    assert "提交选择" in selector_source
     assert "填入输入框" in selector_source
     assert "onFillInput" in selector_source
+    # 选项组件刻意不持有发送能力：点击选项只填入底部输入框，
+    # 提交必须由页面底部的全局“发送”按钮负责。
+    assert "提交选择" not in selector_source
+    assert "onSend" not in selector_source
+    assert "handleSend" not in selector_source
     # 选项就地渲染在题干下方，不再出现独立的“快速作答”重复卡片
     assert "快速作答" not in selector_source
-    # 仅最后一条是姜姜的消息且含选项组时挂载，且支持输入框自动填充
+    # 仅最后一条是姜姜的消息且含选项组时挂载，且只接线到输入框草稿
     assert "ResearchOptionSelector" in conversation_source
     assert "onFillInput={(text) => setDraft(text)}" in conversation_source
+    selector_usage = conversation_source.split("<ResearchOptionSelector", 2)[1].split("/>", 1)[0]
+    assert "onSend" not in selector_usage
+    # 全局发送按钮仍然调用原有发送链路
+    assert "void handleSend(draft)" in conversation_source
     # 正文按原文顺序切成“正文 -> 选项组 -> 正文”，选项组因此贴在对应题干下方，
     # 同时被接管的静态选项行从 markdown 片段里摘掉，保证同一题目只出现一份选项
     assert "splitMessageSegments" in conversation_source

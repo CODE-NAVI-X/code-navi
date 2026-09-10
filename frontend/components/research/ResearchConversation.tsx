@@ -585,7 +585,6 @@ export function ResearchConversation() {
                               key={`options-${segmentIndex}`}
                               group={segment.group}
                               disabled={disabled}
-                              onSend={(text) => void handleSend(text)}
                               onFillInput={(text) => setDraft(text)}
                             />
                           ),
