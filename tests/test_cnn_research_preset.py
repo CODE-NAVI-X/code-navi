@@ -21,8 +21,14 @@ def test_cnn_preset_requires_paper_confirmation_before_analysis() -> None:
     papers = CNN_RESEARCH_PRESET.reply("确认，按这个固定实验方案继续。", conditions.step)
     assert papers is not None
     assert "演示预设数据" in papers.content
+    papers_blocked = CNN_RESEARCH_PRESET.reply("进入第四阶段。", papers.step)
+    assert papers_blocked is not None
+    assert "当前还不能进入第四阶段" in papers_blocked.content
     confirmation = CNN_RESEARCH_PRESET.reply("我选择第1篇论文。", papers.step)
     assert confirmation is not None
+    confirmation_blocked = CNN_RESEARCH_PRESET.reply("继续分析。", confirmation.step)
+    assert confirmation_blocked is not None
+    assert "当前论文尚未确认" in confirmation_blocked.content
     analysis = CNN_RESEARCH_PRESET.reply(
         "确认，将这篇论文设为当前复现论文。", confirmation.step
     )
