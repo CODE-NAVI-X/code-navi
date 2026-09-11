@@ -24,8 +24,7 @@ class CnnResearchPreset:
     marker = "cnn-research-preset.v1"
 
     def reply(self, message: str, step: str | None) -> CnnPresetReply | None:
-        normalized = "".join(message.lower().split()).replace("。", "")
-        if step is None and normalized in {"我想研究cnn", "我想研究卷积神经网络"}:
+        if step is None and message.strip() in {"我想研究 CNN。", "我想研究卷积神经网络。"}:
             return CnnPresetReply("question", self._opening())
         if step is None:
             return None

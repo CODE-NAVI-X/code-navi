@@ -37,6 +37,10 @@ def test_cnn_preset_requires_paper_confirmation_before_analysis() -> None:
     assert "实验尚未执行" in analysis.content
 
 
+def test_cnn_preset_requires_the_explicit_demo_trigger() -> None:
+    assert CNN_RESEARCH_PRESET.reply("我想研究 CNN", None) is None
+
+
 def test_cnn_preset_never_claims_reproduction_success() -> None:
     reply = CNN_RESEARCH_PRESET.reply("复现成功。", "analysis")
     assert reply is not None
