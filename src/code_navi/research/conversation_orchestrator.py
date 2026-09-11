@@ -2192,8 +2192,12 @@ class ResearchConversationOrchestrator:
             if not cnn_flow_matches_step(phase, user_message):
                 return _finalize(CNN_FLOW_FALLBACK, "cnn_flow_fallback")
             flow["phase"] = "finished"
-            _save()
+            completed_stages = list(state_model.completed_stages or [])
+            if "research_execution" not in completed_stages:
+                completed_stages.append("research_execution")
+            state_model.completed_stages = completed_stages
             state_model.current_stage = "research_analysis"
+            _save()
             return _finalize(
                 cnn_flow_stage_four_reply(answers), "cnn_flow_analysis"
             )

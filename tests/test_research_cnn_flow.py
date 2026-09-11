@@ -511,6 +511,10 @@ def test_stage_four_uses_user_confirmed_conditions_and_marks_missing(db_session)
     _send(orchestrator, db_session, conv_id, "确认，将这篇论文设为当前复现论文。")
     _send(orchestrator, db_session, conv_id, "进入第四阶段。")
 
+    state = orchestrator.get_state_model(conv_id, db_session)
+    assert state.current_stage == "research_analysis"
+    assert "research_execution" in (state.completed_stages or [])
+
     text = _assistant_texts(db_session, conv_id)[-1]
     assert "数据集：CIFAR-10" in text
     assert "模型：ResNet-18" in text
