@@ -1515,6 +1515,66 @@ class SinglePaperArxivSource:
         )
 
 
+class CountingSinglePaperArxivSource(SinglePaperArxivSource):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def search(self, query: str) -> AcademicSourceResult:
+        self.calls += 1
+        return super().search(query)
+
+
+def test_explicit_rerun_bypasses_persistent_search_cache(db_session) -> None:
+    """Explicit re-search must execute the source again for the same query."""
+    source = CountingSinglePaperArxivSource()
+    search_service = ResearchConversationSearchService(
+        search_tool=AcademicSearchTool({"arxiv": source})
+    )
+    conv_id = "conv-search-force-refresh"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "CIFAR-10 ResNet SHAP"},
+            messages_data=[],
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+    request = CreateConversationEvidenceBundleRequest(
+        query="CIFAR-10 ResNet SHAP", sources=["arxiv"]
+    )
+
+    first = search_service.search(conv_id, request, db_session)
+    second = search_service.search(
+        conv_id, request, db_session, force_refresh=True
+    )
+
+    assert source.calls == 2
+    assert first.cache_hit is False
+    assert second.cache_hit is False
+    assert second.bundle_id != first.bundle_id
+
+
+def test_explicit_rerun_through_orchestrator_bypasses_cache(db_session) -> None:
+    """The conversational re-search path must request a fresh evidence bundle."""
+    source = CountingSinglePaperArxivSource()
+    search_service = ResearchConversationSearchService(
+        search_tool=AcademicSearchTool({"arxiv": source})
+    )
+    orchestrator = _orchestrator(search_service)
+    conv_id = "conv-search-force-refresh-orchestrator"
+    _make_search_conversation(db_session, conv_id)
+
+    for _ in range(2):
+        orchestrator.process_message(
+            conv_id,
+            SendOrchestratorMessageRequest(message=RERUN_SEARCH_MESSAGE),
+            db_session,
+        )
+
+    assert source.calls == 2
+    assert len(search_service.list_bundles(conv_id, db_session)) == 2
+
+
 def test_confirmed_user_query_runs_real_search_service_on_sparse_profile(db_session) -> None:
     """P3-A 集成：确认检索词经真实检索服务出候选；画像就绪门控只拦自动计划。"""
     search_service = ResearchConversationSearchService(
@@ -2304,4 +2364,3 @@ def test_failed_rerun_search_does_not_fabricate_success_or_reuse_old_papers(
     # 没有落任何新 bundle（bundle 数不变），也没有伪造检索成功。
     assert search_service.saved_bundles == [old_bundle]
     assert _last_message_template(db_session, conv_id) == "search_results"
-

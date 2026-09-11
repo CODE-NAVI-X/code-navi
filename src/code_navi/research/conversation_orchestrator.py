@@ -2006,11 +2006,16 @@ class ResearchConversationOrchestrator:
                 )
             else:
                 query = _resolve_academic_search_query(user_message, conv, state_model, conv_msgs)
+                force_refresh = (
+                    is_explicit_search_action
+                    and isinstance(self.search_service, ResearchConversationSearchService)
+                )
                 try:
                     bundle = self.search_service.search(
                         conversation_id,
                         CreateConversationEvidenceBundleRequest(query=query),
                         db,
+                        **({"force_refresh": True} if force_refresh else {}),
                     )
                     # Fallback retry if 0 papers returned and query contained Chinese
                     if not bundle.papers and any('\u4e00' <= char <= '\u9fff' for char in query):
@@ -2024,6 +2029,7 @@ class ResearchConversationOrchestrator:
                                 conversation_id,
                                 CreateConversationEvidenceBundleRequest(query=fallback_q),
                                 db,
+                                **({"force_refresh": True} if force_refresh else {}),
                             )
                             if retry_bundle.papers:
                                 bundle = retry_bundle
