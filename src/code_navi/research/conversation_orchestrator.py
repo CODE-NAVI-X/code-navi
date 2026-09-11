@@ -17,7 +17,24 @@ from sqlalchemy.orm import Session
 from code_navi.providers import ProviderSettings, create_provider
 
 from .clarification_options import extract_clarification_options
-from .cnn_research_preset import CNN_RESEARCH_PRESET
+from .cnn_preset import (
+    CNN_PRESET_DEMO_NOTE,
+    CNN_PRESET_DEMO_SOURCE,
+    CNN_PRESET_PAPERS,
+    CNN_REPLY_ANALYSIS,
+    CNN_REPLY_BLOCK_REPRODUCTION,
+    CNN_REPLY_BLOCK_STAGE4,
+    CNN_REPLY_CONFIRMED,
+    CNN_REPLY_FALLBACK,
+    CNN_REPLY_INTRO,
+    CNN_REPLY_PAPERS,
+    CNN_REPLY_QUESTION_RECORDED,
+    CNN_REPLY_SELECT,
+    cnn_preset_matches_step,
+    cnn_preset_refusal,
+    cnn_preset_step,
+    is_cnn_preset_trigger,
+)
 from .conversation_guidance import (
     ResearchConversationGuidanceService,
     StudyRecommendationsNotConfirmedError,
@@ -60,7 +77,11 @@ from .conversation_prompt_templates import (
     remediate_hardware_assertions,
     validate_jiangjiang_output,
 )
-from .conversation_schemas import CreateConversationEvidenceBundleRequest
+from .conversation_schemas import (
+    AcademicSourceStatus,
+    ConversationEvidenceBundle,
+    CreateConversationEvidenceBundleRequest,
+)
 from .conversation_search_service import ResearchConversationSearchService
 from .conversation_service import (
     ConversationNotFoundError,
@@ -70,11 +91,13 @@ from .llm import DEEPSEEK_DEFAULT_MODEL, DeepSeekGuidanceProvider
 from .metrics_catalog import STANDARD_METRICS, infer_task_type
 from .models import (
     ResearchConversationModel,
+    ResearchEvidenceBundleModel,
     ResearchLearnerProfileModel,
     ResearchOrchestratorPaperModel,
     ResearchOrchestratorStateModel,
 )
 from .reproduction_evaluation_service import ReproductionEvaluationService
+from .schemas import AcademicPaperResult, EvidenceStatement
 
 
 class OrchestratorRetryNotApplicableError(RuntimeError):
@@ -1725,6 +1748,170 @@ class ResearchConversationOrchestrator:
         else:
             yield f"event: failed\ndata: {outcome.model_dump_json()}\n\n"
 
+    def _write_cnn_preset_bundle(self, conversation_id: str, db: Session) -> None:
+        """Persist the fixed CNN demo candidates as an explicitly labelled bundle."""
+        now_dt = datetime.now(UTC)
+        papers = [
+            AcademicPaperResult(
+                paper_id=f"cnn-preset-{index + 1}",
+                title=str(item["title"]),
+                authors=[str(author) for author in item["authors"]],
+                year=item["year"],
+                source_name=CNN_PRESET_DEMO_SOURCE,
+                url=str(item["url"]),
+                identifier=str(item["identifier"]),
+                abstract_excerpt=str(item["abstract_excerpt"]),
+                accessed_at=now_dt,
+                information_scope="metadata_and_abstract_only",
+                metadata_evidence=[
+                    EvidenceStatement(
+                        content="标题、作者、年份与链接来自 CNN 研究固定演示预设的内置数据。",
+                        classification="fact",
+                        basis=CNN_PRESET_DEMO_SOURCE,
+                    )
+                ],
+                supporting_snippets=[
+                    EvidenceStatement(
+                        content=str(item["provenance"]),
+                        classification="inference",
+                        basis=CNN_PRESET_DEMO_SOURCE,
+                    )
+                ],
+                relevance=EvidenceStatement(
+                    content="CNN 固定演示预设候选：与固定研究主题的关联由预设定义，需人工核验。",
+                    classification="inference",
+                    basis=CNN_PRESET_DEMO_SOURCE,
+                ),
+                verification=EvidenceStatement(
+                    content=f"{CNN_PRESET_DEMO_NOTE}；如需真实证据，请重新执行正式检索。",
+                    classification="to_verify",
+                    basis=CNN_PRESET_DEMO_SOURCE,
+                ),
+                full_text_available=False,
+            )
+            for index, item in enumerate(CNN_PRESET_PAPERS)
+        ]
+        bundle = ConversationEvidenceBundle(
+            bundle_id="pending",
+            conversation_id=conversation_id,
+            query="",
+            requested_sources=[],
+            allowed_sources=[],
+            queried_sources=[],
+            source_statuses=[
+                AcademicSourceStatus(
+                    source=CNN_PRESET_DEMO_SOURCE,
+                    status="success",
+                    source_url=None,
+                    accessed_at=now_dt,
+                    reason=CNN_PRESET_DEMO_NOTE,
+                    duration_ms=0,
+                )
+            ],
+            searched_at=now_dt,
+            papers=papers,
+            source_links=[None for _ in papers],
+            failure_reasons=[],
+            provenance_note=(
+                "CNN 研究固定演示预设：候选来自内置固定演示数据"
+                f"（{CNN_PRESET_DEMO_SOURCE}），{CNN_PRESET_DEMO_NOTE}；"
+                "未访问任何外部论文源，也不代表真实论文检索已经成功。"
+            ),
+        )
+        record = ResearchEvidenceBundleModel(conversation_id=conversation_id, bundle_data={})
+        db.add(record)
+        db.flush()
+        record.bundle_data = bundle.model_copy(update={"bundle_id": record.id}).model_dump(
+            mode="json"
+        )
+        db.commit()
+
+    def _handle_cnn_preset(
+        self,
+        conversation_id: str,
+        state_model: ResearchOrchestratorStateModel,
+        user_message: str,
+        conv: ResearchConversationModel,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> OrchestratorMessageResponse:
+        """Run the deterministic CNN demo without invoking the LLM or search providers."""
+        subtasks = dict(state_model.subtasks or {})
+        completed_stages = list(state_model.completed_stages or [])
+
+        if is_cnn_preset_trigger(user_message):
+            return self._finalize_reply(
+                conversation_id, state_model, user_message, CNN_REPLY_INTRO, None, db,
+                template_name="cnn_preset_intro",
+            )
+
+        step = cnn_preset_step(conv.messages_data or [])
+        paper_confirmed = bool(subtasks.get("paper_selected"))
+        refusal = cnn_preset_refusal(user_message, paper_confirmed=paper_confirmed)
+        if refusal is not None:
+            template = (
+                "cnn_preset_blocked_reproduction"
+                if refusal == CNN_REPLY_BLOCK_REPRODUCTION
+                else "cnn_preset_blocked_stage4"
+                if refusal == CNN_REPLY_BLOCK_STAGE4
+                else "cnn_preset_blocked_analysis"
+            )
+            return self._finalize_reply(
+                conversation_id, state_model, user_message, refusal, None, db,
+                template_name=template,
+            )
+
+        if not cnn_preset_matches_step(step, user_message):
+            return self._finalize_reply(
+                conversation_id, state_model, user_message, CNN_REPLY_FALLBACK, None, db,
+                template_name="cnn_preset_fallback",
+            )
+
+        if step == "await_question_record":
+            subtasks["need_defined"] = True
+            state_model.current_stage = "research_plan"
+            if "research_need" not in completed_stages:
+                completed_stages.append("research_need")
+        elif step == "await_conditions":
+            self._write_cnn_preset_bundle(conversation_id, db)
+            subtasks["plan_generated"] = True
+            state_model.current_stage = "research_execution"
+            if "research_plan" not in completed_stages:
+                completed_stages.append("research_plan")
+        elif step == "await_confirm":
+            first = CNN_PRESET_PAPERS[0]
+            self.select_paper(
+                conversation_id,
+                SelectPaperRequest(
+                    paper_url=str(first["url"]),
+                    title=str(first["title"]),
+                    purpose="replace",
+                    metadata={"source_name": CNN_PRESET_DEMO_SOURCE},
+                ),
+                db,
+                owned_ids=owned_ids,
+            )
+            subtasks["paper_selected"] = True
+            subtasks["experiment_designed"] = True
+            state_model.current_stage = "research_analysis"
+            if "research_execution" not in completed_stages:
+                completed_stages.append("research_execution")
+
+        state_model.subtasks = subtasks
+        state_model.completed_stages = completed_stages
+        reply, template = {
+            "await_question_record": (CNN_REPLY_QUESTION_RECORDED, "cnn_preset_question_recorded"),
+            "await_conditions": (CNN_REPLY_PAPERS, "cnn_preset_papers"),
+            "await_select": (CNN_REPLY_SELECT, "cnn_preset_select"),
+            "await_confirm": (CNN_REPLY_CONFIRMED, "cnn_preset_confirmed"),
+            "await_analysis": (CNN_REPLY_ANALYSIS, "cnn_preset_analysis"),
+        }[step]
+        return self._finalize_reply(
+            conversation_id, state_model, user_message, reply, None, db,
+            template_name=template,
+        )
+
     def process_message(
         self,
         conversation_id: str,
@@ -1746,31 +1933,11 @@ class ResearchConversationOrchestrator:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         user_message = request.message.strip()
 
-        preset = CNN_RESEARCH_PRESET.reply(
-            user_message,
-            (state_model.learning_context or {}).get(CNN_RESEARCH_PRESET.marker),
-        )
-        if preset is not None:
-            context = dict(state_model.learning_context or {})
-            context[CNN_RESEARCH_PRESET.marker] = preset.step
-            state_model.learning_context = context
-            subtasks = dict(state_model.subtasks or {})
-            if preset.step in {"conditions", "papers", "paper_confirmation", "analysis"}:
-                subtasks["need_defined"] = True
-            if preset.step in {"papers", "paper_confirmation", "analysis"}:
-                subtasks["plan_generated"] = True
-            if preset.step == "analysis":
-                subtasks["paper_selected"] = True
-                state_model.current_stage = "research_analysis"
-                state_model.completed_stages = [
-                    "research_need",
-                    "research_plan",
-                    "research_execution",
-                ]
-            state_model.subtasks = subtasks
-            return self._finalize_reply(
-                conversation_id, state_model, user_message, preset.content, None, db,
-                template_name=CNN_RESEARCH_PRESET.marker,
+        if is_cnn_preset_trigger(user_message) or (
+            cnn_preset_step(conv.messages_data or []) != "trigger"
+        ):
+            return self._handle_cnn_preset(
+                conversation_id, state_model, user_message, conv, db, owned_ids=owned_ids
             )
 
         # Step 1: Detect history inquiry (deterministic, no stage advancement)

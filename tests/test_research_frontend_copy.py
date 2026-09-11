@@ -816,6 +816,18 @@ def test_search_candidate_cards_come_from_real_bundles_and_never_auto_select() -
     assert "selectOrchestratorPaper" not in cards
 
 
+def test_cnn_demo_candidate_cards_keep_demo_provenance_visible() -> None:
+    workspace = WORKSPACE.read_text(encoding="utf-8")
+    cards = Path("frontend/components/research/SearchCandidateCards.tsx").read_text(
+        encoding="utf-8"
+    )
+    candidates = Path("frontend/lib/research-candidates.ts").read_text(encoding="utf-8")
+    assert "isCnnPresetDemoCandidates" in workspace
+    assert "CNN_PRESET_DEMO_SOURCE_NAME" in candidates
+    assert "固定演示候选 · 不代表本次实时检索结果" in cards
+    assert "性质：固定演示候选，不代表本次实时检索结果" in cards
+
+
 def test_research_option_selector_parses_and_fills_input() -> None:
     """选择题选项：解析 A/B/C 选项组，点击只把回答填入底部输入框（不发送）。"""
     selector_source = Path(
