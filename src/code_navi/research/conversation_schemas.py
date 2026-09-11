@@ -779,6 +779,8 @@ class ConversationEvidenceBundle(BaseModel):
     provenance_note: str
     tool_audit: dict[str, object] | None = None
     cache_hit: bool = False
+    supplemental_query: str | None = None
+    supplemental_terms: list[str] = Field(default_factory=list)
 
 
 ExperimentEvidenceCategory = Literal[

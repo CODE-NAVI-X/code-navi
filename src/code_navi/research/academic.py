@@ -300,7 +300,15 @@ class AcademicSearchTool:
             else source_clients
         )
 
-    def search(self, session_id: str, query: str, sources: list[str]) -> dict[str, object]:
+    def search(
+        self,
+        session_id: str,
+        query: str,
+        sources: list[str],
+        *,
+        supplemental_query: str | None = None,
+        supplemental_terms: list[str] | None = None,
+    ) -> dict[str, object]:
         searched_at = datetime.now(UTC)
         source_statuses: list[dict[str, object]] = []
         candidate_papers: list[PaperMetadata] = []
@@ -309,6 +317,27 @@ class AcademicSearchTool:
         pending: list[tuple[str, AcademicSourceClient]] = []
         results: dict[str, AcademicSourceResult] = {}
         durations: dict[str, int] = {}
+
+        derived_terms = _extract_supplemental_terms(query)
+        if supplemental_terms is None:
+            effective_supplemental_terms = derived_terms
+        else:
+            effective_supplemental_terms = list(
+                dict.fromkeys([*supplemental_terms, *derived_terms])
+            )
+
+        if supplemental_query is not None:
+            effective_supplemental_query = supplemental_query
+        elif effective_supplemental_terms:
+            effective_supplemental_query = " ".join(effective_supplemental_terms)
+        else:
+            effective_supplemental_query = None
+
+        if effective_supplemental_query and _CJK_IDEOGRAPH_PATTERN.search(query):
+            source_query = f"{query} {effective_supplemental_query}".strip()
+        else:
+            source_query = query
+
         for source in dict.fromkeys(sources):
             client = self.source_clients.get(source)
             if client is None:
@@ -320,7 +349,8 @@ class AcademicSearchTool:
         with ThreadPoolExecutor(max_workers=max(1, len(pending))) as executor:
             started = time.perf_counter()
             future_sources = {
-                executor.submit(client.search, query): source for source, client in pending
+                executor.submit(client.search, source_query): source
+                for source, client in pending
             }
             for future in as_completed(future_sources):
                 source = future_sources[future]
@@ -360,12 +390,16 @@ class AcademicSearchTool:
         papers = filter_english_titles(
             [
                 _paper_payload(paper, query, doi=doi, arxiv_id=arxiv_id)
-                for paper, doi, arxiv_id in _deduplicate_and_rank(candidate_papers, query)
+                for paper, doi, arxiv_id in _deduplicate_and_rank(
+                    candidate_papers, query, supplemental_terms=effective_supplemental_terms
+                )
             ]
         )
         return {
             "session_id": session_id,
             "query": query,
+            "supplemental_query": effective_supplemental_query,
+            "supplemental_terms": effective_supplemental_terms,
             "allowed_sources": list(self.source_clients),
             "queried_sources": actual_sources,
             "source_statuses": source_statuses,
@@ -377,6 +411,7 @@ class AcademicSearchTool:
                 "结果仅来自用户显式选择且代码允许的学术来源；未执行全网搜索、正文下载或论文精读。"
             ),
         }
+
 
     def resolve_arxiv_paper(
         self,
@@ -499,7 +534,10 @@ def _paper_payload(
 
 
 def _deduplicate_and_rank(
-    papers: list[PaperMetadata], query: str
+    papers: list[PaperMetadata],
+    query: str,
+    *,
+    supplemental_terms: list[str] | None = None,
 ) -> list[tuple[PaperMetadata, str | None, str | None]]:
     groups: list[list[PaperMetadata]] = []
     for paper in papers:
@@ -516,7 +554,25 @@ def _deduplicate_and_rank(
         )
         for group in groups
     ]
-    return sorted(merged, key=lambda item: _ranking_key(item[0], query))
+    merged = [item for item in merged if _is_displayable_english_title(item[0].title)]
+    query_tokens = _relevance_tokens(query)
+    supp_tokens: set[str] = set()
+    if supplemental_terms:
+        for term in supplemental_terms:
+            supp_tokens |= _relevance_tokens(term)
+    combined_tokens = query_tokens | supp_tokens
+    if query.strip() or supp_tokens:
+        merged = [item for item in merged if _has_relevance_match(item[0], combined_tokens)]
+    return sorted(merged, key=lambda item: _ranking_key(item[0], query, combined_tokens))
+
+
+def _has_relevance_match(paper: PaperMetadata, query_tokens: set[str]) -> bool:
+    if not query_tokens:
+        return False
+    title_tokens = _relevance_tokens(paper.title)
+    abstract_tokens = _relevance_tokens(paper.abstract_excerpt or "")
+    author_tokens = set(_author_relevance_tokens(paper))
+    return bool(query_tokens & (title_tokens | abstract_tokens | author_tokens))
 
 
 def _same_paper(left: PaperMetadata, right: PaperMetadata) -> bool:
@@ -547,26 +603,44 @@ def _paper_quality(paper: PaperMetadata) -> tuple[int, int, int, int, str]:
     )
 
 
-def _ranking_key(paper: PaperMetadata, query: str) -> tuple[int, int, int, int, int, str, str]:
-    query_tokens = _tokens(query)
-    title_tokens = _tokens(paper.title)
-    author_tokens = set(_author_tokens(paper))
+def _author_relevance_tokens(paper: PaperMetadata) -> list[str]:
+    return [token for author in paper.authors for token in _relevance_tokens(author)]
+
+
+def _ranking_key(
+    paper: PaperMetadata,
+    query: str,
+    combined_tokens: set[str] | None = None,
+) -> tuple[int, int, int, int, int, int, str, str]:
+    if combined_tokens is None:
+        combined_tokens = _relevance_tokens(query)
+    title_tokens = _relevance_tokens(paper.title)
+    author_tokens = set(_author_relevance_tokens(paper))
     kind_score = {"original_paper": 3, "review": 2, "downstream_application": 1}[
         _paper_kind(paper)
     ]
-    title_matches = len(query_tokens & title_tokens)
-    author_matches = len(query_tokens & author_tokens)
-    keyword_coverage = len(query_tokens & _tokens(f"{paper.title} {paper.abstract_excerpt or ''}"))
+    title_matches = len(combined_tokens & title_tokens)
+    author_matches = len(combined_tokens & author_tokens)
+    keyword_coverage = len(
+        combined_tokens & _relevance_tokens(f"{paper.title} {paper.abstract_excerpt or ''}")
+    )
+    has_match = (
+        int(bool(title_matches or keyword_coverage or author_matches))
+        if combined_tokens
+        else 1
+    )
     year_score = int(paper.year is not None and 1800 <= paper.year <= 2100)
     return (
-        -kind_score,
+        -has_match,
         -title_matches,
-        -author_matches,
         -keyword_coverage,
+        -author_matches,
+        -kind_score,
         -year_score,
         _normalized_title(paper.title),
         paper.url.casefold(),
     )
+
 
 
 def _paper_kind(paper: PaperMetadata) -> PaperKind:
@@ -614,8 +688,148 @@ def _author_tokens(paper: PaperMetadata) -> list[str]:
     return [token for author in paper.authors for token in _tokens(author)]
 
 
+_CJK_IDEOGRAPH_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_ASCII_WORD_PATTERN = re.compile(r"[A-Za-z]{2,}")
+
+# Deterministic, explainable bilingual domain concept mappings for academic research queries.
+# Maps specific domain concept keywords / phrases to transparent English supplemental search terms.
+_ACADEMIC_DOMAIN_CONCEPT_BRIDGE: list[tuple[str, tuple[str, ...]]] = [
+    # CNN / Computer Vision
+    ("卷积神经网络", ("convolutional neural network", "CNN", "ResNet")),
+    ("卷积网络", ("convolutional neural network", "CNN")),
+    ("卷积", ("convolutional", "CNN")),
+    ("图像分类", ("image classification", "image recognition")),
+    ("图像识别", ("image recognition", "image classification")),
+    ("图像分割", ("image segmentation",)),
+    ("目标检测", ("object detection",)),
+    ("视觉变压器", ("vision transformer", "ViT")),
+    ("深度残差网络", ("deep residual learning", "ResNet")),
+    ("残差网络", ("residual network", "ResNet")),
+    # Graph Neural Networks
+    ("图神经网络", ("graph neural network", "GNN")),
+    ("图卷积网络", ("graph convolutional network", "GCN")),
+    ("图卷积", ("graph convolutional network", "GCN")),
+    ("图注意力网络", ("graph attention network", "GAT")),
+    ("动态图", ("dynamic graph",)),
+    ("节点分类", ("node classification",)),
+    ("图分类", ("graph classification",)),
+    ("边预测", ("link prediction",)),
+    ("引文网络", ("citation network",)),
+    ("分子性质预测", ("molecular property prediction",)),
+    ("半监督学习", ("semi-supervised learning",)),
+    ("半监督分类", ("semi-supervised classification",)),
+    # NLP & LLMs
+    ("自然语言处理", ("natural language processing", "NLP")),
+    ("大语言模型", ("large language model", "LLM")),
+    ("大模型", ("large language model", "LLM")),
+    ("预训练模型", ("pretrained model", "pre-trained")),
+    ("预训练", ("pre-training", "pre-trained")),
+    ("自注意力机制", ("self-attention",)),
+    ("注意力机制", ("attention mechanism",)),
+    ("机器翻译", ("machine translation",)),
+    ("文本分类", ("text classification",)),
+    ("情感分析", ("sentiment analysis",)),
+    ("知识图谱", ("knowledge graph",)),
+    ("向量检索", ("vector retrieval", "dense retrieval")),
+    # Security & Vulnerabilities
+    ("sql注入检测", ("SQL injection detection", "SQL injection")),
+    ("sql注入", ("SQL injection",)),
+    ("漏洞检测", ("vulnerability detection",)),
+    ("恶意代码检测", ("malware detection",)),
+    # Robotics & Reinforcement Learning
+    ("深度强化学习", ("deep reinforcement learning", "DRL")),
+    ("强化学习", ("reinforcement learning", "RL")),
+    ("路径规划", ("path planning",)),
+    ("机器人", ("robotics", "robot")),
+    # Quantum Computing
+    ("超导量子比特", ("superconducting qubits", "qubit")),
+    ("量子计算", ("quantum computing",)),
+    ("量子纠缠", ("quantum entanglement",)),
+    ("量子算法", ("quantum algorithm",)),
+    # Recommender Systems
+    ("推荐系统", ("recommender system", "recommendation")),
+    ("协同过滤", ("collaborative filtering",)),
+    # Education & Generative AI
+    ("生成式ai", ("generative AI",)),
+    ("生成式人工智能", ("generative AI",)),
+    ("代码生成", ("code generation",)),
+    ("编程教学", ("programming education",)),
+    ("编程学习", ("programming education", "programming learning")),
+    ("编程教育", ("programming education",)),
+    # General ML / Experiments
+    ("对照实验", ("controlled experiment", "comparative study")),
+    ("消融实验", ("ablation study",)),
+    ("过平滑", ("oversmoothing",)),
+    ("过拟合", ("overfitting",)),
+    ("迁移学习", ("transfer learning",)),
+    ("小样本学习", ("few-shot learning",)),
+    ("零样本学习", ("zero-shot learning",)),
+    ("多模态", ("multimodal",)),
+]
+
+
+def _extract_supplemental_terms(query: str) -> list[str]:
+    """Extract deterministic, transparent English supplemental terms for CJK domain concepts.
+
+    Does not use external translation or opaque network calls; uses an auditable domain bridge.
+    """
+    if not query or not query.strip():
+        return []
+    lowered = query.casefold()
+    supplemental_terms: list[str] = []
+    sorted_bridge = sorted(
+        _ACADEMIC_DOMAIN_CONCEPT_BRIDGE, key=lambda pair: len(pair[0]), reverse=True
+    )
+    for concept, terms in sorted_bridge:
+        if concept in lowered:
+            for term in terms:
+                if term not in supplemental_terms:
+                    supplemental_terms.append(term)
+    return supplemental_terms
+
+
+
+def _is_displayable_english_title(title: str | None) -> bool:
+    """Determine whether a paper title qualifies for user-facing English candidate display.
+
+    Transparent, conservative display qualification rules:
+    1. Returns False if title is None, empty, or whitespace.
+    2. Returns False if title contains any CJK ideographs
+       (\u3400-\u4dbf, \u4e00-\u9fff, \uf900-\ufaff).
+    3. Returns True only if title contains at least one ASCII word of length >= 2
+       (e.g. 'GCN', 'Network').
+    4. Formulas, numbers, symbols, punctuation, or single-letter tokens alone do not qualify.
+    """
+    if not title:
+        return False
+    compact_title = _compact(title)
+    if not compact_title:
+        return False
+    if _CJK_IDEOGRAPH_PATTERN.search(compact_title):
+        return False
+    return bool(_ASCII_WORD_PATTERN.search(compact_title))
+
+
+def _relevance_tokens(value: str) -> set[str]:
+    lowered = value.casefold()
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    cjk_blocks = re.findall(r"[\u4e00-\u9fff]+", lowered)
+    for block in cjk_blocks:
+        for i in range(len(block) - 1):
+            tokens.add(block[i : i + 2])
+    return tokens
+
+
 def _tokens(value: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", value.casefold()))
+    lowered = value.casefold()
+    tokens = set(re.findall(r"[a-z0-9]+", lowered))
+    cjk_blocks = re.findall(r"[\u4e00-\u9fff]+", lowered)
+    for block in cjk_blocks:
+        for char in block:
+            tokens.add(char)
+        for i in range(len(block) - 1):
+            tokens.add(block[i : i + 2])
+    return tokens
 
 
 def _text(element: ElementTree.Element, path: str, namespace: dict[str, str]) -> str | None:

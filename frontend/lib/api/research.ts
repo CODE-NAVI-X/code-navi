@@ -588,7 +588,10 @@ export interface ConversationEvidenceBundle {
   provenance_note: string;
   tool_audit: Record<string, unknown> | null;
   cache_hit: boolean;
+  supplemental_query?: string | null;
+  supplemental_terms?: string[];
 }
+
 
 export type ExperimentEvidenceCategory =
   | "data_or_sample"

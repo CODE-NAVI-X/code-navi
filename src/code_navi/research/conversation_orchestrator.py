@@ -1450,16 +1450,34 @@ class ResearchConversationOrchestrator:
         ):
             return _failed(outcome.reason or "Model provider unavailable or failed")
 
+        is_learning_mode = bool(
+            learning_ctx.get("learned_content") or learning_ctx.get("learning_progress")
+        )
         reply_content = outcome.reply_text.strip()
         scope_prefix = get_source_scope_prefix("welcome_and_bridge")
         if not reply_content.startswith(scope_prefix):
             reply_content = f"{scope_prefix}\n\n{reply_content}"
-        is_learning_mode = bool(prompt_data.get("is_learning_record_mode", False))
         valid, val_reason = validate_jiangjiang_output(
             reply_content,
             evidence_context=self._collect_traceable_evidence_context("", conv),
             learning_record_mode=is_learning_mode,
         )
+        if not valid and val_reason:
+            rewritten_ok, rewritten_content, new_err = self._attempt_controlled_rewrite(
+                reply_content,
+                val_reason,
+                template_name="welcome_and_bridge",
+                evidence_ctx=self._collect_traceable_evidence_context("", conv),
+                is_learning_mode=is_learning_mode,
+                is_hw_exempt=False,
+                conversation_id=conversation_id,
+            )
+            if rewritten_ok:
+                reply_content = rewritten_content
+                valid = True
+                val_reason = None
+            elif new_err:
+                val_reason = new_err
         if not valid:
             return _failed(f"Jiang Jiang output boundary validation failure: {val_reason}")
 
@@ -1473,6 +1491,86 @@ class ResearchConversationOrchestrator:
             db,
             template_name="welcome_and_bridge",
             include_user_message=False,
+        )
+
+    def _attempt_controlled_rewrite(
+        self,
+        reply_content: str,
+        val_reason: str,
+        *,
+        template_name: str,
+        evidence_ctx: Sequence[str] | str | None,
+        is_learning_mode: bool,
+        is_hw_exempt: bool,
+        conversation_id: str,
+    ) -> tuple[bool, str, str | None]:
+        """Attempt a single controlled rewrite for output boundary violations."""
+        rewrite_user_prompt = (
+            "【待受控改写的回复草稿】\n"
+            f"{reply_content}\n\n"
+            "【违反的科研边界】\n"
+            f"{val_reason}\n\n"
+            "【安全改写要求】\n"
+            "1. 请对上述回复草稿进行最小必要改写，严格移除无依据的“复现成功”、"
+            "虚假完成度或过度宣称；\n"
+            "2. 仅保留严谨、客观的待核验 (to_verify) 表述"
+            "（如说明“尚未确认复现成功”、“指标仅作为待核验对照”等）；\n"
+            "3. 严禁捏造或补全未经证实的实验数据、硬件配置、论文内容或评估指标；\n"
+            "4. 严禁包含任何 Emoji 图标；\n"
+            "5. 保持活泼专业的姜姜语气与原有回复的核心指导意图。\n"
+        )
+        outcome = self.llm_generator.generate(
+            system_prompt=JIANGJIANG_SYSTEM_PERSONA,
+            user_prompt=rewrite_user_prompt,
+            conversation_history=(),
+            conversation_id=conversation_id,
+        )
+        if (
+            outcome.status != "generated"
+            or not outcome.reply_text
+            or not outcome.reply_text.strip()
+        ):
+            return False, reply_content, (outcome.reason or "Controlled rewrite provider failed")
+
+        rewritten = outcome.reply_text.strip()
+        if template_name in {
+            "welcome_and_bridge",
+            "need_clarification",
+            "stage_transition",
+            "search_guidance",
+            "paper_intro",
+            "experiment_design",
+            "result_analysis",
+        }:
+            scope_prefix = get_source_scope_prefix(template_name)
+            if not rewritten.startswith(scope_prefix):
+                rewritten = f"{scope_prefix}\n\n{rewritten}"
+
+        valid, new_val_reason = validate_jiangjiang_output(
+            rewritten,
+            evidence_context=evidence_ctx,
+            learning_record_mode=is_learning_mode,
+            exempt_hardware_check=is_hw_exempt,
+        )
+        if not valid and new_val_reason and "hardware-feasibility" in new_val_reason:
+            remediated = remediate_hardware_assertions(rewritten)
+            re_valid, _ = validate_jiangjiang_output(
+                remediated,
+                evidence_context=evidence_ctx,
+                learning_record_mode=is_learning_mode,
+                exempt_hardware_check=is_hw_exempt,
+            )
+            if re_valid:
+                rewritten = remediated
+                valid = True
+                new_val_reason = None
+
+        if valid:
+            return True, rewritten, None
+        return (
+            False,
+            reply_content,
+            f"Controlled rewrite boundary validation failure: {new_val_reason}",
         )
 
     def _absorb_welcome_learning_input(
@@ -2045,22 +2143,6 @@ class ResearchConversationOrchestrator:
                         db,
                         **({"force_refresh": True} if force_refresh else {}),
                     )
-                    # Fallback retry if 0 papers returned and query contained Chinese
-                    if not bundle.papers and any('\u4e00' <= char <= '\u9fff' for char in query):
-                        en_parts = re.findall(r"[A-Za-z0-9_-]+", query)
-                        default_fallback = "SQL injection detection"
-                        fallback_q = (
-                            " ".join(en_parts) if len(en_parts) >= 2 else default_fallback
-                        )
-                        if fallback_q != query:
-                            retry_bundle = self.search_service.search(
-                                conversation_id,
-                                CreateConversationEvidenceBundleRequest(query=fallback_q),
-                                db,
-                                **({"force_refresh": True} if force_refresh else {}),
-                            )
-                            if retry_bundle.papers:
-                                bundle = retry_bundle
                 except Exception as err:
                     reply_content = (
                         "(｡･ω･｡) 姜姜按你的确认发起了正式检索，但这次检索未成功完成："
@@ -2215,6 +2297,22 @@ class ResearchConversationOrchestrator:
                     reply_content = remediated_content
                     valid = True
                     val_reason = None
+            if not valid and val_reason:
+                rewritten_ok, rewritten_content, new_err = self._attempt_controlled_rewrite(
+                    reply_content,
+                    val_reason,
+                    template_name="passive_tool",
+                    evidence_ctx=evidence_ctx,
+                    is_learning_mode=False,
+                    is_hw_exempt=is_exp_tool,
+                    conversation_id=conversation_id,
+                )
+                if rewritten_ok:
+                    reply_content = rewritten_content
+                    valid = True
+                    val_reason = None
+                elif new_err:
+                    val_reason = new_err
             if not valid:
                 err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
                 state_model.last_status = "failed"
@@ -2329,6 +2427,22 @@ class ResearchConversationOrchestrator:
                 reply_content = remediated_content
                 valid = True
                 val_reason = None
+        if not valid and val_reason:
+            rewritten_ok, rewritten_content, new_err = self._attempt_controlled_rewrite(
+                reply_content,
+                val_reason,
+                template_name=template_name,
+                evidence_ctx=evidence_ctx,
+                is_learning_mode=is_learning_mode,
+                is_hw_exempt=is_hw_exempt,
+                conversation_id=conversation_id,
+            )
+            if rewritten_ok:
+                reply_content = rewritten_content
+                valid = True
+                val_reason = None
+            elif new_err:
+                val_reason = new_err
         if not valid:
             err_msg = f"Jiang Jiang output boundary validation failure: {val_reason}"
             state_model.last_status = "failed"

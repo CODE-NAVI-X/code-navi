@@ -210,7 +210,7 @@ test("新会话没有任何 evidence bundle 时，候选被清空（页面不显
   assert.deepEqual(pickLatestCandidatePapers([]), []);
   assert.deepEqual(pickLatestCandidatePapers([{ papers: [] }]), []);
   // 页面只在有候选时才渲染候选卡
-  assert.ok(CONVERSATION_SOURCE.includes("searchCandidates.length > 0"));
+  assert.ok(CONVERSATION_SOURCE.includes("shouldShowSearchCandidates(searchCandidates, papers)"));
 });
 
 test("读取候选失败时按“没有候选”处理，不留旧值", async () => {
@@ -543,7 +543,7 @@ test("用例 5b：空结果后页面候选被清空，不再保留上一轮检�
     assert.equal(applied.at(-1).includes(old), false, `旧论文不得残留：${old}`);
   }
   // 页面只在有候选时才渲染候选区域
-  assert.ok(CONVERSATION_SOURCE.includes("searchCandidates.length > 0"));
+  assert.ok(CONVERSATION_SOURCE.includes("shouldShowSearchCandidates(searchCandidates, papers)"));
 });
 
 test("用例 5c：重试本轮完成后同样按最新 bundle 刷新候选", () => {

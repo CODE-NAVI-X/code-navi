@@ -2364,3 +2364,39 @@ def test_failed_rerun_search_does_not_fabricate_success_or_reuse_old_papers(
     # 没有落任何新 bundle（bundle 数不变），也没有伪造检索成功。
     assert search_service.saved_bundles == [old_bundle]
     assert _last_message_template(db_session, conv_id) == "search_results"
+
+
+def test_search_zero_papers_does_not_trigger_irrelevant_english_fallback(db_session) -> None:
+    """An empty Chinese search runs once and never substitutes an unrelated query."""
+    search_service = FakeSearchService(bundle=_make_evidence_bundle("conv-no-fallback-1", []))
+    orchestrator = ResearchConversationOrchestrator(
+        llm_generator=FakeOrchestratorLlmGenerator(), search_service=search_service
+    )
+    conv_id = "conv-no-fallback-1"
+    guidance_content = "【建议检索词】\n- `量子计算超导量子比特`\n【支持学术数据源】arXiv"
+    db_session.add(
+        ResearchConversationModel(
+            id=conv_id,
+            profile_data={"topic": "量子计算超导量子比特"},
+            messages_data=[
+                {
+                    "role": "assistant",
+                    "content": guidance_content,
+                    "template": "search_guidance",
+                }
+            ],
+        )
+    )
+    _make_execution_state(db_session, conv_id)
+
+    response = orchestrator.process_message(
+        conv_id,
+        SendOrchestratorMessageRequest(message="授权检索"),
+        db_session,
+    )
+
+    assert len(search_service.calls) == 1
+    assert "量子计算超导量子比特" in search_service.calls[0]
+    assert all("SQL injection" not in call for call in search_service.calls)
+    assert "没有检索到合适的论文" in response.reply_message.content
+    assert "不会编造候选" in response.reply_message.content
