@@ -21,10 +21,11 @@ from code_navi.research.models import ResearchConversationModel
 
 
 def test_cnn_preset_trigger_is_exact() -> None:
-    assert is_cnn_preset_trigger("我想研究CNN")
-    assert is_cnn_preset_trigger(" 我想研究CNN。 ")
-    assert not is_cnn_preset_trigger("我想研究 CNN")
-    assert not is_cnn_preset_trigger("我想研究CNN并帮我检索")
+    assert is_cnn_preset_trigger("我想研究CNN演示")
+    assert is_cnn_preset_trigger(" 我想研究CNN演示。 ")
+    assert not is_cnn_preset_trigger("我想研究CNN")
+    assert not is_cnn_preset_trigger("我想研究 CNN演示")
+    assert not is_cnn_preset_trigger("我想研究CNN演示并帮我检索")
 
 
 def test_cnn_preset_confirmation_persists_demo_bundle_and_current_paper(tmp_path) -> None:
@@ -46,7 +47,7 @@ def test_cnn_preset_confirmation_persists_demo_bundle_and_current_paper(tmp_path
                 session,
             )
 
-        send("我想研究CNN")
+        send("我想研究CNN演示")
         send("确认研究不同数据增强策略对 CNN SHAP 解释稳定性的影响")
         papers_reply = send("确认，按这个固定实验方案继续")
         assert "固定演示候选" in papers_reply.reply_message.content
@@ -97,7 +98,7 @@ def test_stage_four_reproduction_claim_keeps_evidence_boundary(tmp_path, message
             )
 
         for text in (
-            "我想研究CNN",
+                "我想研究CNN演示",
             "确认研究不同数据增强策略对 CNN SHAP 解释稳定性的影响",
             "确认，按这个固定实验方案继续",
             "我选择第1篇论文",

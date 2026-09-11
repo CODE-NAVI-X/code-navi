@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-CNN_PRESET_TRIGGER_TEXT = "我想研究CNN"
+# 普通入口 `我想研究CNN` 走固定提问流程；固定答案仅由显式演示入口触发。
+CNN_PRESET_TRIGGER_TEXT = "我想研究CNN演示"
 CNN_PRESET_DEMO_SOURCE = "CNN research preset demo fixture"
 CNN_PRESET_DEMO_NOTE = "固定演示候选，不代表本次实时检索结果"
 CNN_FIRST_PAPER_TITLE = "Deep Residual Learning for Image Recognition"

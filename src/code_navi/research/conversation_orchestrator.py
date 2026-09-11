@@ -17,6 +17,29 @@ from sqlalchemy.orm import Session
 from code_navi.providers import ProviderSettings, create_provider
 
 from .clarification_options import extract_clarification_options
+from .cnn_flow import (
+    CNN_FLOW_FALLBACK,
+    CNN_FLOW_FIELD_LABELS,
+    CNN_FLOW_QUESTIONS,
+    CNN_FLOW_SUGGESTIONS,
+    build_cnn_flow_queries,
+    classify_answer,
+    cnn_flow_field_update,
+    cnn_flow_matches_step,
+    cnn_flow_next_field,
+    cnn_flow_question_reply,
+    cnn_flow_recorded_reply,
+    cnn_flow_redline_reply,
+    cnn_flow_reply_intro,
+    cnn_flow_stage_four_reply,
+    cnn_flow_suggestion_adopted,
+    cnn_flow_suggestion_rejected,
+    cnn_flow_suggestion_reply,
+    cnn_flow_summary,
+    cnn_flow_summary_confirmed,
+    is_cnn_flow_demo_trigger,
+    is_cnn_flow_trigger,
+)
 from .cnn_preset import (
     CNN_PRESET_DEMO_NOTE,
     CNN_PRESET_DEMO_SOURCE,
@@ -1826,6 +1849,356 @@ class ResearchConversationOrchestrator:
         )
         db.commit()
 
+    def _handle_cnn_flow(
+        self,
+        conversation_id: str,
+        state_model: ResearchOrchestratorStateModel,
+        user_message: str,
+        conv: ResearchConversationModel,
+        db: Session,
+        *,
+        owned_ids: list[str] | None = None,
+    ) -> OrchestratorMessageResponse:
+        """CNN 固定**提问**流程：问题顺序固定，答案全部来自用户（不调用 LLM）。
+
+        红线/证据边界优先级最高，任何阶段（含第四阶段）都先于步骤匹配与 fallback。
+        """
+        flow = dict((state_model.subtasks or {}).get("cnn_flow") or {})
+        answers = dict(flow.get("answers") or {})
+        phase = str(flow.get("phase") or "asking")
+
+        # 触发消息本身不是对第一个问题的回答：进入流程只产出入口回复。
+        if is_cnn_flow_trigger(user_message):
+            flow = {"phase": "asking", "answers": {}}
+            state_model.subtasks = {**(state_model.subtasks or {}), "cnn_flow": flow}
+            return self._finalize_reply(
+                conversation_id,
+                state_model,
+                user_message,
+                cnn_flow_reply_intro(),
+                None,
+                db,
+                template_name="cnn_flow_intro",
+            )
+
+        def _save() -> None:
+            state_model.subtasks = {**(state_model.subtasks or {}), "cnn_flow": flow}
+
+        def _finalize(content: str, template: str) -> OrchestratorMessageResponse:
+            return self._finalize_reply(
+                conversation_id,
+                state_model,
+                user_message,
+                content,
+                None,
+                db,
+                template_name=template,
+            )
+
+        # 1) 红线/证据边界：优先级最高（与演示路径共用识别词与契约文案）。
+        redline = cnn_flow_redline_reply(user_message)
+        if redline is not None:
+            return _finalize(redline, "cnn_flow_blocked_reproduction")
+
+        # 2) 提问阶段：逐项收集，系统建议未确认前不得写入 confirmed 条件。
+        if phase == "asking":
+            field = cnn_flow_next_field(answers)
+            if field is None:
+                flow["phase"] = "await_summary_confirm"
+                _save()
+                return _finalize(cnn_flow_summary(answers), "cnn_flow_summary")
+            kind = classify_answer(field, user_message)
+            if kind == "recommend":
+                flow["pending_field"] = field
+                flow["phase"] = "confirm_suggestion"
+                flow["answers"] = {
+                    **answers,
+                    field: {
+                        "raw": user_message,
+                        "value": CNN_FLOW_SUGGESTIONS[field],
+                        "confirmed": False,
+                        "suggested": True,
+                    },
+                }
+                _save()
+                return _finalize(
+                    cnn_flow_suggestion_reply(field), "cnn_flow_suggestion"
+                )
+            if kind == "no_value":
+                answers = {
+                    **answers,
+                    field: {
+                        "raw": user_message,
+                        "value": None,
+                        "confirmed": True,
+                        "suggested": False,
+                    },
+                }
+            else:
+                answers = {
+                    **answers,
+                    field: {
+                        "raw": user_message,
+                        "value": user_message,
+                        "confirmed": True,
+                        "suggested": False,
+                    },
+                }
+            flow["answers"] = answers
+            next_field = cnn_flow_next_field(answers)
+            if next_field is None:
+                flow["phase"] = "await_summary_confirm"
+                _save()
+                return _finalize(cnn_flow_summary(answers), "cnn_flow_summary")
+            flow["phase"] = "asking"
+            _save()
+            return _finalize(
+                cnn_flow_recorded_reply(field, answers[field].get("value"))
+                + "\n\n"
+                + cnn_flow_question_reply(next_field),
+                "cnn_flow_question",
+            )
+
+        # 3) 系统建议的采纳/改答：只有用户明确确认才写入 confirmed 条件。
+        if phase == "confirm_suggestion":
+            field = flow.get("pending_field")
+            entry = dict(answers.get(field) or {})
+            if cnn_flow_suggestion_adopted(user_message):
+                entry.update(
+                    {
+                        "raw": user_message,
+                        "value": CNN_FLOW_SUGGESTIONS.get(field),
+                        "confirmed": True,
+                        "suggested": True,
+                    }
+                )
+            elif cnn_flow_suggestion_rejected(user_message):
+                flow["phase"] = "confirm_suggestion"
+                flow["pending_field"] = field
+                flow["answers"] = answers
+                _save()
+                return _finalize(
+                    cnn_flow_suggestion_reply(field), "cnn_flow_suggestion"
+                )
+            else:
+                kind = classify_answer(field or "", user_message)
+                entry.update(
+                    {
+                        "raw": user_message,
+                        "value": None if kind == "no_value" else user_message,
+                        "confirmed": True,
+                        "suggested": False,
+                    }
+                )
+            if field:
+                answers[field] = entry
+            flow["answers"] = answers
+            flow["pending_field"] = None
+            next_field = cnn_flow_next_field(answers)
+            if next_field is None:
+                flow["phase"] = "await_summary_confirm"
+                _save()
+                return _finalize(cnn_flow_summary(answers), "cnn_flow_summary")
+            flow["phase"] = "asking"
+            _save()
+            return _finalize(
+                cnn_flow_recorded_reply(field or "", entry.get("value"))
+                + "\n\n"
+                + cnn_flow_question_reply(next_field),
+                "cnn_flow_question",
+            )
+
+        # 4) 汇总确认：只有用户明确确认后才保存画像、生成计划、构造 query 并检索。
+        if phase == "await_summary_confirm":
+            if cnn_flow_summary_confirmed(user_message):
+                queries = build_cnn_flow_queries(answers)
+                if queries is None:
+                    return _finalize(
+                        "还没有可以用来检索的已确认研究方向，无法构造检索词。\n\n"
+                        "请先补充你的研究方向，我们再进入论文检索。",
+                        "cnn_flow_summary_pending",
+                    )
+                confirmed = {
+                    field: value
+                    for field, value in (
+                        (field, entry.get("value"))
+                        for field, entry in answers.items()
+                        if entry.get("confirmed")
+                    )
+                    if value
+                }
+                # ResearchProfile 是 extra="forbid" 的固定 schema：只写入既有字段；
+                # 用户没有提供的条件写进 uncertainties（未确定），绝不伪造。
+                profile = dict(conv.profile_data or {})
+                if confirmed.get("direction"):
+                    profile["topic"] = confirmed["direction"]
+                    profile["research_questions"] = [confirmed["direction"]]
+                if confirmed.get("dataset"):
+                    profile["data_requirements"] = confirmed["dataset"]
+                if confirmed.get("model"):
+                    profile["methods"] = [confirmed["model"]]
+                if confirmed.get("metrics"):
+                    profile["metrics"] = [confirmed["metrics"]]
+                if confirmed.get("explanation_method"):
+                    profile["evidence_preferences"] = [confirmed["explanation_method"]]
+                if confirmed.get("scale"):
+                    profile["time_scope"] = confirmed["scale"]
+                constraints = [
+                    f"{label}：{confirmed[field]}"
+                    for field, label in (
+                        ("input_size", "输入尺寸"),
+                        ("compute", "计算资源"),
+                        ("test_samples", "测试样本"),
+                        ("random_seeds", "随机种子"),
+                        ("epochs", "训练轮数"),
+                    )
+                    if confirmed.get(field)
+                ]
+                if constraints:
+                    profile["constraints"] = constraints
+                missing = [
+                    CNN_FLOW_FIELD_LABELS[field]
+                    for field, _question, _allow in CNN_FLOW_QUESTIONS
+                    if field != "direction" and not confirmed.get(field)
+                ]
+                if missing:
+                    profile["uncertainties"] = [
+                        f"{label}：未确定" for label in missing
+                    ]
+                conv.profile_data = profile
+                try:
+                    self.search_service.search(
+                        conversation_id,
+                        CreateConversationEvidenceBundleRequest(query=queries["query_en"]),
+                        db,
+                    )
+                except Exception as err:  # 如实报告检索失败，不伪造结果
+                    return _finalize(
+                        "研究画像已保存，但这次检索没有成功完成："
+                        f"{err}\n\n没有编造任何检索结果。可以稍后重试，或调整检索词。",
+                        "cnn_flow_search_failed",
+                    )
+                flow["phase"] = "await_select"
+                flow["query_zh"] = queries["query_zh"]
+                flow["query_en"] = queries["query_en"]
+                _save()
+                subtasks = dict(state_model.subtasks or {})
+                subtasks.update(
+                    {
+                        "need_defined": True,
+                        "profile_ready": True,
+                        "plan_generated": True,
+                    }
+                )
+                state_model.subtasks = subtasks
+                state_model.current_stage = "research_execution"
+                completed = list(state_model.completed_stages or [])
+                for stage in ("research_need", "research_plan"):
+                    if stage not in completed:
+                        completed.append(stage)
+                state_model.completed_stages = completed
+                lines = [
+                    "研究画像已保存（只包含你已确认的条件）。",
+                    "",
+                    f"原始中文研究描述：{queries['query_zh']}",
+                    f"supplemental English query：{queries['query_en']}",
+                    "",
+                    "现在进入论文检索阶段。已按上述 query 完成一次真实检索，"
+                    "候选论文如下（英文标题已过滤）：",
+                    "",
+                ]
+                bundles = self.search_service.list_bundles(conversation_id, db)
+                for index, paper in enumerate(
+                    (bundles[0].papers if bundles else [])[:5], start=1
+                ):
+                    source_line = f"{paper.source_name} · {paper.year or '年份未标注'}"
+                    lines.append(f"{index}. {paper.title}\n   来源：{source_line}")
+                if not bundles or not bundles[0].papers:
+                    lines.append("（这次检索没有返回合适的英文论文，未用无关论文补位。）")
+                return _finalize("\n".join(lines), "cnn_flow_search_results")
+
+            update = cnn_flow_field_update(user_message)
+            if update is not None:
+                field, value = update
+                answers = {
+                    **answers,
+                    field: {
+                        "raw": user_message,
+                        "value": value,
+                        "confirmed": True,
+                        "suggested": False,
+                    },
+                }
+                flow["answers"] = answers
+                _save()
+                return _finalize(
+                    f"已更新{field}。\n\n" + cnn_flow_summary(answers),
+                    "cnn_flow_summary",
+                )
+            return _finalize(
+                "请回复“确认”表示以上内容准确，或告诉我要修改的字段与内容（例如“数据集：MNIST”）。",
+                "cnn_flow_summary_pending",
+            )
+
+        # 5) 论文候选 → 二次确认 → 第四阶段（复用现有 select_paper 与门控）。
+        if phase == "await_select":
+            if not cnn_flow_matches_step(phase, user_message):
+                return _finalize(CNN_FLOW_FALLBACK, "cnn_flow_fallback")
+            bundles = self.search_service.list_bundles(conversation_id, db)
+            paper = bundles[0].papers[0] if bundles and bundles[0].papers else None
+            if paper is None:
+                return _finalize(
+                    "当前没有可选择的论文候选：请先完成一次检索。",
+                    "cnn_flow_select",
+                )
+            flow["pending_paper"] = {"url": paper.url, "title": paper.title}
+            flow["phase"] = "await_confirm"
+            _save()
+            return _finalize(
+                f"你选择的是：\n\n{paper.title}\n\n"
+                "这篇论文将作为本次复现候选。\n\n请再次确认：\n\n"
+                "是否将这篇论文设为当前复现论文？",
+                "cnn_flow_select",
+            )
+
+        if phase == "await_confirm":
+            if not cnn_flow_matches_step(phase, user_message):
+                return _finalize(CNN_FLOW_FALLBACK, "cnn_flow_fallback")
+            pending = flow.get("pending_paper") or {}
+            self.select_paper(
+                conversation_id,
+                SelectPaperRequest(
+                    paper_url=str(pending.get("url") or ""),
+                    title=str(pending.get("title") or ""),
+                    purpose="replace",
+                ),
+                db,
+                owned_ids=owned_ids,
+            )
+            subtasks = dict(state_model.subtasks or {})
+            subtasks["paper_selected"] = True
+            subtasks["experiment_designed"] = True
+            state_model.subtasks = subtasks
+            flow["phase"] = "await_analysis"
+            _save()
+            return _finalize(
+                "论文确认完成。\n\n"
+                f"当前复现论文：\n\n{pending.get('title')}\n\n"
+                "现在可以进入第四阶段：结果分析。",
+                "cnn_flow_confirmed",
+            )
+
+        if phase == "await_analysis":
+            if not cnn_flow_matches_step(phase, user_message):
+                return _finalize(CNN_FLOW_FALLBACK, "cnn_flow_fallback")
+            flow["phase"] = "finished"
+            _save()
+            state_model.current_stage = "research_analysis"
+            return _finalize(
+                cnn_flow_stage_four_reply(answers), "cnn_flow_analysis"
+            )
+
+        return _finalize(CNN_FLOW_FALLBACK, "cnn_flow_fallback")
     def _handle_cnn_preset(
         self,
         conversation_id: str,
@@ -1938,7 +2311,16 @@ class ResearchConversationOrchestrator:
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         user_message = request.message.strip()
 
-        if is_cnn_preset_trigger(user_message) or (
+        # Normal CNN entry uses the fixed-question flow; all experiment conditions
+        # are supplied and confirmed by the user. The fixed demo remains isolated
+        # behind its explicit demo trigger.
+        if is_cnn_flow_trigger(user_message) or (
+            (state_model.subtasks or {}).get("cnn_flow") is not None
+        ):
+            return self._handle_cnn_flow(
+                conversation_id, state_model, user_message, conv, db, owned_ids=owned_ids
+            )
+        if is_cnn_flow_demo_trigger(user_message) or (
             cnn_preset_step(conv.messages_data or []) != "trigger"
         ):
             return self._handle_cnn_preset(
