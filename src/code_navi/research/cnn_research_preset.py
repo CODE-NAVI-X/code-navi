@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+_PAPER_CONFIRMATION_REQUIRED_STEPS = {
+    "question",
+    "conditions",
+    "papers",
+    "paper_confirmation",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class CnnPresetReply:
@@ -28,11 +35,11 @@ class CnnResearchPreset:
                 "目前没有足够的实验运行证据，不能确认“复现成功”。\n\n"
                 "当前只能记录为待验证状态。",
             )
-        if step in {"question", "conditions", "papers", "paper_confirmation"} and "第四阶段" in message:
+        if step in _PAPER_CONFIRMATION_REQUIRED_STEPS and "第四阶段" in message:
             return CnnPresetReply(
                 step, "当前还不能进入第四阶段。\n\n请先明确确认一篇论文作为当前复现论文。"
             )
-        if step in {"question", "conditions", "papers", "paper_confirmation"} and "继续分析" in message:
+        if step in _PAPER_CONFIRMATION_REQUIRED_STEPS and "继续分析" in message:
             return CnnPresetReply(step, "当前论文尚未确认，暂不能开始结果分析。")
         if step == "question" and "确认研究不同数据增强策略" in message:
             return CnnPresetReply("conditions", self._conditions())

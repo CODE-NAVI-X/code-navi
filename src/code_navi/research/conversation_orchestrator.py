@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from code_navi.providers import ProviderSettings, create_provider
 
-from .cnn_research_preset import CNN_RESEARCH_PRESET
 from .clarification_options import extract_clarification_options
+from .cnn_research_preset import CNN_RESEARCH_PRESET
 from .conversation_guidance import (
     ResearchConversationGuidanceService,
     StudyRecommendationsNotConfirmedError,
