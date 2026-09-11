@@ -30,44 +30,90 @@ CNN_FLOW_TRIGGER_TEXT = "我想研究CNN"
 #: 隔离的演示路径触发（与普通入口互斥）。
 CNN_FLOW_DEMO_TRIGGER_TEXT = "我想研究CNN演示"
 
+CNN_DIRECTION_FOCUS_QUESTION = (
+    "这个方向很有意思～为了后面不把问题摊得太开，我们先选一个你最想看的切口吧 "
+    "(｡•̀ᴗ-)✧\n\n"
+    "A. 先弄清 CNN 的工作机制\n"
+    "B. 比较模型在数据变化下的鲁棒性\n"
+    "C. 研究模型为什么会做出这样的判断，也就是可解释性\n"
+    "D. 还没决定，先听听我的建议"
+)
+
 CNN_FLOW_FALLBACK = "当前正在执行 CNN 研究流程。\n\n请按照当前步骤完成确认，不要跳过论文确认。"
 
 #: (字段, 问题文本, 是否允许“请推荐”)。顺序即产品契约。
 CNN_FLOW_QUESTIONS: tuple[tuple[str, str, bool], ...] = (
     (
         "direction",
-        "你想研究 CNN 的哪一个方面？\n\n"
-        "你可以直接输入自己的想法，也可以选择：\n\n"
+        "你更想从 CNN 的哪一块开始？我们先把研究目标说清楚，后面选数据和实验方法会轻松很多～\n\n"
+        "还没想好也没关系，可以先看看这些方向：\n\n"
         "A. 用 CNN 完成一个具体任务\n"
         "B. 改进 CNN 的结构或训练方法\n"
         "C. 研究数据增强对 CNN 的影响\n"
-        "D. 研究 CNN 的可解释性\n"
+        "D. 研究 CNN 的机制、鲁棒性或可解释性\n"
         "E. 还没有想好",
         False,
     ),
-    ("dataset", "问题 2：你准备使用什么数据集？\n如果还没有确定，可以说“还没有”。", True),
-    ("model", "问题 3：你准备使用什么 CNN 模型？\n如果还没有确定，可以说“请推荐”。", True),
-    ("input_size", "问题 4：你的输入图像尺寸是多少？\n如果不知道，可以说“不确定”。", False),
     (
-        "compute",
-        "问题 5：你目前有什么计算资源？\n"
-        "请说明 GPU 型号和显存；如果没有 GPU，也请直接说明。",
+        "dataset",
+        "接下来聊聊数据集：你准备使用什么数据集？\n"
+        "我为什么要问这一项呢？是想确认后面的实验能不能真正落地；还没决定也没关系，直接说“还没有”就好。",
+        True,
+    ),
+    (
+        "model",
+        "模型方面呢？你准备使用什么 CNN 模型？\n"
+        "模型会影响训练成本和后面的解释方式；如果还没选定，可以让我帮你推荐一个起点。",
+        True,
+    ),
+    (
+        "input_size",
+        "输入图像尺寸大概是多少？这会影响显存和训练时间。\n"
+        "如果还没确定，告诉我“不确定”就可以。",
         False,
     ),
-    ("test_samples", "问题 6：你计划使用多少张测试样本？\n如果还没有决定，可以说“请推荐”。", True),
-    ("random_seeds", "问题 7：你希望使用几个随机种子？\n可以输入数量，也可以让系统推荐。", True),
-    ("epochs", "问题 8：每组实验计划训练多少轮？\n如果还没有决定，可以说“请推荐”。", True),
+    (
+        "compute",
+        "再看一下手头的计算资源：你现在能用什么 GPU 或设备？\n"
+        "请尽量告诉我型号和显存，这样我能帮你把实验规模估得更稳；没有 GPU 也可以直接说。",
+        False,
+    ),
+    (
+        "test_samples",
+        "为了估算实验量，你打算用多少张测试样本？\n"
+        "样本不用一开始就定得特别大；还没决定的话，我可以先给你一个建议。",
+        True,
+    ),
+    (
+        "random_seeds",
+        "随机种子准备设几个？多几个种子，才能更好地观察稳定性。\n"
+        "如果暂时没想好，可以让我帮你推荐。",
+        True,
+    ),
+    (
+        "epochs",
+        "每组实验打算训练多少轮？这一项主要是为了控制实验量。\n"
+        "没有把握的话，也可以先听听我的建议。",
+        True,
+    ),
     (
         "explanation_method",
-        "问题 9：你希望使用什么解释方法？\n如果还没有决定，可以说“请推荐”。",
+        "解释方法想用哪一种？选对方法，后面分析特征归因会更顺手。\n"
+        "如果还没选定，我可以给你一个适合 CNN 的建议。",
         True,
     ),
     (
         "metrics",
-        "问题 10：你准备用什么指标衡量解释稳定性？\n如果还没有决定，可以说“请推荐”。",
+        "你准备怎么判断 SHAP 解释是否稳定？\n"
+        "还没定指标的话，我可以陪你一起梳理，不用现在就把公式想全。",
         True,
     ),
-    ("scale", "问题 11：你希望先做小规模验证，还是直接进行完整实验？", False),
+    (
+        "scale",
+        "最后，我们安排一下实验规模：你想先做小规模验证，还是直接进行完整实验？\n"
+        "我通常建议先把流程跑通，再考虑扩大范围，会更省力一些。",
+        False,
+    ),
 )
 
 CNN_FLOW_FIELD_LABELS: dict[str, str] = {
@@ -232,10 +278,10 @@ def cnn_flow_reply_intro() -> str:
     """入口回复：不得写死任何实验条件，且一次只问第一个问题。"""
     first_field, first_question, _ = CNN_FLOW_QUESTIONS[0]
     return (
-        "我知道了，你想围绕 CNN 开展研究。\n\n"
-        "我会先逐步确认你的研究方向、数据条件和实验资源，"
-        "不会直接替你假设实验参数。\n\n"
-        "我们先从研究目标开始。\n\n"
+        "好呀，那我们就从 CNN 开始吧～(｡•̀ᴗ-)✧\n\n"
+        "不用一次把所有条件都想好，我会陪你一项一项确认；"
+        "你想到什么就说什么，暂时没答案也完全没关系。\n\n"
+        "我们先从你最在意的研究目标开始：\n\n"
         f"{first_question}"
     )
 
@@ -252,13 +298,30 @@ def cnn_flow_recorded_reply(field: str, value: str | None) -> str:
     """确认用户刚给出的回答（逐字复述，不增删用户没有说过的内容）。"""
     label = CNN_FLOW_FIELD_LABELS[field]
     shown = value if value else "未确定"
-    return f"已记录你的{label}：\n\n{shown}"
+    return f"收到～我先把你的{label}记下来了 (๑•̀ㅂ•́)و✧\n\n{shown}"
 
 
 def cnn_flow_suggestion_reply(field: str) -> str:
     """给出系统建议，并明确“尚未确认”。"""
     suggestion = CNN_FLOW_SUGGESTIONS[field]
-    return f"系统建议：{suggestion}\n该建议尚未确认。是否采用这个方案？"
+    return (
+        f"如果你还没有把握，我先给你一个常用起点：{suggestion} ～\n\n"
+        "这是姜姜的建议，尚未确认，也不会替你自动决定。\n"
+        "你觉得这个起点合适吗？想采用的话直接回复“确认”就好。"
+    )
+
+
+def cnn_flow_direction_needs_focus(text: str) -> bool:
+    """判断宽泛的 CNN 机制方向是否需要先追问具体切口。"""
+    normalized = (text or "").strip()
+    return (
+        "机制" in normalized and "鲁棒性" in normalized and "可解释性" in normalized
+    ) or normalized.endswith("CNN 的可解释性")
+
+
+def cnn_flow_direction_focus_reply() -> str:
+    """宽泛方向的自然追问，不写入任何预设实验条件。"""
+    return CNN_DIRECTION_FOCUS_QUESTION
 
 
 def cnn_flow_summary(answers: Mapping[str, Mapping[str, object]]) -> str:
@@ -274,9 +337,9 @@ def cnn_flow_summary(answers: Mapping[str, Mapping[str, object]]) -> str:
         else:
             lines.append(f"{label}：未确定")
     return (
-        "以下是本次研究条件的汇总（只包含你已输入或明确确认的内容）：\n\n"
+        "好，我们先把刚才确认的内容对一遍～如果哪里不准确，你直接指出来就行 (｡･ω･｡)ﾉ♡\n\n"
         + "\n".join(lines)
-        + "\n\n以上内容是否准确？"
+        + "\n\n你看看有没有需要改的；如果没问题，回复“确认”，我再帮你开始论文检索～"
     )
 
 
@@ -421,6 +484,8 @@ __all__ = [
     "CNN_FLOW_TRIGGER_TEXT",
     "build_cnn_flow_queries",
     "cnn_flow_confirmed_values",
+    "cnn_flow_direction_focus_reply",
+    "cnn_flow_direction_needs_focus",
     "cnn_flow_field_update",
     "cnn_flow_matches_step",
     "cnn_flow_next_field",

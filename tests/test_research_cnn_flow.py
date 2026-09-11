@@ -18,8 +18,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from code_navi.db import Base
-from code_navi.research.academic import AcademicSearchTool, AcademicSourceResult, PaperMetadata
-from code_navi.research.cnn_flow import CNN_FLOW_DEMO_TRIGGER_TEXT
+from code_navi.research.academic import (
+    AcademicSearchTool,
+    AcademicSourceResult,
+    PaperMetadata,
+)
+from code_navi.research.cnn_flow import (
+    CNN_FLOW_DEMO_TRIGGER_TEXT,
+    CNN_FLOW_QUESTIONS,
+    cnn_flow_question_reply,
+    cnn_flow_recorded_reply,
+    cnn_flow_reply_intro,
+    cnn_flow_suggestion_reply,
+    is_cnn_flow_trigger,
+)
 from code_navi.research.conversation_orchestrator import (
     OrchestratorLlmOutcome,
     ResearchConversationOrchestrator,
@@ -166,8 +178,50 @@ def test_trigger_enters_the_fixed_question_flow(db_session) -> None:
     assert llm.calls == 0  # 提问流程不经过 LLM
     texts = _assistant_texts(db_session, conv_id)
     assert len(texts) == 1
-    assert "我知道了，你想围绕 CNN 开展研究" in texts[0]
-    assert "你想研究 CNN 的哪一个方面？" in texts[0]
+    assert "好呀，那我们就从 CNN 开始吧～" in texts[0]
+    assert "你更想从 CNN 的哪一块开始？" in texts[0]
+
+
+def test_public_trigger_accepts_lowercase_cnn_without_internal_flow_wording() -> None:
+    """用户输入大小写变体时仍进入自然逐项提问，不能暴露实现标签。"""
+    assert is_cnn_flow_trigger("我想研究cnn") is True
+    reply = cnn_flow_reply_intro()
+    assert "固定流程" not in reply
+    assert "主题已经固定" not in reply
+    assert "演示预设" not in reply
+
+
+def test_cnn_dialogue_copy_is_warm_and_not_form_like() -> None:
+    """固定的是推进顺序，不应把姜姜说成冷冰冰的表单。"""
+    assert "好呀" in cnn_flow_reply_intro()
+    assert "不用一次把所有条件都想好" in cnn_flow_reply_intro()
+    assert "(｡•̀ᴗ-)✧" in cnn_flow_reply_intro()
+    assert "为什么要问" in cnn_flow_question_reply("dataset")
+    assert "已记录" not in cnn_flow_recorded_reply("dataset", "CIFAR-10")
+    assert "收到" in cnn_flow_recorded_reply("dataset", "CIFAR-10")
+    assert "(๑•̀ㅂ•́)و✧" in cnn_flow_recorded_reply("dataset", "CIFAR-10")
+    assert "尚未确认" in cnn_flow_suggestion_reply("dataset")
+    assert all("问题 2：" not in question for _, question, _ in CNN_FLOW_QUESTIONS)
+
+
+def test_broad_direction_choice_asks_focus_before_dataset(db_session) -> None:
+    """宽泛的机制/鲁棒性/可解释性方向必须先细化，不能直接跳到数据集。"""
+    conv_id = "flow-direction-focus"
+    orchestrator, _, _ = _make_conversation(db_session, conv_id)
+
+    _send(orchestrator, db_session, conv_id, TRIGGER)
+    _send(orchestrator, db_session, conv_id, "研究 CNN 的机制、鲁棒性或可解释性")
+    focus_prompt = _assistant_texts(db_session, conv_id)[-1]
+
+    assert "先选一个你最想看的切口" in focus_prompt
+    assert "机制" in focus_prompt and "鲁棒性" in focus_prompt and "可解释性" in focus_prompt
+    assert "数据集" not in focus_prompt
+
+    _send(orchestrator, db_session, conv_id, "我想先看特征可解释性")
+    next_prompt = _assistant_texts(db_session, conv_id)[-1]
+    assert "数据集" in next_prompt
+    direction = _flow_state(orchestrator, db_session, conv_id)["answers"]["direction"]
+    assert "特征可解释性" in direction["value"]
 
 
 @pytest.mark.parametrize(
@@ -195,7 +249,7 @@ def test_only_one_question_is_asked_at_a_time(db_session) -> None:
     _send(orchestrator, db_session, conv_id, TRIGGER)
 
     text = _assistant_texts(db_session, conv_id)[0]
-    assert "你想研究 CNN 的哪一个方面？" in text
+    assert "你更想从 CNN 的哪一块开始？" in text
     assert "你准备使用什么数据集？" not in text
     assert "你准备使用什么 CNN 模型？" not in text
 
@@ -248,8 +302,8 @@ def test_recommendation_is_not_auto_confirmed(db_session) -> None:
     dataset = flow["answers"]["dataset"]
     assert dataset["confirmed"] is False
     assert dataset["suggested"] is True
-    assert "该建议尚未确认" in _assistant_texts(db_session, conv_id)[-1]
-    assert "是否采用这个方案" in _assistant_texts(db_session, conv_id)[-1]
+    assert "尚未确认" in _assistant_texts(db_session, conv_id)[-1]
+    assert "你觉得这个起点合适吗" in _assistant_texts(db_session, conv_id)[-1]
 
 
 def test_explicit_confirmation_adopts_the_suggestion(db_session) -> None:
@@ -342,7 +396,7 @@ def test_summary_only_contains_user_answers(db_session) -> None:
     assert "研究方向" in summary and "研究数据增强对 CNN 解释稳定性的影响" in summary
     assert "数据集" in summary and "CIFAR-10" in summary
     assert "输入尺寸" in summary and "未确定" in summary
-    assert "以上内容是否准确？" in summary
+    assert "回复“确认”，我再帮你开始论文检索" in summary
 
 
 def test_stage_four_requires_explicit_summary_confirmation(db_session) -> None:
@@ -355,11 +409,16 @@ def test_stage_four_requires_explicit_summary_confirmation(db_session) -> None:
     conv = db_session.get(ResearchConversationModel, conv_id)
     profile_before = dict(conv.profile_data or {})
 
-    _send(orchestrator, db_session, conv_id, "确认，以上内容准确。")
+    response = _send(orchestrator, db_session, conv_id, "确认，以上内容准确。")
 
     assert len(source.queries) == 1  # 确认后才检索
     conv = db_session.get(ResearchConversationModel, conv_id)
     assert (conv.profile_data or {}) != profile_before  # 研究画像已保存
+    content = response.reply_message.content or ""
+    assert "英文标题已过滤" not in content
+    assert "第三阶段" in content
+    assert "文献精读" in content
+    assert "实验方案" in content
 
 
 def test_query_uses_user_confirmed_terms_and_no_display_labels(db_session) -> None:
