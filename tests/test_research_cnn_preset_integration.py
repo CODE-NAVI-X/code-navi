@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -69,6 +70,54 @@ def test_cnn_preset_confirmation_persists_demo_bundle_and_current_paper(tmp_path
         assert papers.current_paper.paper_url == str(CNN_PRESET_PAPERS[0]["url"])
         assert confirmed.state.current_stage == "research_analysis"
         assert confirmed.state.subtasks.paper_selected is True
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["复现成功", "复现成功。", "已经复现成功", "实验成功了", "我觉得已经复现成功了"],
+)
+def test_stage_four_reproduction_claim_keeps_evidence_boundary(tmp_path, message) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'cnn_redline.db'}")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    conversation_id = "cnn-redline-integration"
+    session.add(ResearchConversationModel(id=conversation_id, profile_data={}, messages_data=[]))
+    session.commit()
+    try:
+        orchestrator = ResearchConversationOrchestrator()
+
+        def send(text: str):
+            return orchestrator.process_message(
+                conversation_id,
+                SendOrchestratorMessageRequest(message=text),
+                session,
+            )
+
+        for text in (
+            "我想研究CNN",
+            "确认研究不同数据增强策略对 CNN SHAP 解释稳定性的影响",
+            "确认，按这个固定实验方案继续",
+            "我选择第1篇论文",
+            "确认，将这篇论文设为当前复现论文",
+            "进入第四阶段",
+        ):
+            send(text)
+
+        response = send(message)
+        content = response.reply_message.content
+        assert "目前没有足够的实验运行证据，不能确认" in content
+        assert "待验证" in content
+        assert "请按照当前步骤完成确认" not in content
+        assert "当前正在执行 CNN 固定演示流程" not in content
+
+        papers = orchestrator.get_papers(conversation_id, session)
+        assert papers.current_paper is not None
+        state = orchestrator.get_state_model(conversation_id, session)
+        assert state.current_stage == "research_analysis"
+        assert state.subtasks.get("paper_selected") is True
     finally:
         session.close()
         engine.dispose()

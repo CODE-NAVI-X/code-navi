@@ -184,12 +184,26 @@ def cnn_preset_step(messages: Sequence[Mapping[str, object]]) -> str:
     return "trigger"
 
 
+# Reproduction-success claims are handled before any preset step or fallback.
+# This checks only the current user message; assistant history is never parsed
+# as a new user claim by the orchestrator.
+_REPRODUCTION_SUCCESS_MARKERS = ("复现成功", "实验成功", "成功复现")
+
+
+def is_reproduction_success_claim(message: str) -> bool:
+    """Return whether the current user message claims successful reproduction."""
+    text = (message or "").strip()
+    return any(marker in text for marker in _REPRODUCTION_SUCCESS_MARKERS)
+
+
 def cnn_preset_refusal(message: str, *, paper_confirmed: bool) -> str | None:
     text = (message or "").strip()
-    if not text or paper_confirmed:
+    if not text:
         return None
-    if "复现成功" in text:
+    if is_reproduction_success_claim(text):
         return CNN_REPLY_BLOCK_REPRODUCTION
+    if paper_confirmed:
+        return None
     if "第四阶段" in text:
         return CNN_REPLY_BLOCK_STAGE4
     if any(token in text for token in ("结果分析", "继续分析", "开始分析")) or (

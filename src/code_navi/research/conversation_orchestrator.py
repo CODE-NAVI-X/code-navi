@@ -1907,6 +1907,11 @@ class ResearchConversationOrchestrator:
             "await_confirm": (CNN_REPLY_CONFIRMED, "cnn_preset_confirmed"),
             "await_analysis": (CNN_REPLY_ANALYSIS, "cnn_preset_analysis"),
         }[step]
+        if step == "await_analysis":
+            state_model.current_stage = "research_analysis"
+            if "research_execution" not in completed_stages:
+                completed_stages.append("research_execution")
+            state_model.completed_stages = completed_stages
         return self._finalize_reply(
             conversation_id, state_model, user_message, reply, None, db,
             template_name=template,
