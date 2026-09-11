@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from code_navi.providers import ProviderSettings, create_provider
 
 from .clarification_options import extract_clarification_options
+from .cnn_research_preset import CNN_RESEARCH_PRESET
 from .conversation_guidance import (
     ResearchConversationGuidanceService,
     StudyRecommendationsNotConfirmedError,
@@ -1744,6 +1745,33 @@ class ResearchConversationOrchestrator:
 
         state_model = self.get_state_model(conversation_id, db, owned_ids=owned_ids)
         user_message = request.message.strip()
+
+        preset = CNN_RESEARCH_PRESET.reply(
+            user_message,
+            (state_model.learning_context or {}).get(CNN_RESEARCH_PRESET.marker),
+        )
+        if preset is not None:
+            context = dict(state_model.learning_context or {})
+            context[CNN_RESEARCH_PRESET.marker] = preset.step
+            state_model.learning_context = context
+            subtasks = dict(state_model.subtasks or {})
+            if preset.step in {"conditions", "papers", "paper_confirmation", "analysis"}:
+                subtasks["need_defined"] = True
+            if preset.step in {"papers", "paper_confirmation", "analysis"}:
+                subtasks["plan_generated"] = True
+            if preset.step == "analysis":
+                subtasks["paper_selected"] = True
+                state_model.current_stage = "research_analysis"
+                state_model.completed_stages = [
+                    "research_need",
+                    "research_plan",
+                    "research_execution",
+                ]
+            state_model.subtasks = subtasks
+            return self._finalize_reply(
+                conversation_id, state_model, user_message, preset.content, None, db,
+                template_name=CNN_RESEARCH_PRESET.marker,
+            )
 
         # Step 1: Detect history inquiry (deterministic, no stage advancement)
         if is_history_inquiry(user_message):

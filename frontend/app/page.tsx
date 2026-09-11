@@ -218,9 +218,9 @@ export default function HomePage() {
     };
   }, [mode]);
 
-  const practiceTopic = flowPayload?.knowledgePoint || null;
+  const practiceTopic = flowPayload?.masteredKnowledgePoint.name || null;
   const latestTask = recentTasks[0] || null;
-  const latestConversation = overview?.conversations?.[0] || null;
+  const latestConversation = overview?.research.conversations[0] || null;
   const hasResumeEntry = Boolean(practiceTopic || latestTask || latestConversation);
 
   // ── 滚屏与双场景定位交互 ─────────────────────────────────────────────────
