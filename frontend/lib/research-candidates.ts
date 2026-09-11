@@ -64,6 +64,42 @@ export function pickLatestCandidatePapers<T>(
   return newest.papers.slice(0, limit);
 }
 
+/** 中文/日文字符占「中文字符 + 拉丁字母」的比例上限。 */
+const CJK_RATIO_LIMIT = 0.2;
+const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+const LATIN_PATTERN = /[A-Za-z]/g;
+
+/**
+ * 保守判断候选题名是否为英文。
+ *
+ * 这里只看标题本身：没有拉丁字母、标题为空、或中文字符占主导时都过滤；
+ * 不根据来源名称推断语言，也不翻译或改写题名。
+ */
+export function isEnglishCandidateTitle(title: unknown): boolean {
+  const text = typeof title === "string" ? title.trim() : "";
+  if (!text) return false;
+  const latinCount = (text.match(LATIN_PATTERN) ?? []).length;
+  if (latinCount === 0) return false;
+  const cjkCount = (text.match(CJK_PATTERN) ?? []).length;
+  return cjkCount / (cjkCount + latinCount) <= CJK_RATIO_LIMIT;
+}
+
+/**
+ * 过滤面向用户展示的候选论文，不改变条目字段或原数组顺序。
+ *
+ * 后端新检索已经执行同一规则；这里作为历史 evidence bundle 的展示边界，
+ * 防止旧会话中遗留的中文题录重新出现在候选卡片上。
+ */
+export function filterEnglishCandidatePapers<T>(papers: readonly T[] | null | undefined): T[] {
+  return (papers ?? []).filter((paper) => {
+    const title =
+      typeof paper === "object" && paper !== null && "title" in paper
+        ? (paper as { title?: unknown }).title
+        : undefined;
+    return isEnglishCandidateTitle(title);
+  });
+}
+
 /** 一次候选读取的归属票据。 */
 export interface CandidateTicket {
   conversationId: string;

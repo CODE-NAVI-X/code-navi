@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   MAX_CANDIDATE_PAPERS,
   createCandidateScope,
+  filterEnglishCandidatePapers,
   loadSearchCandidates,
   pickLatestCandidatePapers,
 } from "./research-candidates.ts";
@@ -477,6 +478,44 @@ test("用例 9：完全没有任何 bundle → 空（不是错误，也不是伪
   assert.equal(input.length, 1);
   assert.equal(input[0].papers.length, 2);
   assert.notEqual(picked, input[0].papers, "返回的是切片副本，不是原数组引用");
+});
+
+test("展示候选只保留可保守确认的英文标题", () => {
+  const papers = [
+    { title: "慢性乙型肝炎防治指南（2022年版）" },
+    { title: "HUVEC 成管实验和结果分析" },
+    { title: "Deep Learning for Image Classification" },
+    { title: "" },
+    { title: "CNN f(x) = ReLU(x) — Smith et al." },
+    { title: "基于深度学习的 CIFAR-10 图像分类方法" },
+    { title: "SHAP-based attribution stability" },
+  ];
+
+  assert.deepEqual(
+    titles(filterEnglishCandidatePapers(papers)),
+    [
+      "Deep Learning for Image Classification",
+      "CNN f(x) = ReLU(x) — Smith et al.",
+      "SHAP-based attribution stability",
+    ],
+  );
+});
+
+test("英文标题过滤保持顺序并在展示层最多保留 5 篇", () => {
+  const papers = [
+    { title: "Paper 1" },
+    { title: "中文论文" },
+    { title: "Paper 2" },
+    { title: "Paper 3" },
+    { title: "Paper 4" },
+    { title: "Paper 5" },
+    { title: "Paper 6" },
+  ];
+
+  assert.deepEqual(
+    titles(filterEnglishCandidatePapers(papers).slice(0, MAX_CANDIDATE_PAPERS)),
+    ["Paper 1", "Paper 2", "Paper 3", "Paper 4", "Paper 5"],
+  );
 });
 
 test("用例 5b：空结果后页面候选被清空，不再保留上一轮检索的论文", async () => {

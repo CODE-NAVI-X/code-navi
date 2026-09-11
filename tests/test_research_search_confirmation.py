@@ -271,7 +271,9 @@ def test_search_confirmation_options_carry_the_confirmed_queries() -> None:
 def test_confirming_search_terms_runs_the_real_search(db_session) -> None:
     """1. 用户确认检索词后，既有真实搜索服务被调用，并落新的 evidence bundle。"""
     conv_id = "conv-confirm-1"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, messages=[SEARCH_GUIDANCE_MESSAGE])
 
     _, answers = build_search_confirmation_clarification(CONFIRMED_QUERIES)
@@ -295,7 +297,9 @@ def _bundle_persisted(search_service) -> bool:
 def test_explicit_trigger_phrase_from_browser_runs_the_real_search(db_session) -> None:
     """2. 浏览器里用户实际发出的确认句也要能触发检索。"""
     conv_id = "conv-confirm-2"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, messages=[SEARCH_GUIDANCE_MESSAGE])
 
     resp = _orchestrator(search_service).process_message(
@@ -380,7 +384,9 @@ def test_rerun_search_twice_uses_the_same_cached_query_once_per_turn(db_session)
 def test_search_confirmation_cannot_bypass_stage_precondition(db_session) -> None:
     """7. 画像/阶段前置条件不满足时，明确检索动作也不能绕过门控。"""
     conv_id = "conv-confirm-6"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, stage="research_need")
 
     _orchestrator(search_service).process_message(
@@ -429,7 +435,9 @@ def test_enter_analysis_click_does_not_trigger_a_hidden_search(db_session) -> No
     该句又含「可以」——旧实现因此把它当成检索确认，静默检索并拉回无关论文。
     """
     conv_id = "conv-transition-1"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, messages=[SEARCH_GUIDANCE_MESSAGE])
 
     resp = _orchestrator(search_service).process_message(
@@ -446,7 +454,9 @@ def test_enter_analysis_click_does_not_trigger_a_hidden_search(db_session) -> No
 def test_repeated_analysis_clicks_do_not_repeat_search_or_candidates(db_session) -> None:
     """重复点击既不能重复检索，也不能多出候选。"""
     conv_id = "conv-transition-2"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, messages=[SEARCH_GUIDANCE_MESSAGE])
 
     orchestrator = _orchestrator(search_service)
@@ -472,7 +482,9 @@ def test_repeated_analysis_clicks_do_not_repeat_search_or_candidates(db_session)
 def test_confirmation_sentence_is_resolved_to_the_confirmed_terms(db_session) -> None:
     """确认句里的“我选 A：/确认/按这些检索词开始正式检索”不得进入检索词。"""
     conv_id = "conv-query-1"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, messages=[SEARCH_GUIDANCE_MESSAGE])
 
     _orchestrator(search_service).process_message(
@@ -493,7 +505,9 @@ def test_confirmation_sentence_is_resolved_to_the_confirmed_terms(db_session) ->
 def test_all_guidance_queries_are_offered_not_only_the_first(db_session) -> None:
     """用户确认的是“四组关键词”，回退解析必须给出全部建议检索词。"""
     conv_id = "conv-query-2"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id, messages=[SEARCH_GUIDANCE_MESSAGE])
 
     _orchestrator(search_service).process_message(
@@ -613,7 +627,10 @@ def test_academic_search_tool_returns_empty_when_only_chinese_titles() -> None:
         source_clients={
             "arxiv": _stub_client(
                 "arxiv",
-                [(title, f"https://arxiv.org/abs/{index}") for index, title in enumerate(UNRELATED_ZH_TITLES)],
+                [
+                    (title, f"https://arxiv.org/abs/{index}")
+                    for index, title in enumerate(UNRELATED_ZH_TITLES)
+                ],
             )
         }
     )
@@ -744,7 +761,9 @@ def test_too_many_candidates_keeps_question_without_fake_options() -> None:
 def test_search_guidance_turn_exposes_structured_confirmation_options(db_session) -> None:
     """检索确认轮必须由后端确定性给出 next_question / suggested_answers。"""
     conv_id = "conv-options-1"
-    search_service = RecordingSearchService(next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])])
+    search_service = RecordingSearchService(
+        next_bundles=[_bundle(conv_id, [_real_paper(PAPER_TITLE)])]
+    )
     _make_conversation(db_session, conv_id)
 
     resp = _orchestrator(search_service).process_message(

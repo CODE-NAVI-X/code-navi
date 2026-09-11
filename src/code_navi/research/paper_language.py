@@ -23,7 +23,8 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, Mapping, TypeVar
+from collections.abc import Iterable, Mapping
+from typing import TypeVar
 
 #: 中文字符占「中文字符 + 拉丁字母」的比例上限；超过即认为不是英文标题。
 CJK_RATIO_LIMIT = 0.2

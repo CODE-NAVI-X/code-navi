@@ -75,7 +75,9 @@ class FakeOrchestratorLlmGenerator:
     def __init__(self, responses: list[str | OrchestratorLlmOutcome] | None = None) -> None:
         self.responses = list(responses or [])
 
-    def generate(self, *, system_prompt: str, user_prompt: str, **_kwargs) -> OrchestratorLlmOutcome:
+    def generate(
+        self, *, system_prompt: str, user_prompt: str, **_kwargs
+    ) -> OrchestratorLlmOutcome:
         if not self.responses:
             return OrchestratorLlmOutcome(status="generated", reply_text="[Fake LLM Reply] 好的。")
         resp = self.responses.pop(0)

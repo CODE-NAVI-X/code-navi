@@ -16,11 +16,11 @@ from sqlalchemy.orm import Session
 
 from code_navi.providers import ProviderSettings, create_provider
 
+from .clarification_options import extract_clarification_options
 from .conversation_guidance import (
     ResearchConversationGuidanceService,
     StudyRecommendationsNotConfirmedError,
 )
-from .clarification_options import extract_clarification_options
 from .conversation_guidance_schemas import (
     StudyRecommendationRequest,
 )

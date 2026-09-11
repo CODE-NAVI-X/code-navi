@@ -2062,7 +2062,7 @@ def test_rerun_search_on_confirmed_topic_runs_real_search(db_session) -> None:
     )
     _make_search_conversation(db_session, conv_id)
 
-    resp = _orchestrator(search_service).process_message(
+    _orchestrator(search_service).process_message(
         conv_id,
         SendOrchestratorMessageRequest(message="请基于已确认主题重新检索"),
         db_session,
@@ -2079,7 +2079,7 @@ def test_switch_keywords_and_search_again_runs_real_search(db_session) -> None:
     )
     _make_search_conversation(db_session, conv_id)
 
-    resp = _orchestrator(search_service).process_message(
+    _orchestrator(search_service).process_message(
         conv_id,
         SendOrchestratorMessageRequest(
             message="换一组关键词再搜索一次：CIFAR-10 ResNet SHAP"
@@ -2193,7 +2193,10 @@ def test_empty_rerun_search_persists_new_empty_bundle_and_hides_old_papers(
     )
     search_service = RecordingSearchService(
         # 第一次：中文查询落空；第二次：英文兜底查询同样落空。
-        next_bundles=[_bundle(conv_id, [], query="CIFAR-10 ResNet SHAP"), _bundle(conv_id, [], query="CIFAR-10 ResNet SHAP")],
+        next_bundles=[
+            _bundle(conv_id, [], query="CIFAR-10 ResNet SHAP"),
+            _bundle(conv_id, [], query="CIFAR-10 ResNet SHAP"),
+        ],
         saved_bundles=[old_bundle],
     )
     _make_search_conversation(db_session, conv_id)
@@ -2301,5 +2304,4 @@ def test_failed_rerun_search_does_not_fabricate_success_or_reuse_old_papers(
     # 没有落任何新 bundle（bundle 数不变），也没有伪造检索成功。
     assert search_service.saved_bundles == [old_bundle]
     assert _last_message_template(db_session, conv_id) == "search_results"
-
 

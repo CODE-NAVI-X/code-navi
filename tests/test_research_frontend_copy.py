@@ -924,6 +924,7 @@ def test_new_research_conversation_clears_previous_search_candidates() -> None:
     assert "createCandidateScope" in candidates_source
     assert "loadSearchCandidates" in candidates_source
     assert "pickLatestCandidatePapers" in candidates_source
+    assert "filterEnglishCandidatePapers" in candidates_source
     assert "MAX_CANDIDATE_PAPERS" in candidates_source
 
     new_conversation = workspace_source.split(
@@ -947,6 +948,7 @@ def test_new_research_conversation_clears_previous_search_candidates() -> None:
     )[1].split("}, [", 1)[0]
     assert "loadSearchCandidates" in refresh_body
     assert "candidateScope" in refresh_body
+    assert "filterEnglishCandidatePapers(papers)" in refresh_body
     assert "listResearchEvidence" in refresh_body
 
     # 刷新恢复旧会话的既有持久化语义不得被改动。

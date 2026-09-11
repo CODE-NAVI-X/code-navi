@@ -49,6 +49,7 @@ import {
 } from "@/lib/research-options";
 import {
   createCandidateScope,
+  filterEnglishCandidatePapers,
   loadSearchCandidates,
 } from "@/lib/research-candidates";
 import { describeAnalysisBlocker } from "@/lib/research-analysis-gate";
@@ -127,7 +128,7 @@ export function ResearchConversation() {
     await loadSearchCandidates<AcademicPaperResult>(conversationId, {
       scope: candidateScopeRef.current,
       fetchBundles: (id) => listResearchEvidence(id),
-      apply: (papers) => setSearchCandidates(papers),
+      apply: (papers) => setSearchCandidates(filterEnglishCandidatePapers(papers)),
     });
   }, []);
 
