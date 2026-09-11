@@ -4,8 +4,10 @@ import test from "node:test";
 
 import {
   MAX_CANDIDATE_PAPERS,
+  CNN_PRESET_DEMO_SOURCE_NAME,
   createCandidateScope,
   filterEnglishCandidatePapers,
+  isCnnPresetDemoCandidates,
   loadSearchCandidates,
   pickLatestCandidatePapers,
 } from "./research-candidates.ts";
@@ -635,4 +637,16 @@ test("候选卡片点击只发待确认消息，不直接设置为当前论文",
   );
   assert.ok(cards.includes("确认后才会设为当前论文"));
   assert.ok(!cards.includes("selectOrchestratorPaper"));
+});
+
+test("CNN 固定演示候选保留可审计来源并显示演示标识", () => {
+  const demoPapers = [{ title: "Deep Residual Learning for Image Recognition", source_name: CNN_PRESET_DEMO_SOURCE_NAME }];
+  assert.equal(isCnnPresetDemoCandidates(demoPapers), true);
+  assert.equal(isCnnPresetDemoCandidates([{ ...demoPapers[0], source_name: "arxiv" }]), false);
+  const cards = readFileSync(
+    new URL("../components/research/SearchCandidateCards.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.ok(cards.includes("固定演示候选 · 不代表本次实时检索结果"));
+  assert.ok(cards.includes("性质：固定演示候选，不代表本次实时检索结果"));
 });

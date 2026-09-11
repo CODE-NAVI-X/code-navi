@@ -50,6 +50,7 @@ import {
 import {
   createCandidateScope,
   filterEnglishCandidatePapers,
+  isCnnPresetDemoCandidates,
   loadSearchCandidates,
 } from "@/lib/research-candidates";
 import { describeAnalysisBlocker } from "@/lib/research-analysis-gate";
@@ -648,6 +649,7 @@ export function ResearchConversation() {
             <SearchCandidateCards
               papers={searchCandidates}
               disabled={disabled}
+              demo={isCnnPresetDemoCandidates(searchCandidates)}
               onSelect={(paper) =>
                 void handleSend(
                   `我想选择这篇论文作为复现候选：《${paper.title}》 ${paper.url}`,

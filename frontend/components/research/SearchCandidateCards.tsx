@@ -9,6 +9,7 @@ interface SearchCandidateCardsProps {
   disabled: boolean;
   onSelect: (paper: AcademicPaperResult) => void;
   loading?: boolean;
+  demo?: boolean;
 }
 
 /**
@@ -24,20 +25,25 @@ export function SearchCandidateCards({
   disabled,
   onSelect,
   loading = false,
+  demo = false,
 }: SearchCandidateCardsProps) {
   if (papers.length === 0) return null;
 
   return (
     <div
       role="region"
-      aria-label="检索候选论文卡片"
+      aria-label={demo ? "CNN 固定演示候选论文卡片" : "检索候选论文卡片"}
       className="my-4 rounded-2xl border border-cyan-200/80 bg-gradient-to-b from-cyan-50/60 to-slate-50/50 p-4 sm:p-5 shadow-sm dark:border-cyan-900/60 dark:from-cyan-950/20 dark:to-zinc-900/40 backdrop-blur-sm"
     >
       <div className="mb-3 flex items-center gap-2 text-cyan-950 dark:text-cyan-200">
         <FileSearch className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
-        <h3 className="text-base font-bold">检索候选论文</h3>
+        <h3 className="text-base font-bold">
+          {demo ? "CNN 固定演示候选论文" : "检索候选论文"}
+        </h3>
         <span className="rounded-full bg-cyan-100 px-2.5 py-0.5 text-xs font-semibold text-cyan-800 dark:bg-cyan-950/60 dark:text-cyan-300">
-          真实检索结果 · 仅元数据与摘要
+          {demo
+            ? "固定演示候选 · 不代表本次实时检索结果"
+            : "真实检索结果 · 仅元数据与摘要"}
         </span>
       </div>
       <div className="space-y-3">
@@ -82,7 +88,9 @@ export function SearchCandidateCards({
         ))}
       </div>
       <p className="mt-3 text-xs text-slate-400 dark:text-zinc-500">
-        点击只会把论文作为待确认候选发给姜姜；确认后才会设为当前论文。
+        {demo
+          ? "性质：固定演示候选，不代表本次实时检索结果。点击只会把论文作为待确认候选发给姜姜；确认后才会设为当前论文。"
+          : "点击只会把论文作为待确认候选发给姜姜；确认后才会设为当前论文。"}
       </p>
     </div>
   );

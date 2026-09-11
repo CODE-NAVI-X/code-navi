@@ -20,6 +20,24 @@
 /** 候选卡片最多展示的论文数量（沿用既有行为，本轮不改变）。 */
 export const MAX_CANDIDATE_PAPERS = 5;
 
+/** Backend marker for the deterministic CNN demo evidence bundle. */
+export const CNN_PRESET_DEMO_SOURCE_NAME = "CNN research preset demo fixture";
+
+/** Keep the demo provenance visible when restoring an existing evidence bundle. */
+export function isCnnPresetDemoCandidates(
+  papers: readonly unknown[] | null | undefined,
+): boolean {
+  const list = papers ?? [];
+  if (list.length === 0) return false;
+  return list.every(
+    (paper) =>
+      typeof paper === "object" &&
+      paper !== null &&
+      "source_name" in paper &&
+      (paper as { source_name?: unknown }).source_name === CNN_PRESET_DEMO_SOURCE_NAME,
+  );
+}
+
 /** evidence bundle 里候选卡片真正用到的部分。 */
 export interface CandidateBundleLike<T> {
   papers: readonly T[];
