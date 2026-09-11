@@ -343,8 +343,8 @@ def test_provider_failure_never_fabricates_options(db_session) -> None:
     assert _stored_assistant_messages(db_session, "conv-sa-fail") == []
 
 
-def test_red_line_failure_never_fabricates_options(db_session) -> None:
-    """红线失败（未经验证的“复现成功”断言）不得落消息，自然也不会冒出选项。"""
+def test_red_line_reply_is_controlled_rewritten_before_persisting(db_session) -> None:
+    """红线回复必须先经受控改写，原始越界内容不得持久化。"""
     violating_reply = "\n".join(
         [
             "我们已经复现成功了，效果非常好。",
@@ -368,12 +368,12 @@ def test_red_line_failure_never_fabricates_options(db_session) -> None:
         db_session,
     )
 
-    # 失败语义不变：不返回回复、不落 assistant 消息
-    assert resp.status == "failed"
-    assert resp.reply_message is None
-    assert _stored_assistant_messages(db_session, "conv-sa-redline") == []
-    assert resp.error is not None
+    assert resp.status == "completed"
+    assert resp.reply_message is not None
+    assert "复现成功" not in resp.reply_message.content
+    stored_messages = _stored_assistant_messages(db_session, "conv-sa-redline")
+    assert len(stored_messages) == 1
+    assert "复现成功" not in stored_messages[0]["content"]
 
-    # 重试语义不变：仍可重试，且重试成功后才有选项
     state = orchestrator.get_state_model("conv-sa-redline", db_session)
-    assert state.last_status == "failed"
+    assert state.last_status == "completed"

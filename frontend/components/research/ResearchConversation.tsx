@@ -188,8 +188,6 @@ export function ResearchConversation() {
       }
       if (activeConversationId && shouldRefreshSearchCandidates(papersRes)) {
         await refreshSearchCandidates(activeConversationId);
-      } else {
-        setSearchCandidates([]);
       }
     } catch (requestError) {
       setError(friendlyError(requestError));

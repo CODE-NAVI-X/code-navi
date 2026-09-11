@@ -960,8 +960,8 @@ def test_new_research_conversation_clears_previous_search_candidates() -> None:
     assert "setSearchCandidates([])" not in restore_body
     assert "switchTo(null)" not in restore_body
 
-    # 没有候选时不渲染候选卡片（不靠阶段门控掩盖状态清理问题）。
-    assert "searchCandidates.length > 0" in workspace_source
+    # 候选卡由统一守卫决定是否显示，已选论文或空列表都不会渲染卡片。
+    assert "shouldShowSearchCandidates(searchCandidates, papers)" in workspace_source
 
 
 def test_research_conversation_consumes_structured_clarification_fields() -> None:
