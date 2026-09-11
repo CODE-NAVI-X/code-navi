@@ -15,6 +15,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
+from .paper_language import filter_english_titles
+
 SourceStatus = Literal[
     "success",
     "no_results",
@@ -355,10 +357,12 @@ class AcademicSearchTool:
             if result.reason:
                 failure_reasons.append(result.reason)
             candidate_papers.extend(result.papers)
-        papers = [
-            _paper_payload(paper, query, doi=doi, arxiv_id=arxiv_id)
-            for paper, doi, arxiv_id in _deduplicate_and_rank(candidate_papers, query)
-        ]
+        papers = filter_english_titles(
+            [
+                _paper_payload(paper, query, doi=doi, arxiv_id=arxiv_id)
+                for paper, doi, arxiv_id in _deduplicate_and_rank(candidate_papers, query)
+            ]
+        )
         return {
             "session_id": session_id,
             "query": query,

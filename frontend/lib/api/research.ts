@@ -1553,6 +1553,9 @@ export interface OrchestratorMessageReply {
   content: string;
   created_at: string;
   passive_tool_called: string | null;
+  /** 结构化澄清契约：前端据此渲染可点击选项，不依赖正文里的 A/B/C/D。 */
+  next_question: string | null;
+  suggested_answers: string[];
 }
 
 export interface OrchestratorMessageResponse {

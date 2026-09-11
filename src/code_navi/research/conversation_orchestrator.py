@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from code_navi.providers import ProviderSettings, create_provider
 
+from .clarification_options import extract_clarification_options
 from .conversation_guidance import (
     ResearchConversationGuidanceService,
     StudyRecommendationsNotConfirmedError,
@@ -434,6 +435,17 @@ _SEARCH_REQUEST_WORDS = (
     "查询论文",
     "查论文",
 )
+#: 用户在“要检索词建议”而不是“发起检索”：这类轮次不得触发检索，
+#: 也不得把请求本身当成检索词。
+_SEARCH_KEYWORD_REQUEST_WORDS = (
+    "核心论文关键词",
+    "推荐检索词",
+    "搜索关键词",
+    "检索关键词",
+    "论文关键词",
+    "建议检索词",
+)
+
 _SEARCH_TRIGGER_PHRASES = (
     "确认检索",
     "正式检索",
@@ -466,6 +478,152 @@ _SEARCH_FILLER_WORDS = {
 
 def _has_search_request_words(message: str) -> bool:
     return any(word in message for word in _SEARCH_REQUEST_WORDS)
+
+
+# ---------------------------------------------------------------------------
+# 「明确检索动作」判定
+#
+# 背景：原有判定依赖**连续子串**（如「执行检索」「开始检索」），而真实措辞里
+# 动作词与「检索」之间常夹着修饰词——「请基于已确认主题重新**执行更严格的**检索」。
+# 于是用户的明确重新检索意图被判为「不是检索动作」，后端只做了口头回复，
+# 既不触发检索也不落新的 evidence bundle。
+#
+# 判定刻意保持最小且可审计：先按标点分句，只对**自身提到检索/搜索**的分句判断，
+# 并要求「发起动作」而非「讨论检索」。既不使用无限制模糊匹配，也不退化成
+# 「包含检索二字就触发」。
+# ---------------------------------------------------------------------------
+
+_SEARCH_CLAUSE_SPLIT = re.compile(r"[，。；！？,;?!\n]+")
+
+# 明确的发起动作：重做类 / 动作动词类 / 换词类。
+# 动作词与「检索/搜索」之间只允许一个有限的修饰词窗口（≤12 字，不跨标点），
+# 以覆盖「重新执行更严格的检索」而不吞掉整句话。
+_SEARCH_ACTION_PATTERNS = (
+    r"(?:重新|再次|再|又)[^，。；！？\n]{0,12}(?:检索|搜索)",
+    r"(?:执行|进行|启动|发起|开始|开展|运行|重做|跑|触发)[^，。；！？\n]{0,10}(?:检索|搜索)",
+    r"(?:换|更换|替换|改用)[^，。；！？\n]{0,12}(?:检索|搜索)",
+    # 「按上述四组关键词检索」：授权语气 + 检索词 + 检索，中间没有动作动词。
+    r"按[^，。；！？\n]{0,12}(?:关键词|检索词)[^，。；！？\n]{0,8}(?:检索|搜索)",
+)
+
+# 「现在/立即…触发…检索」这类**跨分句**的发起语气。
+#
+# 浏览器事实：用户确认检索词时页面给出的是「现在触发，按上述四组关键词检索」——
+# 动作词「触发」与「检索」被逗号分开，分句后各自都凑不齐「动作词 + 检索」，
+# 于是旧判定判为「不是检索动作」，后端只做了口头回复、根本没有检索。
+# 这里按整条消息判断「立刻发起」的意图，但仍在整句层面尊重「讨论检索」的抑制。
+_SEARCH_INITIATION_PATTERNS = (
+    r"(?:现在|立即|马上|这就|直接|立刻)"
+    r"[^。！？\n]{0,4}(?:触发|发起|执行|开始|启动|进行)"
+    r"[，,\s]*[^。！？\n]{0,20}(?:检索|搜索)",
+)
+
+# 非动作语气：询问/解释检索本身、回顾既有检索结果、把检索留到以后、明确暂缓。
+# 命中这些的分句即使含「检索/搜索」也不构成发起检索。
+_SEARCH_NON_ACTION_PATTERNS = (
+    r"(?:什么|啥)(?:是|叫)[^，。；！？\n]{0,6}(?:检索|搜索)",
+    r"(?:检索|搜索)[^，。；！？\n]{0,6}(?:是什么意思|是啥意思|的意思|的含义|是什么)",
+    r"(?:介绍|讲解|解释|说明|科普|聊聊|谈谈|讨论|讲讲|说说|了解)"
+    r"[^，。；！？\n]{0,6}(?:检索|搜索)",
+    r"(?:检索|搜索)[^，。；！？\n]{0,4}(?:流程|原理|机制|步骤|方法|方式|做法)",
+    r"(?:怎么|如何|怎样)[^，。；！？\n]{0,6}(?:检索|搜索)",
+    r"(?:总结|汇总|整理|梳理|回顾|复述|评价|点评|分析|阅读|查看|看看)"
+    r"[^，。；！？\n]{0,10}(?:检索|搜索)",
+    r"(?:检索|搜索)[^，。；！？\n]{0,6}结果[^，。；！？\n]{0,6}"
+    r"(?:总结|汇总|整理|梳理|回顾|分析)",
+    r"(?:以后|将来|未来|之后|回头|到时候|下次|有空)"
+    r"[^，。；！？\n]{0,10}(?:可以|能|会|要|想|打算|考虑|再|先)",
+    r"(?:暂时|先)[^，。；！？\n]{0,6}(?:不|别|无需|不用|不要)"
+    r"[^，。；！？\n]{0,6}(?:检索|搜索)",
+)
+
+
+def _search_clauses(message: str) -> list[str]:
+    """按标点切分，只保留自身提到「检索/搜索」的分句。"""
+    return [
+        clause
+        for clause in _SEARCH_CLAUSE_SPLIT.split(message)
+        if "检索" in clause or "搜索" in clause
+    ]
+
+
+def _is_non_action_search_clause(clause: str) -> bool:
+    """该分句是否只是在「讨论检索本身」而不是发起检索。"""
+    return any(
+        re.search(pattern, clause) for pattern in _SEARCH_NON_ACTION_PATTERNS
+    )
+
+
+def _detect_explicit_search_action(message: str) -> bool:
+    """用户是否以明确的动作语气要求（发起/重新/再次/换词）启动检索。
+
+    只认「发起检索」的动作语气；讨论检索本身、回顾既有结果、把检索推到以后
+    都不算。按标点分句后再判断，避免跨句互相污染；只有「现在/立即…触发…检索」
+    这类跨分句发起语气才允许在整条消息层面判断。
+    """
+    if any(re.search(pattern, message) for pattern in _SEARCH_INITIATION_PATTERNS):
+        if not _is_non_action_search_talk(message):
+            return True
+    for clause in _search_clauses(message):
+        if _is_non_action_search_clause(clause):
+            continue
+        if any(re.search(pattern, clause) for pattern in _SEARCH_ACTION_PATTERNS):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# 「阶段切换陈述」判定
+#
+# 浏览器事实：用户点击「进入结果分析」时前端发送
+#   「文献精读与实验方案已完成，可以进入结果分析。」
+# 这句含「可以」，命中既有确认语气；而上一轮 assistant 恰好是检索引导（用户
+# 正停在“是否确认检索词”这一步），于是被当成检索确认 → **隐式发起了一次检索**，
+# 拉回 4 篇完全无关的中文论文，还让用户在没有任何候选/论文的情况下“进入”下一步。
+#
+# 阶段推进措辞与检索授权是两件事，必须分开：这里把“进入某个阶段/下一步”的
+# 陈述句识别出来，仅用于**取消确认语气带来的检索触发**，不影响明确的检索动作。
+# ---------------------------------------------------------------------------
+
+_STAGE_TRANSITION_TARGETS = (
+    "结果分析",
+    "论文精读",
+    "下一阶段",
+    "下个阶段",
+    "下一步",
+    "研究计划",
+    "研究开展",
+    "第四阶段",
+    "结果阶段",
+)
+
+_STAGE_TRANSITION_VERBS = r"(?:进入|转入|切换到|切换到|推进到|开始|继续进入)"
+
+
+def is_stage_transition_statement(message: str) -> bool:
+    """该消息是否只是在陈述“进入某个研究阶段/下一步”。"""
+    text = (message or "").strip()
+    if not text:
+        return False
+    return any(
+        re.search(
+            rf"{_STAGE_TRANSITION_VERBS}[^。！？\n]{{0,6}}{re.escape(target)}", text
+        )
+        for target in _STAGE_TRANSITION_TARGETS
+    )
+
+
+def _is_non_action_search_talk(message: str) -> bool:
+    """整条消息只在讨论检索本身（而非发起检索）时返回 True。
+
+    用于抑制既有触发路径的误判，例如「我们以后可以做论文检索」会命中
+    确认语气（「可以」）而错误触发正式检索。
+    """
+    clauses = _search_clauses(message)
+    return bool(clauses) and all(
+        _is_non_action_search_clause(clause) for clause in clauses
+    )
+
 
 
 def _extract_search_query(message: str) -> str | None:
@@ -504,6 +662,61 @@ def _is_search_guidance_followup(messages: Sequence[dict[str, object]]) -> bool:
     return False
 
 
+# 确认/授权语本身不是检索词：这些词只表达“同意执行”，不含任何主题信息。
+_SELECTION_PREFIX_PATTERN = re.compile(r"^\s*我(?:选|选择)\s*[A-Ga-g]?\s*[：:]\s*")
+_SEARCH_FRAMING_VOCAB = re.compile(
+    r"(?:确认|同意|授权|可以|好的|没问题|现在|立即|马上|这就|直接|立刻"
+    r"|我(?:选|选择)|请|就|并|然后|接着|都|全部|一起|我们"
+    r"|按(?:照)?|用|使用|采用|上述|上面|这些|以下|刚才|这|该"
+    r"|(?:四|三|两|一|几)组|组"
+    r"|检索词|关键词|检索|搜索|查询|查找|找|查|词"
+    r"|开始|发起|执行|进行|触发|启动|开展|正式|相关|英文|论文|文献"
+    r"|的|了|吧|啊|呢|吗|好|再|又|重新|一次)"
+)
+
+
+def _strip_search_confirmation_framing(message: str) -> str:
+    """剥离「我选 A：确认，按这些检索词开始正式检索」这类确认框架。
+
+    只保留用户真正给出的检索词；框架被剥空时返回空串，调用方据此回退到
+    上一轮 assistant 给出的建议检索词，而不是拿整句确认语去检索。
+    """
+    text = _SELECTION_PREFIX_PATTERN.sub("", message or "")
+    text = _SEARCH_FRAMING_VOCAB.sub(" ", text)
+    text = re.sub(r"[\s:：,，。；;、!！?？~]+", " ", text)
+    return text.strip()
+
+
+SEARCH_CONFIRMATION_QUESTION = "是否确认使用上述检索词开始正式检索？"
+SEARCH_CONFIRMATION_ADJUST = "我要调整检索词"
+
+
+def build_search_confirmation_clarification(
+    queries: Sequence[str],
+) -> tuple[str, list[str]]:
+    """检索确认轮的**确定性**结构化澄清（问题 + 建议答案）。
+
+    为什么不依赖模型正文：模型很少刚好把选项写成 ``A. `` 且问句以 ``？`` 结尾，
+    于是这一轮常常没有任何可点击按钮，用户只能手打。这里由后端直接给出结构化
+    字段，前端只消费 ``next_question`` / ``suggested_answers``。
+
+    确认答案**承载真实检索词**，这一步同时解决三件事：
+
+    1. 用户消息因此含「确认 + 检索」，能被既有检索链路识别为明确检索动作；
+    2. 检索词可直接从用户消息解析出来，不必拿整句确认语去检索；
+    3. 模型回显「你已确认的检索词：…」时能在用户原话里逐字找到，
+       不会被“编造用户选择”红线误拦。
+    """
+    terms = [q.strip() for q in (queries or []) if q and q.strip()]
+    if not terms:
+        return SEARCH_CONFIRMATION_QUESTION, []
+    joined = "；".join(dict.fromkeys(terms))[:300]
+    return (
+        SEARCH_CONFIRMATION_QUESTION,
+        [f"确认，按这些检索词开始正式检索：{joined}", SEARCH_CONFIRMATION_ADJUST],
+    )
+
+
 def _resolve_academic_search_query(
     user_message: str,
     conv: ResearchConversationModel | None,
@@ -512,7 +725,19 @@ def _resolve_academic_search_query(
 ) -> str:
     """Resolve an effective academic search query from explicit terms, guidance, or profile."""
     # 1. If user provided a specific non-filler query
-    extracted = _extract_search_query(user_message)
+    #
+    # 浏览器事实：确认检索词时用户发出的其实是
+    # 「我选 A：确认，按这些检索词开始正式检索」——若不剥离确认框架，
+    # 整句确认语会被当成检索词送去检索，拉回一批与主题完全无关的论文。
+    # 剥空（纯确认语）就回退到下一轮建议检索词，而不是硬用确认语。
+    asking_for_keywords = any(
+        kw in (user_message or "") for kw in _SEARCH_KEYWORD_REQUEST_WORDS
+    )
+    extracted = (
+        _strip_search_confirmation_framing(_extract_search_query(user_message) or "")
+        if not asking_for_keywords
+        else ""
+    )
     if extracted and extracted not in _SEARCH_FILLER_WORDS and len(extracted) >= 3:
         return extracted
 
@@ -521,10 +746,17 @@ def _resolve_academic_search_query(
         if msg.get("role") != "assistant":
             continue
         content = str(msg.get("content") or "")
-        # 【建议检索词】\n- `...`
-        m_code = re.search(r"【建议检索词】[^\n]*\n-\s*`([^`\n]+)`", content)
-        if m_code and len(m_code.group(1).strip()) >= 3:
-            return m_code.group(1).strip()
+        # 【建议检索词】下的**全部**条目：用户确认的是“四组关键词”，
+        # 只取第一条会丢掉其余三组。
+        m_block = re.search(r"【建议检索词】[^\n]*\n([\s\S]{0,800})", content)
+        if m_block:
+            bullets = [
+                item.strip()
+                for item in re.findall(r"-\s*`([^`\n]+)`", m_block.group(1))
+                if item.strip()
+            ]
+            if bullets:
+                return " ".join(dict.fromkeys(bullets))[:300]
         # 关键词组合 / 关键词：...
         m_kw = re.search(r"关键词(?:组合)?[：:]\s*([^\n]+)", content)
         if m_kw:
@@ -1660,15 +1892,7 @@ class ResearchConversationOrchestrator:
             )
         )
         is_asking_for_search_keywords = any(
-            kw in user_message
-            for kw in (
-                "核心论文关键词",
-                "推荐检索词",
-                "搜索关键词",
-                "检索关键词",
-                "论文关键词",
-                "建议检索词",
-            )
+            kw in user_message for kw in _SEARCH_KEYWORD_REQUEST_WORDS
         )
         is_direct_search_action = any(
             w in user_message
@@ -1684,22 +1908,35 @@ class ResearchConversationOrchestrator:
                 "同意检索",
             )
         )
+        # 「进入结果分析」这类阶段推进陈述不是检索授权：它含「可以」会被既有的
+        # 确认语气命中，若上一轮恰好是检索引导，就会**隐式发起检索**。
+        # 这里只取消「确认语气带来的检索触发」，明确的检索动作不受影响。
+        is_stage_transition = is_stage_transition_statement(user_message)
         is_search_confirm = (
             is_confirmed
+            and not is_stage_transition
             and (
                 _has_search_request_words(user_message)
                 or _is_search_guidance_followup(conv_msgs)
             )
         )
+        # 明确的重新/再次/换词检索动作：动作词与「检索」之间允许修饰词，
+        # 例如「请基于已确认主题重新执行更严格的检索」。
+        is_explicit_search_action = _detect_explicit_search_action(user_message)
+        # 整条消息只在讨论检索本身（询问/解释/回顾/以后再说）时不触发检索，
+        # 即使命中了确认语气或上述动作词。
+        is_search_talk_only = _is_non_action_search_talk(user_message)
         in_execution_or_plan = state_model.current_stage in (
             "research_execution", "research_plan"
         )
         should_run_search = (
             not is_asking_for_search_keywords
+            and not is_search_talk_only
             and (
                 is_query_status_inquiry
                 or is_search_confirm
                 or is_direct_search_action
+                or is_explicit_search_action
             )
         )
 
@@ -1720,15 +1957,20 @@ class ResearchConversationOrchestrator:
                 existing_bundles = self.search_service.list_bundles(conversation_id, db)
             else:
                 existing_bundles = getattr(self.search_service, "saved_bundles", [])
-            latest_with_papers = next(
-                (b for b in reversed(existing_bundles) if b.papers), None
-            )
+            # list_bundles 按 created_at.desc() 返回：下标 0 就是最新一次检索。
+            # 询问既有结果时以最新 bundle 为准，不回退到更早的、可能无关的论文
+            # （与前端 c3761b8 的「最新空 bundle 优先」保持一致）。
+            latest_bundle = existing_bundles[0] if existing_bundles else None
 
-            if is_query_status_inquiry and latest_with_papers is not None:
-                source_note = "、".join(latest_with_papers.queried_sources) or "允许来源"
-                searched_day = latest_with_papers.searched_at.date().isoformat()
+            if (
+                is_query_status_inquiry
+                and latest_bundle is not None
+                and latest_bundle.papers
+            ):
+                source_note = "、".join(latest_bundle.queried_sources) or "允许来源"
+                searched_day = latest_bundle.searched_at.date().isoformat()
                 cand_items = []
-                for index, paper in enumerate(latest_with_papers.papers[:5], start=1):
+                for index, paper in enumerate(latest_bundle.papers[:5], start=1):
                     item = (
                         f"{index}. **《{paper.title}》**\n"
                         f"   - 来源：{paper.source_name} · {paper.year or '年份未标注'}\n"
@@ -1738,7 +1980,7 @@ class ResearchConversationOrchestrator:
                         item += f"\n   - 摘要摘录：{paper.abstract_excerpt[:180]}..."
                     cand_items.append(item)
                 candidate_lines = "\n\n".join(cand_items)
-                q_text = latest_with_papers.query
+                q_text = latest_bundle.query
                 reply_content = (
                     f"(＾▽＾) 检索结果已就绪！为你找到以下真实论文候选"
                     f"（检索词：`{q_text}`；来源：{source_note}；检索时间：{searched_day}）：\n\n"
@@ -1748,13 +1990,32 @@ class ResearchConversationOrchestrator:
                     f"上方已同步加载【检索候选论文卡片】。你可以直接点击卡片上的「请姜姜精读介绍这篇」，"
                     f"或者回复序号告诉姜姜，我们立即进入论文精读与复现设计！"
                 )
+            elif is_query_status_inquiry and latest_bundle is not None:
+                # 最新一次检索就是空结果：如实说明空态，不用更早的论文补位。
+                failure_note = ""
+                if latest_bundle.failure_reasons:
+                    failure_note = "；失败原因：" + "、".join(
+                        latest_bundle.failure_reasons
+                    )
+                reply_content = (
+                    f"(｡･ω･｡) 最近一次检索（检索词：`{latest_bundle.query}`；"
+                    f"检索时间：{latest_bundle.searched_at.date().isoformat()}）"
+                    f"没有返回合适的论文{failure_note}。\n\n"
+                    "姜姜不会拿更早的检索结果或无关论文来补位。"
+                    "我们可以换一组检索词重新检索，或者返回方向探索。"
+                )
             else:
                 query = _resolve_academic_search_query(user_message, conv, state_model, conv_msgs)
+                force_refresh = (
+                    is_explicit_search_action
+                    and isinstance(self.search_service, ResearchConversationSearchService)
+                )
                 try:
                     bundle = self.search_service.search(
                         conversation_id,
                         CreateConversationEvidenceBundleRequest(query=query),
                         db,
+                        **({"force_refresh": True} if force_refresh else {}),
                     )
                     # Fallback retry if 0 papers returned and query contained Chinese
                     if not bundle.papers and any('\u4e00' <= char <= '\u9fff' for char in query):
@@ -1768,6 +2029,7 @@ class ResearchConversationOrchestrator:
                                 conversation_id,
                                 CreateConversationEvidenceBundleRequest(query=fallback_q),
                                 db,
+                                **({"force_refresh": True} if force_refresh else {}),
                             )
                             if retry_bundle.papers:
                                 bundle = retry_bundle
@@ -2116,10 +2378,19 @@ class ResearchConversationOrchestrator:
         if template_name == "welcome_and_bridge":
             self._absorb_welcome_learning_input(state_model)
 
+        # 检索确认轮（search_guidance）由后端直接给出确定性的结构化澄清，
+        # 保证页面上一定有可点击的「确认检索 / 调整检索词」，且确认答案承载真实检索词。
+        clarification = None
+        if template_name == "search_guidance":
+            clarification = build_search_confirmation_clarification(
+                prompt_data.get("clarification_queries") or []
+            )
+
         return self._finalize_reply(
             conversation_id, state_model, user_message, reply_content, None, db,
             template_name=template_name,
             plan_layer=prompt_data.get("plan_layer"),
+            clarification=clarification,
         )
 
     def retry_last_message(
@@ -2264,6 +2535,8 @@ class ResearchConversationOrchestrator:
                     candidate_queries=[resolved_q],
                     sources=["OpenAlex", "Crossref", "arXiv"],
                 )
+                # 检索确认轮的问题与建议答案由后端确定性给出，不依赖模型正文格式。
+                tmpl["clarification_queries"] = [resolved_q]
             elif papers_resp.current_paper is not None:
                 # P2-C: two-layer experiment plans.  The preliminary plan is
                 # generated on an experiment-plan request; the SPECIFIC plan is
@@ -2346,6 +2619,8 @@ class ResearchConversationOrchestrator:
                         candidate_queries=[resolved_q],
                         sources=["OpenAlex", "Crossref", "arXiv"],
                     )
+                    # 检索确认轮的问题与建议答案由后端确定性给出。
+                    tmpl["clarification_queries"] = [resolved_q]
 
         else:  # research_analysis
             hw = profiles_resp.current_profile.hardware if profiles_resp.current_profile else None
@@ -2383,6 +2658,9 @@ class ResearchConversationOrchestrator:
             "user_prompt": user_str,
             "template_name": template_name,
             "plan_layer": tmpl.get("plan_layer"),
+            # 由后端设计的检索确认轮：把已解析的检索词带给 _finalize_reply，
+            # 用于生成确定性的 next_question / suggested_answers。
+            "clarification_queries": list(tmpl.get("clarification_queries") or []),
             "is_learning_record_mode": is_learning_record_mode,
             "exempt_hardware_check": (
                 tmpl.get("exempt_hardware_check", False)
@@ -2740,6 +3018,7 @@ class ResearchConversationOrchestrator:
         template_name: str | None = None,
         plan_layer: str | None = None,
         include_user_message: bool = True,
+        clarification: tuple[str | None, list[str]] | None = None,
     ) -> OrchestratorMessageResponse:
         conv = db.get(ResearchConversationModel, conversation_id)
         if conv is None:
@@ -2747,6 +3026,19 @@ class ResearchConversationOrchestrator:
 
         now_dt = datetime.now(UTC)
         msgs = list(conv.messages_data or [])
+
+        # 结构化澄清契约：把「待答问题 + 建议答案」从正文里提取一次，
+        # 随后同时写进持久化消息与响应，前端只消费结构化字段。
+        # 只对真正生成成功的正文做提取；失败/重试路径在调用本方法之前就已返回，
+        # 因此不会凭空造出候选选项。
+        #
+        # 对**由后端设计**的问题轮（如检索词确认）直接传入确定性结果：
+        # 模型正文的书写形式不可控，不能把“有没有按钮”赌在它恰好写成
+        # 「问句 + 2~4 条列表项」上。
+        if clarification is not None:
+            next_question, suggested_answers = clarification
+        else:
+            next_question, suggested_answers = extract_clarification_options(reply_content)
 
         # User message (skipped for backend-initiated turns like the bridge
         # welcome, which must not fabricate a user bubble).
@@ -2768,6 +3060,8 @@ class ResearchConversationOrchestrator:
             "template": template_name,
             "plan_layer": plan_layer,
             "stage_at_time": state_model.current_stage,
+            "next_question": next_question,
+            "suggested_answers": suggested_answers,
             "created_at": now_dt.isoformat(),
         })
         conv.messages_data = msgs
@@ -2785,6 +3079,8 @@ class ResearchConversationOrchestrator:
             sender="assistant",
             content=reply_content,
             passive_tool_called=triggered_tool,
+            next_question=next_question,
+            suggested_answers=suggested_answers,
             created_at=now_dt,
         )
 

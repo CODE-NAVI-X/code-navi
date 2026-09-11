@@ -109,8 +109,16 @@ class ResearchConversationSearchService:
         conversation_id: str,
         request: CreateConversationEvidenceBundleRequest,
         db: Session,
+        *,
+        force_refresh: bool = False,
     ) -> ConversationEvidenceBundle:
-        """Dispatch the allow-listed Tool once after an explicit API request."""
+        """Dispatch the allow-listed Tool once after an explicit API request.
+
+        ``force_refresh`` is an internal conversational re-search escape hatch:
+        the public endpoint keeps its persistent-cache behavior, while an
+        explicit user request to search again must create a fresh bundle even
+        when the normalized query and sources are unchanged.
+        """
         if (request.query or "").strip():
             # Design contract: a user-provided query with explicit confirmation
             # starts the formal search directly. Profile readiness only gates
@@ -118,9 +126,10 @@ class ResearchConversationSearchService:
             query = request.query or ""
         else:
             query = self.plan(conversation_id, db).query
-        cached = self._cached_bundle(conversation_id, query, request.sources, db)
-        if cached is not None:
-            return cached.model_copy(update={"cache_hit": True})
+        if not force_refresh:
+            cached = self._cached_bundle(conversation_id, query, request.sources, db)
+            if cached is not None:
+                return cached.model_copy(update={"cache_hit": True})
         registry = ToolRegistry()
         register_research_tools(registry, self.search_tool)
         dispatcher = registry.bind(

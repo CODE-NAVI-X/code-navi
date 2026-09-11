@@ -41,6 +41,18 @@ import {
   streamOrchestratorMessage,
 } from "@/lib/api/research";
 
+import {
+  buildAssistantConversationMessage,
+  buildStructuredOptionGroup,
+  splitMessageSegments,
+  type MessageSegment,
+} from "@/lib/research-options";
+import {
+  createCandidateScope,
+  filterEnglishCandidatePapers,
+  loadSearchCandidates,
+} from "@/lib/research-candidates";
+import { describeAnalysisBlocker } from "@/lib/research-analysis-gate";
 import { MarkdownText } from "./MarkdownText";
 import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
@@ -99,21 +111,26 @@ export function ResearchConversation() {
 
   const startedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  /** 候选论文的会话归属守卫：切换会话时作废旧会话在途的读取，避免迟到响应污染新会话。 */
+  const candidateScopeRef = useRef(createCandidateScope());
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, []);
 
-  async function refreshSearchCandidates(conversationId: string) {
-    try {
-      const bundles = await listResearchEvidence(conversationId);
-      const withPapers = bundles.filter((bundle) => bundle.papers.length > 0);
-      const latest = withPapers[withPapers.length - 1];
-      setSearchCandidates(latest ? latest.papers.slice(0, 5) : []);
-    } catch {
-      setSearchCandidates([]);
-    }
-  }
+  /**
+   * 按指定会话重新读取候选论文。
+   *
+   * 归属校验在 loadSearchCandidates 内部完成：只有“当前会话的最新一次读取”
+   * 才会把结果写进 state，旧会话迟到的响应（无论成功还是失败）都会被丢弃。
+   */
+  const refreshSearchCandidates = useCallback(async (conversationId: string) => {
+    await loadSearchCandidates<AcademicPaperResult>(conversationId, {
+      scope: candidateScopeRef.current,
+      fetchBundles: (id) => listResearchEvidence(id),
+      apply: (papers) => setSearchCandidates(filterEnglishCandidatePapers(papers)),
+    });
+  }, []);
 
   const restoreOrCreate = useCallback(async () => {
     setPhase("initializing");
@@ -173,7 +190,7 @@ export function ResearchConversation() {
     } finally {
       setPhase("idle");
     }
-  }, []);
+  }, [refreshSearchCandidates]);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -221,20 +238,9 @@ export function ResearchConversation() {
         },
         onCompleted: (response: OrchestratorMessageResponse) => {
           if (response.reply_message) {
-            const assistantMsg: ResearchConversationMessage = {
-              message_id: response.reply_message.id,
-              role: "assistant",
-              content: response.reply_message.content,
-              created_at: response.reply_message.created_at,
-              generation_mode: "agent",
-              run_id: null,
-              event_count: 1,
-              intent: null,
-              next_question: null,
-              suggested_answers: [],
-              candidate_questions: [],
-              recommended_action: null,
-            };
+            // 结构化澄清字段必须原样透传，不能在 UI 层硬编码清空。
+            const assistantMsg: ResearchConversationMessage =
+              buildAssistantConversationMessage(response.reply_message);
             setConversation((prev) =>
               prev ? { ...prev, messages: [...prev.messages, assistantMsg] } : prev,
             );
@@ -282,20 +288,10 @@ export function ResearchConversation() {
     try {
       const response = await retryLastOrchestratorMessage(conversation.conversation_id);
       if (response.status === "completed" && response.reply_message) {
-        const assistantMsg: ResearchConversationMessage = {
-          message_id: response.reply_message.id,
-          role: "assistant",
-          content: response.reply_message.content,
-          created_at: response.reply_message.created_at,
-          generation_mode: "agent",
-          run_id: null,
-          event_count: 1,
-          intent: null,
-          next_question: null,
-          suggested_answers: [],
-          candidate_questions: [],
-          recommended_action: null,
-        };
+        // 重试完成同样走同一个映射，结构化字段不会丢。
+        const assistantMsg: ResearchConversationMessage = buildAssistantConversationMessage(
+          response.reply_message,
+        );
         setConversation((prev) =>
           prev ? { ...prev, messages: [...prev.messages, assistantMsg] } : prev,
         );
@@ -303,6 +299,9 @@ export function ResearchConversation() {
           setOrchestratorState(response.state);
         }
         setFailedTurnError(null);
+        // 重试会重放上一轮用户消息，可能再写一个 evidence bundle（空结果也算）。
+        // 与实时流式路径保持一致：按当前会话重新读取候选，避免空结果后仍显示旧论文。
+        await refreshSearchCandidates(conversation.conversation_id);
       } else if (response.status === "failed") {
         setFailedTurnError(response.error || "重试失败，请再次尝试。");
         if (response.state) {
@@ -351,6 +350,10 @@ export function ResearchConversation() {
     setDirectionCards([]);
     setPapers(null);
     setDraft("");
+    // 候选论文属于具体会话：切换会话时必须立即清空，否则上一个会话的候选会残留在
+    // 新会话里，看起来像“新会话一开始就自动检索过”。同时切离旧会话，作废其在途读取。
+    candidateScopeRef.current.switchTo(null);
+    setSearchCandidates([]);
 
     try {
       const created = await createResearchConversation();
@@ -367,6 +370,9 @@ export function ResearchConversation() {
       if (stateRes) setOrchestratorState(stateRes);
       if (cardsRes?.cards) setDirectionCards(cardsRes.cards);
       if (papersRes) setPapers(papersRes);
+      // 新会话也可能已有自己的合法 bundle（如学习端带入的上下文），
+      // 必须按新 conversation_id 读取，而不是沿用旧会话的候选。
+      await refreshSearchCandidates(created.conversation_id);
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {
@@ -440,8 +446,20 @@ export function ResearchConversation() {
   );
   const showDirectionCards =
     currentStage === "research_need" && !hasConfirmedDirection && directionCards.length > 0;
+  // 「进入结果分析」不是阶段标签就能放行的动作：必须已有真实检索候选论文，
+  // 且用户确认过当前论文。缺失时按钮禁用，并直接说明缺什么。
+  const analysisBlocker = describeAnalysisBlocker({
+    candidateCount: searchCandidates.length,
+    hasConfirmedPaper: Boolean(papers?.current_paper),
+  });
   const isThinking = phase === "thinking";
   const disabled = phase !== "idle";
+
+  // 选项组只挂在最后一条姜姜消息上（与既有行为一致），并就地渲染在题干下方。
+  const allMessages = conversation?.messages ?? [];
+  const latestMessage = allMessages[allMessages.length - 1];
+  const optionGroupMessageId =
+    latestMessage && latestMessage.role === "assistant" ? latestMessage.message_id : null;
 
   return (
     <main
@@ -516,6 +534,17 @@ export function ResearchConversation() {
         <div className="mx-auto max-w-4xl space-y-6">
           {conversation.messages.map((message) => {
             const isUser = message.role === "user";
+            const showOptionGroup = !isUser && message.message_id === optionGroupMessageId;
+            // 结构化字段优先：只有 suggested_answers ≥2 条时才构造选项组；
+            // 否则返回 null，回退到正文解析（历史兼容），再不行就保持自由输入。
+            const structuredGroup = showOptionGroup
+              ? buildStructuredOptionGroup(message)
+              : null;
+            // 按原文顺序切成“正文 -> 选项组 -> 正文”的片段，让交互选项贴在对应题干下方，
+            // 而不是被挂到整条消息末尾。
+            const segments: MessageSegment[] = showOptionGroup
+              ? splitMessageSegments(message.content, structuredGroup)
+              : [{ kind: "markdown", content: message.content }];
 
             return (
               <article
@@ -566,12 +595,28 @@ export function ResearchConversation() {
                     {isUser ? (
                       <p className="whitespace-pre-wrap">{message.content}</p>
                     ) : (
-                      <MarkdownText
-                        content={message.content}
-                        onSelectDirection={(title) =>
-                          void handleSend(buildDirectionSelectionMessage(title))
-                        }
-                      />
+                      <div className="space-y-3">
+                        {/* 严格按原文顺序交替渲染 markdown 与选项组：拿到选项的选项组
+                            正好落在对应题干下方，而不是整条消息末尾。 */}
+                        {segments.map((segment, segmentIndex) =>
+                          segment.kind === "markdown" ? (
+                            <MarkdownText
+                              key={`markdown-${segmentIndex}`}
+                              content={segment.content}
+                              onSelectDirection={(title) =>
+                                void handleSend(buildDirectionSelectionMessage(title))
+                              }
+                            />
+                          ) : (
+                            <ResearchOptionSelector
+                              key={`options-${segmentIndex}`}
+                              group={segment.group}
+                              disabled={disabled}
+                              onFillInput={(text) => setDraft(text)}
+                            />
+                          ),
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -610,21 +655,6 @@ export function ResearchConversation() {
               }
             />
           )}
-
-          {/* 选择题快速作答：最后一条是姜姜的消息且含 A/B/C 选项组时显示 */}
-          {(() => {
-            const allMessages = conversation?.messages ?? [];
-            const last = allMessages[allMessages.length - 1];
-            if (!last || last.role !== "assistant") return null;
-            return (
-              <ResearchOptionSelector
-                content={last.content}
-                disabled={disabled}
-                onSend={(message) => void handleSend(message)}
-                onFillInput={(text) => setDraft(text)}
-              />
-            );
-          })()}
 
           {/* Exception 2: Candidate Paper Card (Shown when paper exists) */}
           {papers && (papers.current_paper || papers.paper_history.length > 0) && (
@@ -753,9 +783,10 @@ export function ResearchConversation() {
               <>
                 <button
                   type="button"
-                  disabled={disabled}
+                  disabled={disabled || analysisBlocker !== null}
+                  title={analysisBlocker ?? undefined}
                   onClick={() => void handleSend("文献精读与实验方案已完成，可以进入结果分析。")}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   进入结果分析
                 </button>

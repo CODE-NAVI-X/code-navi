@@ -816,33 +816,185 @@ def test_search_candidate_cards_come_from_real_bundles_and_never_auto_select() -
     assert "selectOrchestratorPaper" not in cards
 
 
-def test_research_option_selector_parses_and_submits_choices() -> None:
-    """选择题快速作答：解析 A/B/C 选项组，提交时组合成明确的用户消息。"""
+def test_research_option_selector_parses_and_fills_input() -> None:
+    """选择题选项：解析 A/B/C 选项组，点击只把回答填入底部输入框（不发送）。"""
     selector_source = Path(
         "frontend/components/research/ResearchOptionSelector.tsx"
     ).read_text(encoding="utf-8")
     conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
         encoding="utf-8"
     )
+    options_source = Path("frontend/lib/research-options.ts").read_text(encoding="utf-8")
 
     # 选项解析：A. / A、 / A： / A 端： 连续 ≥2 行归组；支持决策分支与计划确认
     assert "parseOptionGroups" in selector_source
     assert "ParsedOptionGroup" in selector_source
     assert "BRANCH_LINE" in selector_source
-    assert "计划执行确认" in selector_source
-    assert "我选 " in selector_source
+    # 解析与“按原文顺序切片”的纯逻辑集中在 research-options 模块
+    assert "计划执行确认" in options_source
+    assert "splitMessageSegments" in options_source
+    # 作答文案的唯一出口是 buildOptionFillText：只产出可编辑草稿
+    assert "buildOptionFillText" in options_source
+    assert "我选 " in options_source
+    assert "buildOptionFillText" in selector_source
     assert "补充说明（可选）" in selector_source
-    assert "提交选择" in selector_source
     assert "填入输入框" in selector_source
     assert "onFillInput" in selector_source
-    # 仅最后一条是姜姜的消息且含选项组时挂载，且支持输入框自动填充
+    # 选项组件刻意不持有发送能力：点击选项只填入底部输入框，
+    # 提交必须由页面底部的全局“发送”按钮负责。
+    assert "提交选择" not in selector_source
+    assert "onSend" not in selector_source
+    assert "handleSend" not in selector_source
+    # 选项就地渲染在题干下方，不再出现独立的“快速作答”重复卡片
+    assert "快速作答" not in selector_source
+    # 仅最后一条是姜姜的消息且含选项组时挂载，且只接线到输入框草稿
     assert "ResearchOptionSelector" in conversation_source
     assert "onFillInput={(text) => setDraft(text)}" in conversation_source
+    selector_usage = conversation_source.split("<ResearchOptionSelector", 2)[1].split("/>", 1)[0]
+    assert "onSend" not in selector_usage
+    # 全局发送按钮仍然调用原有发送链路
+    assert "void handleSend(draft)" in conversation_source
+    # 正文按原文顺序切成“正文 -> 选项组 -> 正文”，选项组因此贴在对应题干下方，
+    # 同时被接管的静态选项行从 markdown 片段里摘掉，保证同一题目只出现一份选项
+    assert "splitMessageSegments" in conversation_source
+    assert "segment.kind === \"markdown\"" in conversation_source
+    assert "<ResearchOptionSelector" in conversation_source
+    assert "group={segment.group}" in conversation_source
+    assert "stripOptionLines" not in conversation_source
     # 动态探索方向在定方向后自动隐藏
     assert "hasConfirmedDirection" in conversation_source
     # 推进按钮在信息未完成前变灰防呆
     assert "canConfirmNeed" in conversation_source
     assert "canConfirmPlan" in conversation_source
+
+
+def test_latest_evidence_bundle_is_the_newest_one_not_the_newest_with_papers() -> None:
+    """锁定「最新 evidence bundle」的定义，并禁止用无关论文给空结果补位。
+
+    回归：一次明确返回空结果的检索之后，页面仍显示上一轮检索留下的 5 篇无关英文论文
+    （NASA 系外行星 / 超导 / 数学递推 / D3-brane / LiFeAs），用户因此无法选论文、
+    无法进入第四阶段。根因是前端“跳过空 bundle、去找更早的有论文 bundle”。
+    """
+    candidates_source = Path("frontend/lib/research-candidates.ts").read_text(encoding="utf-8")
+
+    # 接口排序契约：两条读取路径都按 created_at 倒序 → 数组下标 0 就是最新 bundle。
+    # 前端据此把「最新」定义为数组第一个元素；这里把后端契约一并锁死，
+    # 后端若改成升序，本用例会立刻失败，而不是静默地让前端读错。
+    search_service = Path(
+        "src/code_navi/research/conversation_search_service.py"
+    ).read_text(encoding="utf-8")
+    list_bundles = search_service.split("def list_bundles(", 1)[1].split(
+        "def analyze_paper(", 1
+    )[0]
+    assert "ResearchEvidenceBundleModel.conversation_id == conversation_id" in list_bundles
+    assert "order_by(ResearchEvidenceBundleModel.created_at.desc())" in list_bundles
+
+    conversation_service = Path("src/code_navi/research/conversation_service.py").read_text(
+        encoding="utf-8"
+    )
+    restore_bundles = conversation_service.split("def _evidence_bundles(", 1)[1].split(
+        "def _experiment_evidence_bundles(", 1
+    )[0]
+    assert "order_by(ResearchEvidenceBundleModel.created_at.desc())" in restore_bundles
+
+    # 前端不得再按 papers 过滤后取“最后一个”（= 最旧的一个）。
+    assert "papers.length > 0" not in candidates_source
+    assert "withPapers" not in candidates_source
+    assert "bundles.length - 1" not in candidates_source
+    # 最新 bundle 为空时直接返回空，绝不回退到更早的 bundle。
+    assert "newest" in candidates_source
+
+    # 空结果语义：候选只由最新 bundle 的 papers 决定，不改写来源状态 / provenance。
+    for untouched in ("source_statuses", "failure_reasons", "provenance_note", "queried_sources"):
+        assert untouched not in candidates_source, untouched
+
+
+def test_new_research_conversation_clears_previous_search_candidates() -> None:
+    """新建会话必须清空旧候选，并按新 conversation_id 重新读取候选论文。
+
+    回归：点击“新建对话”后，页面清空了会话/编排器状态/方向卡/已选论文/草稿，
+    却没有清空候选论文列表，也没有按新的 conversation_id 重新读取 evidence
+    bundles，于是新会话一打开就显示上一个会话的候选论文，看起来像“新会话
+    自动检索过”。后端按 conversation_id 隔离本身是正确的，本轮只修前端状态。
+    """
+    workspace_source = WORKSPACE.read_text(encoding="utf-8")
+    candidates_source = Path("frontend/lib/research-candidates.ts").read_text(encoding="utf-8")
+
+    # 候选的会话归属与加载逻辑集中在纯模块里，迟到响应可被单测覆盖。
+    assert "createCandidateScope" in candidates_source
+    assert "loadSearchCandidates" in candidates_source
+    assert "pickLatestCandidatePapers" in candidates_source
+    assert "filterEnglishCandidatePapers" in candidates_source
+    assert "MAX_CANDIDATE_PAPERS" in candidates_source
+
+    new_conversation = workspace_source.split(
+        "async function handleStartNewConversation", 1
+    )[1].split("function handleFormSubmit", 1)[0]
+
+    # 重置必须清空候选，且发生在发起创建请求之前（立即生效，不等接口返回）。
+    assert "setSearchCandidates([])" in new_conversation
+    assert new_conversation.index(
+        "setSearchCandidates([])"
+    ) < new_conversation.index("await createResearchConversation()")
+    # 切离旧会话，作废旧会话在途的候选读取。
+    assert "switchTo(null)" in new_conversation
+    # 新会话按自己的 conversation_id 重新读取候选，不沿用旧会话 id。
+    assert "refreshSearchCandidates(created.conversation_id)" in new_conversation
+    assert "refreshSearchCandidates(conversation.conversation_id)" not in new_conversation
+
+    # 候选读取统一走带归属校验的加载函数，迟到的旧响应不会落到页面上。
+    refresh_body = workspace_source.split(
+        "const refreshSearchCandidates = useCallback", 1
+    )[1].split("}, [", 1)[0]
+    assert "loadSearchCandidates" in refresh_body
+    assert "candidateScope" in refresh_body
+    assert "filterEnglishCandidatePapers(papers)" in refresh_body
+    assert "listResearchEvidence" in refresh_body
+
+    # 刷新恢复旧会话的既有持久化语义不得被改动。
+    restore_body = workspace_source.split(
+        "const restoreOrCreate = useCallback", 1
+    )[1].split("\n  }, [", 1)[0]
+    assert "getResearchConversation(savedId)" in restore_body
+    assert "refreshSearchCandidates(activeConversationId)" in restore_body
+    assert "setSearchCandidates([])" not in restore_body
+    assert "switchTo(null)" not in restore_body
+
+    # 没有候选时不渲染候选卡片（不靠阶段门控掩盖状态清理问题）。
+    assert "searchCandidates.length > 0" in workspace_source
+
+
+def test_research_conversation_consumes_structured_clarification_fields() -> None:
+    """结构化澄清契约：前端按 next_question/suggested_answers 渲染，不再依赖正文 A/B/C/D。"""
+    conversation_source = Path("frontend/components/research/ResearchConversation.tsx").read_text(
+        encoding="utf-8"
+    )
+    options_source = Path("frontend/lib/research-options.ts").read_text(encoding="utf-8")
+    api_source = Path("frontend/lib/api/research.ts").read_text(encoding="utf-8")
+
+    # 编排器回复类型必须携带结构化字段（SSE / 重试 / 历史恢复共用同一契约）
+    reply_interface = api_source.split("export interface OrchestratorMessageReply", 1)[1].split(
+        "}", 1
+    )[0]
+    assert "next_question" in reply_interface
+    assert "suggested_answers" in reply_interface
+
+    # 纯逻辑集中在 research-options：构造选项组 + 映射消息
+    assert "buildStructuredOptionGroup" in options_source
+    assert "buildAssistantConversationMessage" in options_source
+    # 少于 2 条建议答案不渲染按钮，保持自由输入
+    assert "MIN_SUGGESTED_ANSWERS = 2" in options_source
+
+    # 组件优先使用结构化字段，且三条路径共用同一映射
+    assert "buildStructuredOptionGroup(message)" in conversation_source
+    assert "buildAssistantConversationMessage(response.reply_message)" in conversation_source
+    assert "splitMessageSegments(message.content, structuredGroup)" in conversation_source
+    # UI 层不得再硬编码清空这两个字段：唯一允许出现的是用户消息的乐观占位。
+    assert conversation_source.count("next_question: null") == 1
+    assert conversation_source.count("suggested_answers: []") == 1
+    user_placeholder = conversation_source.split("const tempUserMsg", 1)[1].split("};", 1)[0]
+    assert "next_question: null" in user_placeholder
+    assert "suggested_answers: []" in user_placeholder
 
 
 def test_markdown_renders_bracket_headings_and_stage_subheadings() -> None:
@@ -854,3 +1006,45 @@ def test_markdown_renders_bracket_headings_and_stage_subheadings() -> None:
     assert "bracketHeading" in markdown_source
     assert "stageHeading" in markdown_source
     assert "border-slate-200/70 dark:border-zinc-700/70" in markdown_source
+
+
+def test_research_analysis_entry_is_gated_by_candidates_and_confirmed_paper() -> None:
+    """「进入结果分析」必须由候选论文 + 已确认论文共同门控，且不得触发隐藏检索。
+
+    浏览器事实（2026-09-11）：该按钮只要处在研究开展阶段就可点，点下去还会
+    隐式发起一次检索，拉回 4 篇完全无关的中文论文。这里锁住三件事：
+
+    1. 门控纯函数存在，且候选数与被确认论文都参与判定；
+    2. 点击发出的消息是阶段推进陈述，不含任何检索字样；
+    3. 后端把“阶段推进陈述”排除在检索确认之外，且候选论文过英文标题过滤。
+    """
+    conversation_source = WORKSPACE.read_text(encoding="utf-8")
+    assert 'from "@/lib/research-analysis-gate"' in conversation_source
+    assert "disabled={disabled || analysisBlocker !== null}" in conversation_source
+    assert "title={analysisBlocker ?? undefined}" in conversation_source
+
+    gate_source = Path("frontend/lib/research-analysis-gate.ts").read_text(encoding="utf-8")
+    assert "candidateCount" in gate_source
+    assert "hasConfirmedPaper" in gate_source
+    # 最新一次检索是空结果（候选为空）时必须阻塞。
+    assert "count <= 0" in gate_source
+
+    analysis_button = conversation_source.split("进入结果分析</button>", 1)[0].rsplit(
+        "<button", 1
+    )[1]
+    assert "检索" not in analysis_button
+    assert "搜索" not in analysis_button
+
+    orchestrator_source = Path(
+        "src/code_navi/research/conversation_orchestrator.py"
+    ).read_text(encoding="utf-8")
+    assert "is_stage_transition_statement(user_message)" in orchestrator_source
+    assert "and not is_stage_transition" in orchestrator_source
+    # 检索确认轮必须有确定性的结构化澄清，不能赌模型正文格式。
+    assert "build_search_confirmation_clarification" in orchestrator_source
+
+    academic_source = Path("src/code_navi/research/academic.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from .paper_language import filter_english_titles" in academic_source
+    assert "papers = filter_english_titles(" in academic_source
