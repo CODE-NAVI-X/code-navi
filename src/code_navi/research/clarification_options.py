@@ -48,13 +48,34 @@ def _clean_inline(text: str) -> str:
     return cleaned.strip()
 
 
-def _is_question_line(line: str) -> bool:
-    """问句判定：以 ``？``/``?`` 结尾，且本身不是一个列表项。"""
+def _question_text(line: str) -> str | None:
+    """该行作为「待答问题」时的可展示文本；不是问句则返回 ``None``。
+
+    真实模型常把问题写成编号条目（``3. 你的 GPU 显存大概是多少？``），
+    旧判定直接排除所有列表项，于是这类轮次拿不到结构化选项，页面上只剩
+    正文里的 ``1 / 2 / 3 / 4`` 文字。这里只放宽到「列表标记之后仍是问句」，
+    普通的编号执行步骤（不以 ``？`` 结尾）依旧不会被当成问句。
+    """
     stripped = line.strip()
-    if not stripped or _LIST_MARKER.match(stripped):
-        return False
+    if not stripped:
+        return None
+    marker = _LIST_MARKER.match(stripped)
+    if marker is not None:
+        stripped = stripped[marker.end():]
     core = _clean_inline(stripped)
-    return core.endswith("？") or core.endswith("?")
+    if not core or not (core.endswith("？") or core.endswith("?")):
+        return None
+    return core
+
+
+def _is_question_line(line: str) -> bool:
+    """问句判定：以 ``？``/``?`` 结尾；列表标记只作为前缀被剥掉，不影响判定。"""
+    return _question_text(line) is not None
+
+
+#: 整行就是一个数字标号（``3.14`` / ``1.1``）时不是列表项；
+#: 但 ``5. 5`` 这种“序号 + 数字答案”仍然算候选项。
+_DECIMAL_LINE = re.compile(r"\d{1,2}\s*[.、)）]\s*[\d.]+")
 
 
 def _option_text(line: str) -> str | None:
@@ -63,10 +84,10 @@ def _option_text(line: str) -> str | None:
     marker = _LIST_MARKER.match(stripped)
     if marker is None:
         return None
-    rest = stripped[marker.end():]
     # ``3.14`` 这类小数／版本号不是列表项
-    if not rest or rest[0].isdigit():
+    if _DECIMAL_LINE.fullmatch(stripped):
         return None
+    rest = stripped[marker.end():]
     text = _clean_inline(rest)
     if not text or len(text) > MAX_OPTION_LENGTH:
         return None
@@ -105,15 +126,16 @@ def extract_clarification_options(
     lines = text.split("\n")
 
     for index, line in enumerate(lines):
-        if not _is_question_line(line):
+        question = _question_text(line)
+        if question is None:
             continue
         options = _collect_options_after(lines, index + 1)
         if min_options <= len(options) <= max_options:
-            return _clean_inline(line), options
+            return question, options
 
     # 没有可点选的候选项：仍把最后一道问句留作「待答问题」，但不伪造选项。
     last_question = next(
-        (_clean_inline(line) for line in reversed(lines) if _is_question_line(line)),
+        (_question_text(line) for line in reversed(lines) if _is_question_line(line)),
         None,
     )
     return last_question, []

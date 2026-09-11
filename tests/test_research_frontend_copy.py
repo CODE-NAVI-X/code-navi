@@ -1004,3 +1004,45 @@ def test_markdown_renders_bracket_headings_and_stage_subheadings() -> None:
     assert "bracketHeading" in markdown_source
     assert "stageHeading" in markdown_source
     assert "border-slate-200/70 dark:border-zinc-700/70" in markdown_source
+
+
+def test_research_analysis_entry_is_gated_by_candidates_and_confirmed_paper() -> None:
+    """「进入结果分析」必须由候选论文 + 已确认论文共同门控，且不得触发隐藏检索。
+
+    浏览器事实（2026-09-11）：该按钮只要处在研究开展阶段就可点，点下去还会
+    隐式发起一次检索，拉回 4 篇完全无关的中文论文。这里锁住三件事：
+
+    1. 门控纯函数存在，且候选数与被确认论文都参与判定；
+    2. 点击发出的消息是阶段推进陈述，不含任何检索字样；
+    3. 后端把“阶段推进陈述”排除在检索确认之外，且候选论文过英文标题过滤。
+    """
+    conversation_source = WORKSPACE.read_text(encoding="utf-8")
+    assert 'from "@/lib/research-analysis-gate"' in conversation_source
+    assert "disabled={disabled || analysisBlocker !== null}" in conversation_source
+    assert "title={analysisBlocker ?? undefined}" in conversation_source
+
+    gate_source = Path("frontend/lib/research-analysis-gate.ts").read_text(encoding="utf-8")
+    assert "candidateCount" in gate_source
+    assert "hasConfirmedPaper" in gate_source
+    # 最新一次检索是空结果（候选为空）时必须阻塞。
+    assert "count <= 0" in gate_source
+
+    analysis_button = conversation_source.split("进入结果分析</button>", 1)[0].rsplit(
+        "<button", 1
+    )[1]
+    assert "检索" not in analysis_button
+    assert "搜索" not in analysis_button
+
+    orchestrator_source = Path(
+        "src/code_navi/research/conversation_orchestrator.py"
+    ).read_text(encoding="utf-8")
+    assert "is_stage_transition_statement(user_message)" in orchestrator_source
+    assert "and not is_stage_transition" in orchestrator_source
+    # 检索确认轮必须有确定性的结构化澄清，不能赌模型正文格式。
+    assert "build_search_confirmation_clarification" in orchestrator_source
+
+    academic_source = Path("src/code_navi/research/academic.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from .paper_language import filter_english_titles" in academic_source
+    assert "papers = filter_english_titles(" in academic_source

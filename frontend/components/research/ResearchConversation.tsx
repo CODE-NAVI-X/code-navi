@@ -51,6 +51,7 @@ import {
   createCandidateScope,
   loadSearchCandidates,
 } from "@/lib/research-candidates";
+import { describeAnalysisBlocker } from "@/lib/research-analysis-gate";
 import { MarkdownText } from "./MarkdownText";
 import { ResearchOptionSelector } from "./ResearchOptionSelector";
 import { ProviderStatusCard } from "./ProviderStatusCard";
@@ -444,6 +445,12 @@ export function ResearchConversation() {
   );
   const showDirectionCards =
     currentStage === "research_need" && !hasConfirmedDirection && directionCards.length > 0;
+  // 「进入结果分析」不是阶段标签就能放行的动作：必须已有真实检索候选论文，
+  // 且用户确认过当前论文。缺失时按钮禁用，并直接说明缺什么。
+  const analysisBlocker = describeAnalysisBlocker({
+    candidateCount: searchCandidates.length,
+    hasConfirmedPaper: Boolean(papers?.current_paper),
+  });
   const isThinking = phase === "thinking";
   const disabled = phase !== "idle";
 
@@ -775,9 +782,10 @@ export function ResearchConversation() {
               <>
                 <button
                   type="button"
-                  disabled={disabled}
+                  disabled={disabled || analysisBlocker !== null}
+                  title={analysisBlocker ?? undefined}
                   onClick={() => void handleSend("文献精读与实验方案已完成，可以进入结果分析。")}
-                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50"
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   进入结果分析
                 </button>
