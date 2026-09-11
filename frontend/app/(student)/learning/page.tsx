@@ -21,6 +21,7 @@ import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
 import { MarkButton } from "@/components/learning/MarkButton";
 import { QuizView } from "@/components/learning/QuizView";
 import { LearningFlowStepper } from "@/components/learning/LearningFlowStepper";
+import { MathContent } from "@/components/learning/MathContent";
 import { markSourceRef } from "@/lib/api/profile";
 import {
   DEFAULT_QUIZ_PARAMS,
@@ -40,7 +41,10 @@ import {
   useLearningSessionId,
   useLearningStore,
 } from "@/lib/store/learning-store";
+import Link from "next/link";
 import {
+  ArrowRight,
+  BarChart3,
   BookOpen,
   Sparkles,
   ExternalLink,
@@ -313,10 +317,10 @@ function DirectionPill({
       type="button"
       aria-pressed={selected}
       onClick={() => onToggle(direction.id)}
-      className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-medium transition focus:ring-2 focus:ring-slate-900/20 focus:outline-none ${
+      className={`cursor-pointer rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 focus:ring-2 focus:ring-indigo-500/25 focus:outline-none ${
         selected
-          ? "border-slate-900 bg-slate-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
-          : "border-slate-200 bg-white text-slate-700 hover:border-slate-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500"
+          ? "border-indigo-500 bg-indigo-600 text-white shadow-sm shadow-indigo-500/30 dark:border-indigo-400 dark:bg-indigo-500"
+          : "border-slate-200/80 bg-white/80 text-slate-700 hover:border-indigo-400/50 hover:bg-indigo-50/50 hover:text-indigo-900 dark:border-zinc-700/80 dark:bg-zinc-800/80 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:bg-zinc-700"
       }`}
     >
       {direction.label}
@@ -338,10 +342,15 @@ function SelectedDirectionPills({
   if (selectedDirections.length === 0) return null;
 
   return (
-    <div className="mt-3" aria-label="已选探索方向">
-      <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase dark:text-zinc-400">
-        已选方向
-      </p>
+    <div className="mt-4 border-t border-slate-200/40 pt-3 dark:border-zinc-800/50" aria-label="已选探索方向">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold tracking-wider text-indigo-900/70 uppercase dark:text-indigo-300/80">
+          已选探索方向
+        </span>
+        <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300">
+          {selectedDirections.length}
+        </span>
+      </div>
       <div className="mt-2 flex flex-wrap gap-2">
         {selectedDirections.map((direction) => (
           <button
@@ -349,10 +358,10 @@ function SelectedDirectionPills({
             type="button"
             onClick={() => onRemove(direction.id)}
             aria-label={`取消方向：${direction.label}`}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-slate-500 hover:bg-slate-200 focus:ring-2 focus:ring-slate-900/20 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-700"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50/80 px-3 py-1.5 text-xs font-semibold text-indigo-900 transition hover:border-indigo-400 hover:bg-indigo-100 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none dark:border-indigo-500/30 dark:bg-indigo-950/40 dark:text-indigo-200 dark:hover:border-indigo-400/60 dark:hover:bg-indigo-900/50"
           >
             <span>{direction.label}</span>
-            <X className="h-3.5 w-3.5" aria-hidden="true" strokeWidth={1.9} />
+            <X className="h-3.5 w-3.5 opacity-70 hover:opacity-100" aria-hidden="true" strokeWidth={2} />
           </button>
         ))}
       </div>
@@ -382,7 +391,7 @@ function DirectionExplorer({
   const suggestions = [...new Set(topicDirections.flatMap((direction) => direction.sampleTopics))].slice(0, 6);
 
   return (
-    <section aria-labelledby="direction-explorer-title" className="app-card rounded-2xl p-5 sm:p-6">
+    <section aria-labelledby="direction-explorer-title" className="learning-search-panel rounded-2xl p-5 sm:p-6">
       <div>
         <h2 id="direction-explorer-title" className="text-lg font-bold text-slate-950 dark:text-zinc-50">
           探索计算机方向
@@ -392,7 +401,7 @@ function DirectionExplorer({
         </p>
       </div>
 
-      <div aria-label="计算机领域" className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div aria-label="计算机领域" className="learning-domain-tabs mt-5 flex gap-2 overflow-x-auto pb-1">
         {COMPUTER_DOMAINS.map((domain) => {
           const active = domain.id === activeDomainId;
           return (
@@ -401,11 +410,7 @@ function DirectionExplorer({
               type="button"
               aria-pressed={active}
               onClick={() => onDomainChange(domain.id)}
-              className={`cursor-pointer rounded-lg border px-3 py-2.5 text-left text-sm font-semibold transition focus:ring-2 focus:ring-slate-900/20 focus:outline-none ${
-                active
-                  ? "border-slate-900 bg-slate-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
-                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500"
-              }`}
+              className="learning-domain-pill shrink-0"
             >
               {domain.label}
             </button>
@@ -413,11 +418,11 @@ function DirectionExplorer({
         })}
       </div>
 
-      <div className="mt-4">
+      <div className="mt-5">
         <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase dark:text-zinc-400">
           可多选方向
         </p>
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-2.5 flex flex-wrap gap-2">
           {visibleDirections.map((direction) => (
             <DirectionPill
               key={direction.id}
@@ -430,17 +435,17 @@ function DirectionExplorer({
       </div>
 
       {suggestions.length > 0 && (
-        <div className="mt-4 border-t border-slate-100 pt-4 dark:border-zinc-800">
+        <div className="mt-5 border-t border-slate-200/50 pt-4 dark:border-zinc-800/60">
           <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase dark:text-zinc-400">
             主题建议
           </p>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2.5 flex flex-wrap gap-2">
             {suggestions.map((topic) => (
               <button
                 key={topic}
                 type="button"
                 onClick={() => onPickTopic(topic)}
-                className="cursor-pointer rounded-md bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200 focus:ring-2 focus:ring-slate-900/20 focus:outline-none dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                className="learning-chip text-slate-700 dark:text-zinc-200"
               >
                 {topic}
               </button>
@@ -465,10 +470,20 @@ function RecentLearningSection({
   onRestore: (item: RecentLearningItem) => void;
 }) {
   return (
-    <section aria-labelledby="recent-learning-title" className="app-card rounded-2xl p-5 sm:p-6">
-      <h2 id="recent-learning-title" className="text-lg font-bold text-slate-950 dark:text-zinc-50">
-        继续最近学习
-      </h2>
+    <section aria-labelledby="recent-learning-title" className="learning-search-panel rounded-2xl p-5 sm:p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-600 dark:bg-indigo-400/20 dark:text-indigo-300">
+            <Sparkles className="h-3.5 w-3.5" />
+          </span>
+          <h2 id="recent-learning-title" className="text-base font-bold text-slate-950 dark:text-zinc-50">
+            继续最近学习
+          </h2>
+        </div>
+        <span className="font-mono text-[11px] tracking-wider text-slate-400 uppercase dark:text-zinc-500">
+          LEARNING CACHE
+        </span>
+      </div>
       {loading && (
         <div role="status" aria-live="polite" className="mt-4 space-y-2">
           <SkeletonLine width="w-3/5" />
@@ -486,18 +501,23 @@ function RecentLearningSection({
         </p>
       )}
       {!loading && !error && items.length > 0 && (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
               disabled={item.status !== "available"}
               onClick={() => onRestore(item)}
-              className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-slate-400 hover:bg-slate-50 focus:ring-2 focus:ring-slate-900/20 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-500 dark:hover:bg-zinc-800"
+              className="group cursor-pointer rounded-xl border border-slate-200/80 bg-white/70 p-3.5 text-left backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-400/60 hover:bg-white hover:shadow-md hover:shadow-indigo-950/5 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800/80 dark:bg-zinc-900/60 dark:hover:border-indigo-500/50 dark:hover:bg-zinc-800/80 dark:hover:shadow-black/40"
             >
-              <p className="truncate text-sm font-semibold text-slate-900 dark:text-zinc-100">{item.knowledge_point}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-sm font-bold text-slate-900 transition-colors group-hover:text-indigo-600 dark:text-zinc-100 dark:group-hover:text-indigo-300">
+                  {item.knowledge_point}
+                </p>
+                <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:opacity-100 dark:text-zinc-500" />
+              </div>
               <p className="mt-1 text-xs text-slate-500 dark:text-zinc-400">
-                {item.status === "available" ? "恢复已保存的讲解" : "原学习资料已不可访问"}
+                {item.status === "available" ? "恢复已保存的讲解与练习进度" : "原学习资料已不可访问"}
               </p>
             </button>
           ))}
@@ -523,7 +543,7 @@ function ExplanationCard({
   onGenerateQuiz: () => void;
 }) {
   return (
-    <section className="app-card rounded-2xl p-7 transition-all">
+    <section className="learning-search-panel rounded-2xl p-6 sm:p-8 transition-all">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <h2 className="min-w-0 flex-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-zinc-100">
           {data.knowledge_point}
@@ -539,57 +559,59 @@ function ExplanationCard({
             type="button"
             onClick={onGeneratePpt}
             disabled={generatingPpt}
-            className="app-button-primary inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-800 active:scale-98 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-200"
+            className="learning-btn-submit !py-2.5 !px-4 text-xs"
           >
             {generatingPpt ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
             ) : (
-              <Presentation className="h-3.5 w-3.5" strokeWidth={1.5} />
+              <Presentation className="h-3.5 w-3.5" strokeWidth={1.8} />
             )}
-            {generatingPpt ? "正在生成配套 PPT…" : "一键生成配套 PPT 课件"}
+            <span>{generatingPpt ? "正在生成配套 PPT…" : "一键生成配套 PPT 课件"}</span>
           </button>
           <button
             type="button"
             onClick={onGenerateQuiz}
-            className="app-button-secondary inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold transition hover:bg-slate-50 active:scale-98 dark:hover:bg-zinc-800"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-indigo-200/80 bg-indigo-50/60 px-4 py-2.5 text-xs font-bold text-indigo-900 shadow-xs transition hover:bg-indigo-100 active:scale-98 dark:border-indigo-500/30 dark:bg-indigo-950/40 dark:text-indigo-200 dark:hover:bg-indigo-900/60"
           >
-            <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
-            开始学情诊断
+            <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.8} />
+            <span>开始学情诊断</span>
           </button>
         </div>
       </div>
 
       {/* Summary block */}
-      <div className="app-card-subtle mb-5 rounded-xl p-5">
+      <div className="mb-5 rounded-xl border border-indigo-500/15 bg-indigo-50/40 p-5 dark:border-indigo-500/20 dark:bg-indigo-950/20">
         <div className="mb-2 flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tracking-wider text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
-            <Sparkles className="h-3 w-3" strokeWidth={1.5} />
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-indigo-100/80 px-2.5 py-0.5 text-[11px] font-bold tracking-wider text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-200">
+            <Sparkles className="h-3 w-3" strokeWidth={2} />
             核心概念提炼
           </span>
         </div>
-        <p className="text-sm leading-relaxed text-slate-800 dark:text-zinc-200">{data.summary}</p>
+        <div className="text-sm leading-relaxed text-slate-800 dark:text-zinc-200">
+          <MathContent text={data.summary} />
+        </div>
       </div>
 
       {/* Detail block (optional) */}
       {data.detail && (
-        <div className="app-card-subtle mb-5 rounded-xl p-5">
+        <div className="mb-5 rounded-xl border border-slate-200/80 bg-slate-50/60 p-5 dark:border-zinc-800/80 dark:bg-zinc-900/40">
           <div className="mb-2 flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tracking-wider text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
-              <GraduationCap className="h-3 w-3" strokeWidth={1.5} />
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-purple-100/80 px-2.5 py-0.5 text-[11px] font-bold tracking-wider text-purple-800 dark:bg-purple-900/60 dark:text-purple-200">
+              <GraduationCap className="h-3 w-3" strokeWidth={2} />
               原理解析与应用场景
             </span>
           </div>
-          <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-zinc-200">
-            {data.detail}
-          </p>
+          <div className="text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-zinc-200">
+            <MathContent text={data.detail} />
+          </div>
         </div>
       )}
 
       {/* Citations */}
       {data.citations.length > 0 && (
-        <div className="mt-7 pt-4 border-t border-slate-100 dark:border-zinc-800/60">
+        <div className="mt-7 pt-4 border-t border-slate-200/50 dark:border-zinc-800/60">
           <div className="mb-3.5 flex items-center gap-2">
-            <BookOpen className="h-4 w-4 text-slate-400" strokeWidth={1.5} />
+            <BookOpen className="h-4 w-4 text-indigo-500" strokeWidth={1.8} />
             <h3 className="text-xs font-semibold tracking-wider text-slate-500 uppercase dark:text-zinc-400">
               权威文献与引用来源
             </h3>
@@ -598,11 +620,11 @@ function ExplanationCard({
             {data.citations.map((cit, i) => (
               <li
                 key={`${cit.source_title}-${i}`}
-                className="app-card-subtle rounded-xl p-4 text-xs"
+                className="rounded-xl border border-slate-200/70 bg-white/60 p-4 text-xs dark:border-zinc-800/70 dark:bg-zinc-900/50"
               >
                 <p className="font-semibold text-slate-900 dark:text-zinc-200">{cit.source_title}</p>
                 {cit.snippet && (
-                  <blockquote className="mt-2 border-l-2 border-slate-300 pl-3 italic text-slate-600 dark:border-zinc-700 dark:text-zinc-400">
+                  <blockquote className="mt-2 border-l-2 border-indigo-400 pl-3 italic text-slate-600 dark:border-indigo-500 dark:text-zinc-400">
                     &ldquo;{cit.snippet}&rdquo;
                   </blockquote>
                 )}
@@ -611,9 +633,9 @@ function ExplanationCard({
                     href={cit.uri}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 transition hover:text-slate-900 underline decoration-slate-300 hover:decoration-slate-600 dark:text-zinc-300 dark:hover:text-white dark:decoration-zinc-700"
+                    className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 transition hover:text-indigo-800 underline decoration-indigo-300 hover:decoration-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 dark:decoration-indigo-700"
                   >
-                    <ExternalLink className="h-3 w-3 shrink-0 text-slate-400" strokeWidth={1.5} />
+                    <ExternalLink className="h-3 w-3 shrink-0 text-indigo-400" strokeWidth={1.5} />
                     <span className="truncate">{cit.uri}</span>
                   </a>
                 )}
@@ -1001,6 +1023,40 @@ export default function LearningPage(): JSX.Element {
   const practiceTopic = (result?.knowledge_point || query).trim();
   return (
     <div className="mx-auto min-w-0 max-w-7xl px-4 py-5 sm:py-8">
+      {/* 学习端精致 Session 顶部标头 */}
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200/60 pb-4 dark:border-zinc-800/80">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-bold tracking-wider text-indigo-600 uppercase dark:text-indigo-400">
+              LEARNING OBSERVATORY
+            </span>
+            <span className="h-1 w-1 rounded-full bg-slate-300 dark:bg-zinc-600" />
+            <span className="text-xs text-slate-500 dark:text-zinc-400">
+              知识闭环探索空间
+            </span>
+          </div>
+          <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl dark:text-zinc-50">
+            {step === "understand" ? "概念探究与认知建构" : `深入研读 · ${practiceTopic || "概念解析"}`}
+          </h1>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <Link
+            href="/learning/practice"
+            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/80 px-4 py-1.5 text-xs font-semibold text-slate-700 shadow-xs backdrop-blur-md transition hover:border-slate-300 hover:bg-slate-100 active:scale-95 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            <Code2 className="h-3.5 w-3.5 text-emerald-500" strokeWidth={2} />
+            <span>进入动手实践</span>
+          </Link>
+          <Link
+            href="/learning/portrait"
+            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/80 px-4 py-1.5 text-xs font-semibold text-slate-700 shadow-xs backdrop-blur-md transition hover:border-slate-300 hover:bg-slate-100 active:scale-95 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            <BarChart3 className="h-3.5 w-3.5 text-amber-500" strokeWidth={2} />
+            <span>技能全景雷达</span>
+          </Link>
+        </div>
+      </div>
+
       <LearningFlowStepper
         currentStep={step}
         knowledgePoint={practiceTopic}
@@ -1020,42 +1076,43 @@ export default function LearningPage(): JSX.Element {
         {/* 「理解」步骤：只显示入口区（输入 / 继续最近学习 / 探索方向） */}
         {step === "understand" && (
           <>
-        <section aria-labelledby="learning-start-title" className="app-card rounded-2xl p-5 sm:p-7">
-          <div className="mb-4 flex items-center gap-3">
-            <span className="inline-flex rounded-full bg-slate-100 p-2 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300">
-              <Sparkles className="h-5 w-5" strokeWidth={1.5} />
+        <section aria-labelledby="learning-start-title" className="learning-search-panel rounded-2xl p-5 sm:p-7">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/15 to-purple-500/20 text-indigo-600 border border-indigo-500/20 shadow-xs dark:from-indigo-400/20 dark:to-purple-400/25 dark:text-indigo-300 dark:border-indigo-400/30">
+              <Sparkles className="h-5 w-5" strokeWidth={1.8} />
             </span>
             <div>
-              <h1 id="learning-start-title" className="text-2xl font-bold tracking-tight text-slate-950 dark:text-zinc-50">
+              <h2 id="learning-start-title" className="text-xl sm:text-2xl font-bold tracking-tight text-slate-950 dark:text-zinc-50">
                 今天想理解什么？
-              </h1>
+              </h2>
               <p className="mt-1 text-sm text-slate-600 dark:text-zinc-400">
-                直接输入概念、问题或一段材料，方向选择不是开始学习的前置条件。
+                输入概念、问题或一段材料，Code Navi 将为你深度拆解原理，并打通诊断与动手实践。
               </p>
             </div>
           </div>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-2.5 sm:flex-row">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row">
             <div className="relative flex-1">
               <textarea
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索概念、问题或粘贴一段材料……"
+                placeholder="例如：解释 Raft 的选举安全性机制、或粘贴一段有疑惑的 Go 代码/论文片段……"
                 aria-label="搜索概念、问题或粘贴一段材料"
                 rows={3}
                 disabled={loading}
-                className="app-input w-full resize-y rounded-xl px-4 py-3 text-sm shadow-sm placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:placeholder:text-zinc-500 dark:focus:ring-zinc-800"
+                className="learning-input-textarea w-full resize-y rounded-xl px-4 py-3.5 text-sm shadow-inner placeholder:text-slate-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:placeholder:text-zinc-500"
               />
-              <p className="mt-1 text-right text-xs text-slate-500 dark:text-zinc-400">
-                {query.length.toLocaleString()} / {MAX_LEARNING_INPUT_CHARS.toLocaleString()}
-              </p>
+              <div className="mt-1 flex items-center justify-between px-1 text-xs text-slate-400 dark:text-zinc-500">
+                <span className="text-[11px]">支持中英文概念、问答式长文本或代码片段</span>
+                <span>{query.length.toLocaleString()} / {MAX_LEARNING_INPUT_CHARS.toLocaleString()}</span>
+              </div>
             </div>
             <button
               type="submit"
               disabled={loading || !query.trim()}
-              className="app-button-primary flex cursor-pointer items-center justify-center gap-2 self-start rounded-xl px-6 py-3.5 text-sm font-medium shadow-sm transition hover:bg-slate-800 focus:ring-2 focus:ring-slate-900/20 focus:outline-none active:scale-98 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-zinc-200"
+              className="learning-btn-submit self-start sm:self-stretch min-w-[130px]"
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} /> : <Search className="h-4 w-4" strokeWidth={1.5} />}
-              {loading ? "正在解析…" : "开始学习"}
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.8} /> : <Search className="h-4 w-4" strokeWidth={1.8} />}
+              <span>{loading ? "正在解析…" : "开始学习"}</span>
             </button>
           </form>
           <SelectedDirectionPills
@@ -1120,42 +1177,42 @@ export default function LearningPage(): JSX.Element {
 
           {/* Result area: unified 深度解析 ↔ PPT 演示课件 */}
           {/* View switcher */}
-          <div className="mb-4 max-w-full overflow-x-auto rounded-xl border border-slate-200/50 bg-slate-100/90 p-1 dark:border-zinc-700/40 dark:bg-zinc-800/80">
-            <div className="flex min-w-max">
+          <div className="mb-5 max-w-full overflow-x-auto rounded-2xl border border-slate-200/60 bg-slate-100/80 p-1.5 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/70">
+            <div className="flex min-w-max gap-1">
             <button
               type="button"
               onClick={() => setView("text")}
-              className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium transition-all ${
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
                 view === "text"
-                  ? "bg-white text-slate-900 shadow-2xs dark:bg-zinc-900 dark:text-zinc-100 font-semibold"
-                  : "text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  ? "bg-white text-indigo-950 shadow-sm dark:bg-zinc-800 dark:text-white dark:shadow-black/50"
+                  : "text-slate-600 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-200"
               }`}
             >
-              <BookOpen className="h-3.5 w-3.5" strokeWidth={1.5} />
+              <BookOpen className="h-3.5 w-3.5" strokeWidth={1.8} />
               结构化文本
             </button>
             <button
               type="button"
               onClick={() => setView("ppt")}
-              className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium transition-all ${
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
                 view === "ppt"
-                  ? "bg-white text-slate-900 shadow-2xs dark:bg-zinc-900 dark:text-zinc-100 font-semibold"
-                  : "text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  ? "bg-white text-indigo-950 shadow-sm dark:bg-zinc-800 dark:text-white dark:shadow-black/50"
+                  : "text-slate-600 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-200"
               }`}
             >
-              <Presentation className="h-3.5 w-3.5" strokeWidth={1.5} />
+              <Presentation className="h-3.5 w-3.5" strokeWidth={1.8} />
               PPT 演示课件
             </button>
             <button
               type="button"
               onClick={() => setView("quiz")}
-              className={`flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium transition-all ${
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
                 view === "quiz"
-                  ? "bg-white text-slate-900 shadow-2xs dark:bg-zinc-900 dark:text-zinc-100 font-semibold"
-                  : "text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  ? "bg-white text-indigo-950 shadow-sm dark:bg-zinc-800 dark:text-white dark:shadow-black/50"
+                  : "text-slate-600 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-200"
               }`}
             >
-              <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.5} />
+              <FileQuestion className="h-3.5 w-3.5" strokeWidth={1.8} />
               学情诊断
             </button>
             </div>

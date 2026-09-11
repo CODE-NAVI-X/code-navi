@@ -208,31 +208,53 @@ function NavigationTree({
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const isHome = pathname === "/";
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--app-surface)] text-[var(--app-foreground)]">
       {/* 统一顶栏（D5 Q3 拍板）：管「我在哪、我是谁」，零路由项 */}
-      <header className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-header)] px-3 backdrop-blur-xl md:h-16 md:gap-3 md:px-5">
+      <header
+        className={`sticky top-0 z-40 flex h-12 shrink-0 items-center gap-2 border-b px-3 backdrop-blur-xl md:h-16 md:gap-3 md:px-5 transition-colors duration-200 ${
+          isHome
+            ? "border-white/10 bg-[#0d0b18]/85 text-white shadow-lg shadow-black/20"
+            : "border-[var(--app-border)] bg-[var(--app-header)] text-[var(--app-foreground)]"
+        }`}
+      >
         <button
           type="button"
           onClick={() => setMobileDrawerOpen(true)}
-          aria-label="打开导航菜单"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control border border-[var(--app-border)] bg-[var(--app-card)] text-slate-700 hover:bg-slate-100 dark:text-zinc-200 dark:hover:bg-zinc-800 md:hidden"
+          aria-label={isHome ? "打开主导航菜单" : "打开导航菜单"}
+          className={`flex h-9 shrink-0 items-center gap-1.5 rounded-control px-2.5 transition active:scale-95 ${
+            isHome
+              ? "border border-white/20 bg-white/10 text-white hover:bg-white/20 cursor-pointer"
+              : "border border-[var(--app-border)] bg-[var(--app-card)] text-slate-700 hover:bg-slate-100 dark:text-zinc-200 dark:hover:bg-zinc-800 md:hidden"
+          }`}
         >
           <Menu className="h-4 w-4" />
+          {isHome && <span className="hidden text-xs font-semibold sm:inline">导航菜单</span>}
         </button>
 
         <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="Code Navi 首页">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-slate-950 font-mono text-xs font-bold text-white shadow-sm dark:bg-white dark:text-zinc-950 md:h-8 md:w-8">
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-control font-mono text-xs font-bold md:h-8 md:w-8 ${
+              isHome
+                ? "bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-md shadow-indigo-500/30"
+                : "bg-slate-950 text-white shadow-sm dark:bg-white dark:text-zinc-950"
+            }`}
+          >
             CN
           </span>
-          <span className="text-sm font-bold tracking-tight text-slate-900 dark:text-zinc-100">
+          <span
+            className={`text-sm font-bold tracking-tight ${
+              isHome ? "text-white" : "text-slate-900 dark:text-zinc-100"
+            }`}
+          >
             Code Navi
           </span>
         </Link>
 
         <span
-          className="mx-1 hidden h-6 w-px bg-[var(--app-border)] md:block"
+          className={`mx-1 hidden h-6 w-px md:block ${isHome ? "bg-white/15" : "bg-[var(--app-border)]"}`}
           aria-hidden="true"
         />
 
@@ -250,33 +272,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       <div className="flex min-w-0 flex-1">
-        {/* 桌面侧边栏：管「去哪里」 */}
-        <aside
-          aria-label="桌面主导航"
-          className="fixed left-0 top-12 bottom-0 z-30 hidden w-64 flex-col border-r border-[var(--app-border)] bg-[var(--app-card)] shadow-xs md:flex"
-        >
-          <NavigationTree pathname={pathname} />
-        </aside>
+        {/* 桌面侧边栏：非首页显示；首页隐藏以呈现全景沉浸体验 */}
+        {!isHome && (
+          <aside
+            aria-label="桌面主导航"
+            className="fixed left-0 top-12 bottom-0 z-30 hidden w-64 flex-col border-r border-[var(--app-border)] bg-[var(--app-card)] shadow-xs md:flex"
+          >
+            <NavigationTree pathname={pathname} />
+          </aside>
+        )}
 
-        <main className="min-w-0 flex-1 md:pl-64">{children}</main>
+        <main className={`min-w-0 flex-1 ${isHome ? "w-full" : "md:pl-64"}`}>{children}</main>
       </div>
 
-      {/* 移动端抽屉 (Drawer)：390×844 降级，遮罩点击关闭 */}
+      {/* 移动端抽屉 / 首页全尺寸支持 */}
       {mobileDrawerOpen && (
         <div
-          className="fixed inset-0 z-50 md:hidden"
+          className={`fixed inset-0 z-50 ${isHome ? "" : "md:hidden"}`}
           role="dialog"
           aria-modal="true"
-          aria-label="移动端主导航"
+          aria-label="主导航菜单"
         >
           {/* 遮罩背景 */}
           <div
-            className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity"
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs transition-opacity"
             onClick={() => setMobileDrawerOpen(false)}
             aria-hidden="true"
           />
           {/* 抽屉内容 */}
-          <div className="fixed inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-[var(--app-card)] shadow-2xl border-r border-[var(--app-border)] animate-in slide-in-from-left duration-200">
+          <div className="fixed inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-[var(--app-card)] shadow-2xl border-r border-[var(--app-border)] animate-in slide-in-from-left duration-200 dark:bg-[#12101e] dark:border-white/10">
             <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-4">
               <Link
                 href="/"

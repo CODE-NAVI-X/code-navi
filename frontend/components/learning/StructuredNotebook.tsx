@@ -1,6 +1,14 @@
 "use client";
 
-import { type KeyboardEvent as ReactKeyboardEvent, useState, useEffect, useCallback, useRef } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   fetchNotebookItems,
@@ -10,6 +18,7 @@ import {
 } from "@/lib/api/learning";
 import { createLearningToResearchContext } from "@/lib/api/context-transfers";
 import { SlideViewer } from "@/components/learning/presentation/SlideViewer";
+import { MathContent } from "@/components/learning/MathContent";
 import {
   Bookmark,
   X,
@@ -119,7 +128,7 @@ function PresentationPreviewOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm sm:p-8"
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md sm:p-8"
       onClick={onClose}
     >
       <div
@@ -127,20 +136,20 @@ function PresentationPreviewOverlay({
         aria-modal="true"
         aria-labelledby="presentation-preview-title"
         ref={dialogRef}
-        className="app-card max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl p-5 shadow-2xl sm:p-6"
+        className="max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-white/15 bg-[#120f20]/95 p-5 text-white shadow-2xl backdrop-blur-2xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="mb-4 flex items-center justify-between gap-3 border-b border-white/10 pb-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700 dark:bg-zinc-800 dark:text-zinc-200">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white border border-white/12">
               <Presentation className="h-4 w-4" strokeWidth={1.5} />
             </div>
             <div className="min-w-0">
-              <h4 id="presentation-preview-title" className="truncate text-sm font-bold text-slate-900 dark:text-zinc-100">
+              <h4 id="presentation-preview-title" className="truncate text-sm font-bold text-white">
                 {detail.knowledge_point}
               </h4>
-              <p className="text-[11px] text-slate-400 dark:text-zinc-500">
+              <p className="text-[11px] text-zinc-400">
                 共 {detail.slides.length} 页 · 历史 PPT 预览
               </p>
             </div>
@@ -150,7 +159,7 @@ function PresentationPreviewOverlay({
             ref={closeButtonRef}
             onClick={onClose}
             aria-label="关闭预览"
-            className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+            className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition hover:bg-white/15 hover:text-white"
           >
             <X className="h-4 w-4" strokeWidth={1.5} />
           </button>
@@ -180,6 +189,16 @@ function PresentationPreviewOverlay({
   );
 }
 
+const emptySubscribe = () => () => {};
+
+function useClientMounted() {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+}
+
 export function StructuredNotebook({
   open,
   onDismiss,
@@ -187,6 +206,7 @@ export function StructuredNotebook({
   initialTab = "summary",
 }: StructuredNotebookProps) {
   const router = useRouter();
+  const mounted = useClientMounted();
   const [activeTab, setActiveTab] = useState<NotebookTab>(initialTab);
   const [items, setItems] = useState<NotebookItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -264,7 +284,7 @@ export function StructuredNotebook({
     }
   }
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
   function handleNotebookKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") {
@@ -300,28 +320,36 @@ export function StructuredNotebook({
     { id: "presentation", label: "PPT 课件", icon: Presentation, count: presentationItems.length },
   ];
 
-  return (
+  return createPortal(
     <>
       {/* Backdrop */}
       <div
         aria-hidden="true"
-        className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
+        className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm transition-opacity animate-in fade-in duration-200"
         onClick={onDismiss}
       />
 
       {/* Slide Drawer */}
-      <aside ref={drawerRef} role="dialog" aria-modal="true" aria-hidden={preview ? true : undefined} aria-labelledby="structured-notebook-title" onKeyDown={handleNotebookKeyDown} className="fixed right-0 top-0 bottom-0 z-50 flex w-[430px] max-w-[90vw] flex-col border-l border-[var(--app-border)] bg-[var(--app-card)] shadow-2xl transition-transform animate-in slide-in-from-right duration-300">
+      <aside
+        ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-hidden={preview ? true : undefined}
+        aria-labelledby="structured-notebook-title"
+        onKeyDown={handleNotebookKeyDown}
+        className="fixed right-0 top-0 bottom-0 z-[101] flex h-full max-h-screen w-[490px] max-w-[94vw] flex-col border-l border-white/10 bg-[#0e0c1a]/95 text-white backdrop-blur-2xl shadow-2xl transition-transform animate-in slide-in-from-right duration-300"
+      >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-zinc-800">
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4.5 bg-white/[0.02]">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300">
-              <Bookmark className="h-4 w-4 text-slate-700 dark:text-zinc-300" strokeWidth={1.5} />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 border border-white/10 text-purple-300 shadow-inner">
+              <Bookmark className="h-5 w-5" strokeWidth={1.8} />
             </div>
             <div>
-              <h3 id="structured-notebook-title" className="text-sm font-bold text-slate-900 dark:text-zinc-100">
+              <h3 id="structured-notebook-title" className="text-base font-bold text-white tracking-tight">
                 结构化学术笔记
               </h3>
-              <p className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+              <p className="text-[11px] font-mono text-zinc-400 mt-0.5">
                 {sessionId ? `会话编号：${sessionId}` : "正在初始化学习会话"}
               </p>
             </div>
@@ -330,15 +358,15 @@ export function StructuredNotebook({
             ref={closeButtonRef}
             onClick={onDismiss}
             aria-label="关闭"
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition hover:bg-white/15 hover:text-white active:scale-95"
           >
-            <X className="h-4 w-4" strokeWidth={1.5} />
+            <X className="h-4 w-4" strokeWidth={1.75} />
           </button>
         </div>
 
-        {/* Tab triggers - Shadcn Standard Segmented Control */}
-        <div className="p-4 border-b border-slate-100 dark:border-zinc-800/80">
-          <div className="grid grid-cols-5 rounded-xl bg-slate-100/90 p-1 dark:bg-zinc-800/80 border border-slate-200/50 dark:border-zinc-700/40">
+        {/* Tab triggers - Galaxy Fluid Capsules */}
+        <div className="border-b border-white/10 px-5 py-3 bg-white/[0.01]">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -346,15 +374,17 @@ export function StructuredNotebook({
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex flex-col items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-medium transition-all cursor-pointer ${
+                  className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition cursor-pointer ${
                     isActive
-                      ? "bg-white text-slate-900 shadow-2xs dark:bg-zinc-900 dark:text-zinc-100 font-semibold"
-                      : "text-slate-500 hover:text-slate-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                      ? "bg-white text-zinc-950 font-bold shadow-md"
+                      : "border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white"
                   }`}
                 >
-                  <Icon className="h-3 w-3" strokeWidth={1.5} />
-                  {tab.label}
-                  <span className="font-mono text-[10px] opacity-70">{tab.count}</span>
+                  <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  <span>{tab.label}</span>
+                  <span className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono ${isActive ? "bg-zinc-900 text-white" : "bg-white/10 text-zinc-400"}`}>
+                    {tab.count}
+                  </span>
                 </button>
               );
             })}
@@ -362,91 +392,103 @@ export function StructuredNotebook({
         </div>
 
         {/* Tab content area */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-5 space-y-3.5">
           {isLoading ? (
-            /* High-grade Skeleton Screen Loading state */
             <div role="status" aria-live="polite" className="space-y-3">
               {[1, 2, 3].map((idx) => (
                 <div
                   key={idx}
-                  className="app-card-subtle animate-pulse rounded-xl p-4"
+                  className="animate-pulse rounded-xl border border-white/10 bg-white/5 p-4.5"
                 >
-                  <div className="mb-2 h-3.5 w-1/3 rounded bg-slate-200 dark:bg-zinc-700" />
-                  <div className="mb-1.5 h-3 w-full rounded bg-slate-200 dark:bg-zinc-700" />
-                  <div className="h-3 w-4/5 rounded bg-slate-200 dark:bg-zinc-700" />
+                  <div className="mb-2 h-3.5 w-1/3 rounded bg-white/10" />
+                  <div className="mb-1.5 h-3 w-full rounded bg-white/10" />
+                  <div className="h-3 w-4/5 rounded bg-white/10" />
                 </div>
               ))}
             </div>
           ) : error ? (
-            <div role="alert" className="flex flex-col items-center justify-center py-12 text-red-500">
+            <div role="alert" className="flex flex-col items-center justify-center py-12 text-rose-400">
               <p className="text-xs">{error}</p>
             </div>
           ) : currentTabItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-zinc-500">
-              <Inbox className="mb-2.5 h-9 w-9 text-slate-300 dark:text-zinc-600" strokeWidth={1.5} />
-              <p className="text-xs font-medium">当前知识点暂无归档笔记</p>
+            <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/5 border border-white/10 mb-3 text-zinc-400">
+                <Inbox className="h-7 w-7" strokeWidth={1.5} />
+              </div>
+              <p className="text-xs font-medium text-zinc-300">当前分类暂无归档笔记</p>
+              <p className="text-[11px] text-zinc-500 mt-1">在学习过程中划词提炼或生成 PPT，内容将自动沉淀于此</p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3.5">
               {currentTabItems.map((item) => (
                 <article
                   key={item.id}
-                  className="app-card-subtle block w-full rounded-xl p-4 text-left"
+                  className="galaxy-card block w-full p-4.5 text-left transition hover:border-white/20"
                 >
                   {item.timestamp && (
-                    <div className="mb-2 flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-zinc-500 font-mono">
-                      <Clock className="h-3 w-3 text-slate-400" strokeWidth={1.5} />
+                    <div className="mb-2 flex items-center gap-1.5 text-[11px] text-zinc-400 font-mono">
+                      <Clock className="h-3 w-3 text-zinc-500" strokeWidth={1.5} />
                       {new Date(item.timestamp).toLocaleString("zh-CN")}
                     </div>
                   )}
                   {item.kind === "presentation" && (
-                    <div className="mb-1.5 flex items-center gap-1.5">
-                      <Presentation className="h-3 w-3 text-slate-500 dark:text-zinc-400" strokeWidth={1.5} />
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400">
+                    <div className="mb-2 flex items-center gap-1.5">
+                      <Presentation className="h-3.5 w-3.5 text-purple-300" strokeWidth={1.5} />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-300">
                         PPT 课件 · 点击预览
                       </span>
                     </div>
                   )}
                   {item.kind === "research_note" && (
                     <div className="mb-2 flex items-center gap-1.5">
-                      <Microscope className="h-3 w-3 text-emerald-600" strokeWidth={1.5} />
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+                      <Microscope className="h-3.5 w-3.5 text-emerald-400" strokeWidth={1.5} />
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">
                         Research Conversation 研究笔记
                       </span>
                     </div>
                   )}
                   {item.kind === "research_note" && item.research_note ? (
-                    <div className="space-y-2 text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
-                      <p className="font-semibold text-slate-900 dark:text-zinc-100">{item.research_note.research_topic}</p>
-                      <p className="line-clamp-4">研究问题：{item.research_note.research_question}</p>
-                      <div>
-                        <p className="font-semibold">下一步建议</p>
-                        <ol className="mt-1 list-decimal space-y-1 pl-4">
+                    <div className="space-y-2 text-xs leading-relaxed text-zinc-300">
+                      <p className="font-semibold text-white text-sm">{item.research_note.research_topic}</p>
+                      <p className="line-clamp-4 text-zinc-300">研究问题：{item.research_note.research_question}</p>
+                      <div className="rounded-lg bg-white/[0.03] border border-white/8 p-2.5">
+                        <p className="font-semibold text-zinc-200">下一步建议</p>
+                        <ol className="mt-1 list-decimal space-y-1 pl-4 text-zinc-400">
                           {item.research_note.next_steps.map((step) => <li key={step}>{step}</li>)}
                         </ol>
                       </div>
                     </div>
                   ) : (
-                    <p className="whitespace-pre-line text-xs leading-relaxed text-slate-700 dark:text-zinc-300">
-                      {item.content}
-                    </p>
+                    <div className="text-xs leading-relaxed text-zinc-200 whitespace-pre-line">
+                      <MathContent text={item.content} />
+                    </div>
                   )}
                   {item.source_url && (
-                    <a href={item.source_url} target="_blank" rel="noreferrer" className="mt-2.5 inline-flex items-center gap-1 text-[11px] font-medium text-slate-700 hover:text-slate-900 hover:underline dark:text-zinc-300 dark:hover:text-white">
+                    <a
+                      href={item.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-semibold text-purple-300 hover:text-purple-200 transition-colors"
+                    >
                       <span>查看原文</span>
                       <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
                     </a>
                   )}
                   {item.kind === "research_note" && item.research_note && (
-                    <div className="mt-3 space-y-2 border-t border-slate-200 pt-3 text-[11px] dark:border-zinc-700">
-                      <p className="font-semibold text-slate-700 dark:text-zinc-200">Evidence 来源</p>
+                    <div className="mt-3 space-y-2 border-t border-white/10 pt-3 text-[11px]">
+                      <p className="font-semibold text-zinc-300">Evidence 来源</p>
                       {item.research_note.evidence_refs.map((reference) => (
-                        <a key={`${reference.bundle_id}:${reference.paper_url}`} href={reference.paper_url} target="_blank" rel="noreferrer" className="flex items-start justify-between gap-2 text-sky-700 hover:underline dark:text-sky-300">
-                          <span>{reference.title}{reference.evidence_summary ? <span className="mt-1 line-clamp-3 font-normal text-slate-500 dark:text-zinc-400">{reference.evidence_summary}</span> : null}</span>
-                          <span className="shrink-0 text-slate-400">{reference.source_name} · {reference.evidence_level === "abstract" ? "摘要级" : "元数据级"}</span>
+                        <a
+                          key={`${reference.bundle_id}:${reference.paper_url}`}
+                          href={reference.paper_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-start justify-between gap-2 text-indigo-300 hover:text-indigo-200 transition"
+                        >
+                          <span className="truncate">{reference.title}</span>
+                          <span className="shrink-0 text-zinc-400">{reference.source_name}</span>
                         </a>
                       ))}
-                      <p className="text-slate-500 dark:text-zinc-400">Conversation：{item.research_note.conversation_id}</p>
                     </div>
                   )}
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -454,9 +496,10 @@ export function StructuredNotebook({
                       <button
                         type="button"
                         onClick={(event) => void openPresentation(item, event.currentTarget)}
-                        className="app-button-secondary inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 active:scale-95 cursor-pointer"
                       >
-                        <Presentation className="h-3 w-3" /> 预览课件
+                        <Presentation className="h-3.5 w-3.5" />
+                        <span>预览课件</span>
                       </button>
                     )}
                     {item.kind === "summary" && (
@@ -464,14 +507,14 @@ export function StructuredNotebook({
                         type="button"
                         onClick={() => void continueToResearch(item)}
                         disabled={transferringItemId !== null}
-                        className="app-button-primary inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-zinc-950 transition hover:bg-zinc-100 hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
                       >
                         {transferringItemId === item.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
-                          <GraduationCap className="h-3 w-3" />
+                          <GraduationCap className="h-3.5 w-3.5" />
                         )}
-                        继续研究
+                        <span>继续研究</span>
                       </button>
                     )}
                   </div>
@@ -484,7 +527,7 @@ export function StructuredNotebook({
 
       {/* Fullscreen presentation preview */}
       {loadingPreview && (
-        <div role="status" aria-live="polite" className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+        <div role="status" aria-live="polite" className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-md">
           <Loader2 className="h-8 w-8 animate-spin text-white" strokeWidth={1.5} />
         </div>
       )}
@@ -495,6 +538,7 @@ export function StructuredNotebook({
           returnFocusTarget={previewFocusTarget}
         />
       )}
-    </>
+    </>,
+    document.body,
   );
 }

@@ -102,9 +102,9 @@ function LearningNotebookHost() {
         type="button"
         onClick={() => showNotebook("summary")}
         aria-label="展开学习笔记"
-        className="app-button-secondary inline-flex shrink-0 items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800"
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs backdrop-blur-md transition hover:border-slate-300 hover:bg-white active:scale-95 cursor-pointer dark:border-white/15 dark:bg-white/10 dark:text-zinc-200 dark:hover:bg-white/15 dark:hover:text-white"
       >
-        <BookOpen className="h-3.5 w-3.5" strokeWidth={1.8} />
+        <BookOpen className="h-3.5 w-3.5 text-indigo-500 dark:text-purple-300" strokeWidth={1.8} />
         <span>展开学习笔记</span>
       </button>
       <StructuredNotebook

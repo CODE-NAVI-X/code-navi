@@ -52,3 +52,23 @@ def test_practice_page_restores_project_generated_code_fill_sets() -> None:
     assert "fetchPracticeSet(restoredSetId)" in source
     assert "restoredStructureSet" in source
     assert "fetchPracticeSet" in api
+
+
+def test_project_navigation_scrolls_to_target_line_and_highlights() -> None:
+    source = PROJECT_PAGE.read_text(encoding="utf-8")
+
+    assert "targetLineRef" in source
+    assert "scrollIntoView" in source
+    assert "ref={isTargetLine ? targetLineRef : undefined}" in source
+    assert "data-line-number={lineNumber}" in source
+    assert 'aria-current={isTargetLine ? "location" : undefined}' in source
+
+
+def test_project_navigation_behavioral_vitest_is_wired() -> None:
+    vitest_path = Path("frontend/test/project-navigation.test.tsx")
+    assert vitest_path.exists()
+    test_source = vitest_path.read_text(encoding="utf-8")
+    assert "scrolls and highlights a symbol after its file content loads" in test_source
+    assert "clears the previous symbol target when a normal file is selected" in test_source
+    assert "scrollIntoView" in test_source
+

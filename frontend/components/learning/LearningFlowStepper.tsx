@@ -115,7 +115,7 @@ export function LearningFlowStepper({
   return (
     <nav
       aria-label="学习闭环五步流程导航"
-      className={`app-card mb-6 rounded-2xl p-2 sm:p-2.5 shadow-sm overflow-x-auto ${className}`}
+      className={`learning-flow app-card mb-6 overflow-x-auto rounded-2xl p-2 sm:p-2.5 ${className}`}
     >
       <ol className="flex min-w-max items-center justify-between gap-1 sm:gap-2">
         {LEARNING_STEPS.map((step, index) => {
@@ -125,16 +125,17 @@ export function LearningFlowStepper({
 
           const stepContent = (
             <div
-              className={`flex items-center gap-2 rounded-xl px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-semibold transition select-none ${
+              data-current={isCurrent}
+              className={`learning-flow__item flex items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs font-semibold select-none sm:px-3 sm:py-2 ${
                 isCurrent
-                  ? "bg-slate-950 text-white shadow-sm dark:bg-white dark:text-zinc-950"
+                  ? "text-white"
                   : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
               }`}
             >
               <span
                 className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[11px] font-bold ${
                   isCurrent
-                    ? "bg-white/20 text-white dark:bg-zinc-950/20 dark:text-zinc-950"
+                    ? "bg-white/20 text-white"
                     : "bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-400"
                 }`}
               >
@@ -157,7 +158,7 @@ export function LearningFlowStepper({
                     }
                   }}
                   aria-current={isCurrent ? "step" : undefined}
-                  className="cursor-pointer focus:outline-none focus:ring-2 focus:ring-slate-900/20 rounded-xl"
+                  className="cursor-pointer rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--app-focus)]/35"
                 >
                   {stepContent}
                 </button>
@@ -165,7 +166,7 @@ export function LearningFlowStepper({
                 <Link
                   href={href}
                   aria-current={isCurrent ? "step" : undefined}
-                  className="focus:outline-none focus:ring-2 focus:ring-slate-900/20 rounded-xl"
+                  className="rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--app-focus)]/35"
                 >
                   {stepContent}
                 </Link>

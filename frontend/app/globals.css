@@ -14,6 +14,12 @@
   --app-shadow-flat: 0 1px 2px rgba(15, 23, 42, 0.04);
   --app-shadow-lift: 0 8px 24px rgba(15, 23, 42, 0.08);
   --app-focus: #2563eb;
+  --app-accent: #6d5bd0;
+  --app-accent-strong: #5140b5;
+  --app-accent-soft: #eeecff;
+  --app-aurora: #b9eee1;
+  --app-hero-ink: #171421;
+  --app-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   /* System font stack (was next/font/google Geist) so `next build` runs
      fully offline — required for the Docker/NAS build, which cannot reach
      Google Fonts. Variable names kept so @theme below needs no change. */
@@ -48,6 +54,11 @@
     --app-shadow-flat: 0 1px 2px rgba(0, 0, 0, 0.5);
     --app-shadow-lift: 0 8px 28px rgba(0, 0, 0, 0.7);
     --app-focus: #3b82f6;
+    --app-accent: #b9b0ff;
+    --app-accent-strong: #a99cff;
+    --app-accent-soft: rgba(130, 112, 217, 0.16);
+    --app-aurora: #b9eee1;
+    --app-hero-ink: #15131e;
   }
 }
 
@@ -138,6 +149,201 @@
   }
 }
 
+.app-shell-header {
+  box-shadow: 0 1px 0 rgba(68, 56, 120, 0.05);
+}
+
+.app-shell-sidebar {
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--app-card) 96%, var(--app-accent-soft)) 0%, var(--app-card) 34%);
+}
+
+.learning-hero {
+  isolation: isolate;
+  position: relative;
+  overflow: hidden;
+  min-height: 21rem;
+  border: 1px solid color-mix(in oklab, var(--app-accent) 25%, transparent);
+  border-radius: 1.5rem;
+  background: var(--app-hero-ink);
+  box-shadow: 0 20px 48px rgba(34, 25, 65, 0.2);
+}
+
+.learning-hero__art,
+.learning-hero__veil {
+  position: absolute;
+  inset: -3%;
+  pointer-events: none;
+}
+
+.learning-hero__art {
+  z-index: -2;
+  background-position: center;
+  background-size: cover;
+  opacity: 0.95;
+  animation: learning-hero-drift 18s var(--app-ease-out) infinite alternate;
+}
+
+.learning-hero__veil {
+  z-index: -1;
+  background:
+    linear-gradient(90deg, rgba(18, 15, 29, 0.96) 0%, rgba(18, 15, 29, 0.81) 35%, rgba(18, 15, 29, 0.28) 73%, rgba(18, 15, 29, 0.08) 100%),
+    linear-gradient(180deg, rgba(8, 8, 16, 0.08), rgba(8, 8, 16, 0.55));
+}
+
+.learning-hero__content {
+  display: flex;
+  min-height: inherit;
+  max-width: 42rem;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(2rem, 5vw, 4rem);
+}
+
+.learning-hero__eyebrow {
+  width: fit-content;
+  border: 1px solid rgba(213, 205, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(32, 27, 51, 0.58);
+  padding: 0.3rem 0.7rem;
+  color: #dedaff;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.learning-hero__title {
+  max-width: 32rem;
+  color: #fbfaff;
+  font-size: clamp(2rem, 4.5vw, 3.65rem);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.learning-hero__description {
+  max-width: 36rem;
+  color: rgba(241, 239, 255, 0.82);
+  font-size: 1rem;
+  line-height: 1.75;
+  text-wrap: pretty;
+}
+
+.learning-hero__action {
+  width: fit-content;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(226, 222, 255, 0.28);
+  border-radius: 999px;
+  background: #f4f1ff;
+  padding: 0.72rem 1.25rem;
+  color: #31275c;
+  font-size: 0.875rem;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(4, 3, 12, 0.2);
+  transition: transform 180ms var(--app-ease-out), background-color 180ms var(--app-ease-out), box-shadow 180ms var(--app-ease-out);
+}
+
+.learning-hero__action:hover {
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(4, 3, 12, 0.32);
+  transform: translateY(-2px);
+}
+
+.learning-hero__action:active {
+  transform: scale(0.96);
+}
+
+.learning-flow {
+  border-color: color-mix(in oklab, var(--app-border) 76%, var(--app-accent));
+  background: color-mix(in oklab, var(--app-card) 92%, var(--app-accent-soft));
+  box-shadow: 0 10px 30px rgba(67, 51, 120, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.learning-flow__item {
+  transition: background-color 180ms var(--app-ease-out), color 180ms var(--app-ease-out), box-shadow 180ms var(--app-ease-out), transform 180ms var(--app-ease-out);
+}
+
+.learning-flow__item:not([data-current="true"]):hover {
+  transform: translateY(-1px);
+}
+
+.learning-flow__item[data-current="true"] {
+  background: var(--app-accent-strong);
+  color: #ffffff;
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--app-accent-strong) 28%, transparent);
+}
+
+.learning-explorer {
+  border: 1px solid color-mix(in oklab, var(--app-border) 84%, var(--app-accent));
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--app-accent-soft) 85%, transparent), transparent 32%),
+    var(--app-card);
+  box-shadow: var(--app-shadow-flat), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.learning-domain-tabs {
+  scrollbar-width: none;
+}
+
+.learning-domain-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes learning-hero-drift {
+  from { transform: scale(1.02) translate3d(-0.35%, 0, 0); }
+  to { transform: scale(1.075) translate3d(0.55%, -0.45%, 0); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .learning-flow {
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+
+  .learning-flow__item[data-current="true"] {
+    background: #6352d7;
+    color: #ffffff;
+    box-shadow: 0 4px 18px rgba(99, 82, 215, 0.45);
+  }
+
+  .learning-explorer {
+    box-shadow: var(--app-shadow-flat), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .learning-hero__art {
+    animation: none;
+    transform: none;
+  }
+
+  .learning-hero__action,
+  .learning-flow__item {
+    transition-duration: 0.01ms;
+  }
+}
+
+@media (max-width: 640px) {
+  .learning-hero {
+    min-height: 24rem;
+  }
+
+  .learning-hero__art {
+    inset: 0;
+    background-position: 62% center;
+  }
+
+  .learning-hero__veil {
+    inset: 0;
+    background: linear-gradient(180deg, rgba(18, 15, 29, 0.78), rgba(18, 15, 29, 0.93));
+  }
+}
+
 .bg-grid-pattern {
   background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
   background-size: 24px 24px;
@@ -146,4 +352,397 @@
 .bg-grid-pattern-light {
   background-image: radial-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px);
   background-size: 24px 24px;
+}
+
+/* ── Workbench Panoramic Map & Frosted HUD ────────────────────────────── */
+
+.workbench-snap-container {
+  height: calc(100vh - 3rem);
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+
+.workbench-snap-container::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .workbench-snap-container {
+    height: calc(100vh - 4rem);
+  }
+}
+
+.workbench-snap-section {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+@keyframes stagger-char-in {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+    filter: blur(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.animate-stagger-char {
+  display: inline-block;
+  opacity: 0;
+  color: #ffffff;
+  animation: stagger-char-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity, filter;
+}
+
+@keyframes stagger-fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+    filter: blur(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.animate-fade-up {
+  opacity: 0;
+  animation: stagger-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.workbench-map-root {
+  isolation: isolate;
+  position: relative;
+  min-height: calc(100vh - 3rem);
+  overflow: hidden;
+  background: #0d0b18;
+}
+
+.workbench-map-bg {
+  position: absolute;
+  inset: -2%;
+  z-index: -2;
+  background-image: url('/images/backgrounds/learning-observatory-hero.webp');
+  background-size: cover;
+  background-position: center 20%;
+  pointer-events: none;
+  opacity: 0.95;
+  animation: workbench-map-drift 24s var(--app-ease-out) infinite alternate;
+}
+
+.workbench-map-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(13, 11, 24, 0.72) 0%, rgba(13, 11, 24, 0.48) 30%, rgba(13, 11, 24, 0.82) 75%, #0d0b18 100%),
+    radial-gradient(ellipse 85% 65% at 25% 25%, rgba(13, 11, 24, 0.3) 0%, rgba(13, 11, 24, 0.85) 100%);
+}
+
+@keyframes workbench-map-drift {
+  from { transform: scale(1.02) translate3d(-0.35%, 0, 0); }
+  to { transform: scale(1.065) translate3d(0.5%, -0.35%, 0); }
+}
+
+.workbench-hud-card {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 15, 30, 0.65);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 16px 44px rgba(4, 3, 12, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  border-radius: 1.25rem;
+}
+
+.workbench-card-base {
+  border-radius: 1.25rem;
+  padding: 1.35rem 1.25rem;
+  transition: transform 220ms var(--app-ease-out), border-color 220ms var(--app-ease-out), box-shadow 220ms var(--app-ease-out), background-color 220ms var(--app-ease-out);
+}
+
+/* ── Uiverse.io / Galaxy Minimalist Obsidian Glass Card ─────────────── */
+.galaxy-card {
+  position: relative;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(18, 15, 30, 0.52);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  padding: 1.5rem 1.35rem;
+  overflow: hidden;
+  transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 260ms ease,
+              background-color 260ms ease,
+              box-shadow 260ms ease;
+  text-decoration: none;
+}
+
+.galaxy-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(450px circle at top left, rgba(255, 255, 255, 0.06), transparent 70%);
+  opacity: 0;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+}
+
+.galaxy-card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
+  pointer-events: none;
+  transition: background 300ms ease, left 300ms ease, right 300ms ease;
+}
+
+.galaxy-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(26, 22, 44, 0.72);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.galaxy-card:hover::before {
+  opacity: 1;
+}
+
+.galaxy-card:hover::after {
+  left: 10%;
+  right: 10%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+}
+
+.workbench-card-blue {
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(18, 24, 45, 0.62);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 10px 30px rgba(4, 3, 12, 0.35), inset 0 1px 0 rgba(147, 197, 253, 0.22);
+}
+.workbench-card-blue:hover {
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 14px 36px rgba(37, 99, 235, 0.28), inset 0 1px 0 rgba(147, 197, 253, 0.4);
+  transform: translateY(-4px);
+}
+
+.workbench-card-emerald {
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  background: rgba(16, 32, 28, 0.62);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 10px 30px rgba(4, 3, 12, 0.35), inset 0 1px 0 rgba(167, 243, 208, 0.22);
+}
+.workbench-card-emerald:hover {
+  border-color: rgba(52, 211, 153, 0.65);
+  box-shadow: 0 14px 36px rgba(16, 185, 129, 0.28), inset 0 1px 0 rgba(167, 243, 208, 0.4);
+  transform: translateY(-4px);
+}
+
+.workbench-card-amber {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(35, 28, 20, 0.62);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 10px 30px rgba(4, 3, 12, 0.35), inset 0 1px 0 rgba(253, 230, 138, 0.22);
+}
+.workbench-card-amber:hover {
+  border-color: rgba(251, 191, 36, 0.65);
+  box-shadow: 0 14px 36px rgba(245, 158, 11, 0.28), inset 0 1px 0 rgba(253, 230, 138, 0.4);
+  transform: translateY(-4px);
+}
+
+.workbench-card-purple {
+  border: 1px solid rgba(192, 132, 252, 0.42);
+  background: linear-gradient(180deg, rgba(46, 26, 75, 0.72) 0%, rgba(26, 16, 42, 0.68) 100%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 14px 36px rgba(147, 51, 234, 0.25), inset 0 1px 0 rgba(233, 213, 255, 0.35);
+}
+.workbench-card-purple:hover {
+  border-color: rgba(192, 132, 252, 0.9);
+  box-shadow: 0 18px 48px rgba(147, 51, 234, 0.45), inset 0 1px 0 rgba(233, 213, 255, 0.55);
+  transform: translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-map-bg {
+    animation: none;
+    transform: none;
+  }
+  .animate-stagger-char,
+  .animate-fade-up {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    animation: none !important;
+  }
+}
+
+/* ── Learning Observatory Enhanced Surfaces & Controls ───────────────── */
+
+.learning-search-panel {
+  border: 1px solid color-mix(in oklab, var(--app-border) 72%, var(--app-accent));
+  background:
+    radial-gradient(ellipse at 0% 0%, color-mix(in oklab, var(--app-accent-soft) 85%, transparent), transparent 50%),
+    color-mix(in oklab, var(--app-card) 95%, var(--app-accent-soft));
+  box-shadow: 0 10px 30px rgba(67, 51, 120, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.learning-input-textarea {
+  border: 1.5px solid color-mix(in oklab, var(--app-border) 78%, var(--app-accent));
+  background: color-mix(in oklab, var(--app-card) 85%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.learning-input-textarea:focus {
+  border-color: var(--app-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-accent) 18%, transparent);
+  background: var(--app-card);
+}
+
+.learning-btn-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  padding: 0.85rem 1.75rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #9333ea 100%);
+  background-size: 200% 200%;
+  background-position: 0% 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 16px rgba(124, 58, 237, 0.35);
+  transition: transform 0.2s var(--app-ease-out), box-shadow 0.2s var(--app-ease-out), background-position 0.4s ease;
+  cursor: pointer;
+}
+
+.learning-btn-submit:hover:not(:disabled) {
+  background-position: 100% 50%;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.5);
+}
+
+.learning-btn-submit:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.learning-btn-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.learning-domain-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0.5rem 1.15rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  transition: all 0.2s var(--app-ease-out);
+  cursor: pointer;
+}
+
+.learning-domain-pill[aria-pressed="true"] {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+  color: #ffffff;
+  border: 1px solid rgba(165, 180, 252, 0.35);
+  box-shadow: 0 4px 14px rgba(49, 46, 129, 0.28);
+}
+
+.learning-domain-pill[aria-pressed="false"] {
+  border: 1px solid color-mix(in oklab, var(--app-border) 80%, transparent);
+  background: color-mix(in oklab, var(--app-card) 85%, transparent);
+  color: var(--app-foreground);
+}
+
+.learning-domain-pill[aria-pressed="false"]:hover {
+  border-color: var(--app-accent);
+  transform: translateY(-1px);
+  background: var(--app-card);
+}
+
+.learning-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.18s var(--app-ease-out);
+  cursor: pointer;
+  border: 1px solid color-mix(in oklab, var(--app-border) 80%, transparent);
+  background: color-mix(in oklab, var(--app-card) 80%, transparent);
+}
+
+.learning-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--app-accent);
+  background: color-mix(in oklab, var(--app-card) 95%, var(--app-accent-soft));
+}
+
+@media (prefers-color-scheme: dark) {
+  .learning-search-panel {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background:
+      radial-gradient(ellipse at 0% 0%, rgba(109, 91, 208, 0.16), transparent 50%),
+      rgba(18, 16, 28, 0.78);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  .learning-input-textarea {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(12, 10, 20, 0.6);
+    color: #f4f4f5;
+  }
+
+  .learning-input-textarea:focus {
+    border-color: #a78bfa;
+    box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.2);
+    background: rgba(18, 15, 28, 0.9);
+  }
+
+  .learning-domain-pill[aria-pressed="true"] {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4);
+  }
+
+  .learning-chip {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(25, 22, 38, 0.5);
+    color: #e4e4e7;
+  }
+
+  .learning-chip:hover {
+    border-color: rgba(167, 139, 250, 0.4);
+    background: rgba(45, 36, 75, 0.6);
+    color: #ffffff;
+  }
 }
