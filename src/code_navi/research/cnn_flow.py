@@ -227,7 +227,8 @@ def _normalize_trigger(message: str) -> str:
     text = (message or "").strip()
     while text and text[-1] in "。.":
         text = text[:-1].rstrip()
-    return text
+    # 只规范 CNN 这个英文缩写，避免大小写输入造成无谓的入口失败。
+    return re.sub(r"cnn", "CNN", text, flags=re.IGNORECASE)
 
 
 def is_cnn_flow_trigger(message: str) -> bool:
