@@ -24,6 +24,8 @@ from .cnn_flow import (
     CNN_FLOW_SUGGESTIONS,
     build_cnn_flow_queries,
     classify_answer,
+    cnn_flow_direction_focus_reply,
+    cnn_flow_direction_needs_focus,
     cnn_flow_field_update,
     cnn_flow_matches_step,
     cnn_flow_next_field,
@@ -1944,6 +1946,19 @@ class ResearchConversationOrchestrator:
                         "suggested": False,
                     },
                 }
+            if field == "direction" and kind == "answer" and cnn_flow_direction_needs_focus(
+                user_message
+            ):
+                flow["answers"] = answers
+                flow["phase"] = "clarify_direction"
+                flow["pending_direction_focus"] = True
+                _save()
+                return _finalize(
+                    cnn_flow_recorded_reply(field, answers[field].get("value"))
+                    + "\n\n"
+                    + cnn_flow_direction_focus_reply(),
+                    "cnn_flow_direction_focus",
+                )
             flow["answers"] = answers
             next_field = cnn_flow_next_field(answers)
             if next_field is None:
@@ -1956,6 +1971,28 @@ class ResearchConversationOrchestrator:
                 cnn_flow_recorded_reply(field, answers[field].get("value"))
                 + "\n\n"
                 + cnn_flow_question_reply(next_field),
+                "cnn_flow_question",
+            )
+
+        # 2.5) 宽泛方向细化：先确认机制/鲁棒性/可解释性的具体切口。
+        if phase == "clarify_direction":
+            entry = dict(answers.get("direction") or {})
+            focus = user_message.strip() or "未确定"
+            original = str(entry.get("value") or "研究方向")
+            entry["raw_focus"] = user_message
+            entry["direction_focus"] = focus
+            entry["value"] = f"{original}；具体关注：{focus}"
+            entry["confirmed"] = True
+            answers["direction"] = entry
+            flow["answers"] = answers
+            flow["pending_direction_focus"] = False
+            flow["phase"] = "asking"
+            _save()
+            next_field = cnn_flow_next_field(answers)
+            return _finalize(
+                cnn_flow_recorded_reply("direction", entry["value"])
+                + "\n\n"
+                + cnn_flow_question_reply(next_field or "dataset"),
                 "cnn_flow_question",
             )
 
@@ -2098,13 +2135,15 @@ class ResearchConversationOrchestrator:
                         completed.append(stage)
                 state_model.completed_stages = completed
                 lines = [
-                    "研究画像已保存（只包含你已确认的条件）。",
+                    "好啦，研究画像已经保存（只包含你刚刚确认的内容）。",
                     "",
                     f"原始中文研究描述：{queries['query_zh']}",
                     f"supplemental English query：{queries['query_en']}",
                     "",
-                    "现在进入论文检索阶段。已按上述 query 完成一次真实检索，"
-                    "候选论文如下（英文标题已过滤）：",
+                    "接下来我们进入第三阶段「研究开展」～",
+                    "先一起做文献精读，再一起完成实验方案设计，把它落成可以执行的步骤。",
+                    "",
+                    "这次检索找到的候选论文如下：",
                     "",
                 ]
                 bundles = self.search_service.list_bundles(conversation_id, db)
