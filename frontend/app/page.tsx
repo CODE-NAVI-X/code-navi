@@ -356,7 +356,13 @@ export default function HomePage() {
                 面向理解、实践与科研探索的下一代计算机智能研学工作台
               </p>
 
-              <div className="mt-8 flex items-center gap-4">
+              <div
+                className="mt-6 inline-flex max-w-xl items-center justify-center rounded-full border border-white/15 bg-white/[0.08] px-6 py-2.5 text-center text-base font-medium leading-relaxed text-purple-100/90 shadow-lg shadow-purple-950/20 backdrop-blur-md sm:text-lg"
+              >
+                本作品全部内容由生成式人工智能生成
+              </div>
+
+              <div className="mt-7 flex items-center gap-4">
                 <button
                   type="button"
                   onClick={scrollToScene2}
